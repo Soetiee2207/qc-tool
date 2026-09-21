@@ -1,0 +1,32 @@
+[project]
+name = "qc-tool"
+version = "0.0.1"
+description = "Tự động hoá QC: tài liệu + webapp → testcase → thực thi → báo cáo"
+requires-python = ">=3.12"
+dependencies = [
+    "openpyxl>=3.1",
+    "playwright>=1.63.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+qctool = "qctool.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["qctool"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+# `playwright` = test mở Chromium thật (chậm hơn, cần `playwright install chromium`).
+# Chạy nhanh không cần trình duyệt:  uv run python -m pytest tests/ -q -m "not playwright"
+markers = [
+    "playwright: test mở trình duyệt thật (chậm)",
+]

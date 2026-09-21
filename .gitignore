@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+# Output của mỗi lần chạy — sinh lại được, không commit
+artifacts/
+reports/
+
+# Bí mật: không bao giờ commit
+.env
+.env.*
+!.env.example
+secrets/
+
+.DS_Store
+.pytest_cache/

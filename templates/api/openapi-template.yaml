@@ -1,0 +1,193 @@
+openapi: 3.0.3
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Template OpenAPI cho qc-tool
+#
+#  Đây là file MẪU. Copy ra chỗ khác rồi điền, đừng sửa file này.
+#  Ví dụ điền sẵn bên dưới lấy THẬT từ pilot login-sso (VD Data Platform Portal,
+#  probe ngày 2026-09-18) — anh có thể xoá và thay bằng hệ thống của mình.
+#
+#  Xem templates/api/README.md để biết cách điền và các field x-qc-*.
+# ─────────────────────────────────────────────────────────────────────────────
+
+info:
+  title: VD Data Platform Portal API      # TODO: tên hệ thống
+  version: "1.0.0"
+  description: |
+    Mô tả ngắn hệ thống. Phần này giúp LLM hiểu ngữ cảnh khi sinh testcase.
+
+# Nhiều môi trường → đổi môi trường không phải sửa testcase.
+servers:
+  - url: https://dev-qc-portal.datafactory.fit
+    description: Dev
+  # - url: https://staging-qc-portal.datafactory.fit
+  #   description: Staging
+  # - url: https://qc-portal.datafactory.fit
+  #   description: Production
+
+# Cách xác thực. Tool dùng để biết endpoint nào cần token.
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    # apiKeyAuth:
+    #   type: apiKey
+    #   in: header
+    #   name: X-API-Key
+
+  schemas:
+    # Khai báo object dùng chung ở đây, rồi $ref tới cho gọn.
+    UserMeOut:
+      type: object
+      properties:
+        id:           {type: string, description: "Keycloak sub (UUID)"}
+        username:     {type: string, description: "preferred_username hoặc email"}
+        full_name:    {type: [string, "null"]}
+        email:        {type: [string, "null"], format: email}
+        role:         {type: string, description: "Nhóm chính đã chuẩn hoá"}
+        auth_groups:  {type: array, items: {type: string}}
+        permissions:  {type: array, items: {type: string}}
+        preferred_locale: {type: string, enum: [en, vi]}
+
+    # Kiểu lỗi thật của portal: detail.error.code (lồng 3 tầng)
+    ErrorEnvelope:
+      type: object
+      properties:
+        detail:
+          type: object
+          properties:
+            error:
+              type: object
+              properties:
+                code:    {type: string, example: UNAUTHORIZED}
+                message: {type: string}
+                details: {type: array, items: {}}
+
+paths:
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  VÍ DỤ THẬT 1 — endpoint public, không cần token
+  #  SRS login-sso §3.2.1 (F-01). Đã probe: trả đúng 4 field.
+  # ═══════════════════════════════════════════════════════════════════════════
+  /api/v1/auth/config:
+    get:
+      summary: Lấy cấu hình Keycloak cho FE khởi tạo OIDC adapter
+      operationId: getAuthConfig
+      security: []              # [] = public, không cần token
+      tags: [auth]
+      x-qc-id: F-01
+      x-qc-priority: High
+      x-qc-requires-auth: false
+      x-qc-latency-p95-ms: 100  # từ NFR-PERF-01
+      responses:
+        '200':
+          description: Cấu hình Keycloak
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keycloak_enabled, keycloak_issuer, keycloak_client_id, keycloak_realm]
+                properties:
+                  keycloak_enabled:   {type: boolean, example: true}
+                  keycloak_issuer:    {type: [string, "null"], example: "https://auth.datafactory.fit/realms/vd-dev"}
+                  keycloak_client_id: {type: [string, "null"], example: vd-portal}
+                  keycloak_realm:     {type: [string, "null"], example: vd-dev}
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  VÍ DỤ THẬT 2 — endpoint cần token, có cả case lỗi
+  #  SRS login-sso §3.2.4 (F-04). Đã probe: không token → 401.
+  # ═══════════════════════════════════════════════════════════════════════════
+  /api/v1/auth/me:
+    get:
+      summary: Lấy profile + permissions của user đang đăng nhập
+      operationId: getAuthMe
+      tags: [auth]
+      x-qc-id: F-04
+      x-qc-priority: High
+      x-qc-requires-auth: true
+      x-qc-latency-p95-ms: 250  # từ NFR-PERF-02
+      responses:
+        '200':
+          description: Profile user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserMeOut'
+        '401':
+          description: Thiếu hoặc sai Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+
+    patch:
+      summary: Cập nhật ngôn ngữ ưa thích
+      operationId: patchAuthMe
+      tags: [auth]
+      x-qc-id: F-05
+      x-qc-priority: Medium
+      x-qc-requires-auth: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                preferred_locale:
+                  type: string
+                  enum: [en, vi]
+                  description: Tối đa 2 ký tự được lưu
+            example: {preferred_locale: vi}
+      responses:
+        '200':
+          description: Profile sau khi cập nhật
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserMeOut'
+        '401':
+          description: Chưa đăng nhập
+        '422':
+          description: Body không hợp lệ (Pydantic validation)
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  CHỖ ĐỂ ANH ĐIỀN — copy khối dưới, bỏ comment, sửa
+  # ═══════════════════════════════════════════════════════════════════════════
+  # /api/v1/<đường-dẫn>:
+  #   post:
+  #     summary: <mô tả ngắn>
+  #     operationId: <tênHàm>
+  #     tags: [<nhóm>]
+  #     x-qc-id: <ID requirement, vd F-06>
+  #     x-qc-priority: High | Medium | Low
+  #     x-qc-requires-auth: true | false
+  #     requestBody:
+  #       required: true
+  #       content:
+  #         application/json:
+  #           schema:
+  #             type: object
+  #             required: [<field bắt buộc>]
+  #             properties:
+  #               <field>: {type: string, description: "..."}
+  #     responses:
+  #       '200':
+  #         description: OK
+  #         content:
+  #           application/json:
+  #             schema:
+  #               type: object
+  #               properties:
+  #                 <field>: {type: string}
+  #       '400': {description: Dữ liệu không hợp lệ}
+  #       '401': {description: Chưa đăng nhập}

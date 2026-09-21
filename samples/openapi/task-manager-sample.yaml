@@ -1,0 +1,369 @@
+openapi: 3.0.3
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  HƯ CẤU — KHÔNG PHẢI HỆ THỐNG THẬT
+#
+#  "Task Manager API" là hệ thống bịa ra để phát triển và test qc-tool.
+#  Không endpoint nào ở đây tồn tại. Đừng bao giờ trỏ tool vào URL trong file này.
+#
+#  Cố ý bao nhiều hình dạng: path param, query param, enum, ràng buộc số,
+#  object lồng nhau, nhiều mã lỗi, endpoint public và cần token.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+info:
+  title: Task Manager API (SAMPLE — hư cấu)
+  version: "2.3.0"
+  description: |
+    API quản lý dự án và công việc. Dùng làm dữ liệu mẫu cho qc-tool.
+    Mọi dữ liệu trong đây là giả.
+
+servers:
+  - url: https://api.taskmanager.example.com
+    description: Sample (không tồn tại thật)
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:    {type: string, example: VALIDATION_ERROR}
+        message: {type: string}
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field:  {type: string}
+              reason: {type: string}
+
+    Owner:
+      type: object
+      required: [id, name]
+      properties:
+        id:    {type: string, format: uuid}
+        name:  {type: string, minLength: 1, maxLength: 100}
+        email: {type: string, format: email}
+
+    Project:
+      type: object
+      required: [id, name, status, owner]
+      properties:
+        id:          {type: string, format: uuid}
+        name:        {type: string, minLength: 3, maxLength: 80}
+        description: {type: [string, "null"], maxLength: 500}
+        status:
+          type: string
+          enum: [active, archived, on_hold]
+        priority:
+          type: integer
+          enum: [1, 2, 3]
+          description: 1 = cao nhất
+        tags:
+          type: array
+          maxItems: 10
+          items: {type: string, minLength: 1, maxLength: 24}
+        owner:
+          $ref: '#/components/schemas/Owner'
+        created_at: {type: string, format: date-time}
+
+    ProjectCreate:
+      type: object
+      required: [name, owner_id]
+      properties:
+        name:        {type: string, minLength: 3, maxLength: 80}
+        description: {type: string, maxLength: 500}
+        priority:    {type: integer, minimum: 1, maximum: 3, default: 2}
+        tags:
+          type: array
+          maxItems: 10
+          items: {type: string, minLength: 1, maxLength: 24}
+        owner_id:    {type: string, format: uuid}
+
+    Task:
+      type: object
+      required: [id, title, status]
+      properties:
+        id:       {type: string, format: uuid}
+        title:    {type: string, minLength: 1, maxLength: 200}
+        status:
+          type: string
+          enum: [todo, in_progress, done, cancelled]
+        estimate_hours:
+          type: number
+          minimum: 0
+          maximum: 1000
+        assignee_id: {type: [string, "null"], format: uuid}
+        tags:
+          type: array
+          items: {type: string}
+        created_at: {type: string, format: date-time}
+
+    PaginatedProjects:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Project'}
+        total:     {type: integer, minimum: 0}
+        page:      {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 100}
+
+paths:
+  # ─── Public, không cần token ────────────────────────────────────────────────
+  /health:
+    get:
+      summary: Kiểm tra API còn sống
+      operationId: getHealth
+      security: []
+      tags: [system]
+      x-qc-id: F-HEALTH-01
+      x-qc-priority: High
+      x-qc-requires-auth: false
+      x-qc-latency-p95-ms: 50
+      responses:
+        '200':
+          description: API đang chạy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, version]
+                properties:
+                  status:  {type: string, enum: [ok]}
+                  version: {type: string}
+
+  # ─── CRUD có phân trang + lọc ───────────────────────────────────────────────
+  /projects:
+    get:
+      summary: Liệt kê dự án, có phân trang và lọc theo trạng thái
+      operationId: listProjects
+      tags: [projects]
+      x-qc-id: F-PROJ-01
+      x-qc-priority: High
+      x-qc-requires-auth: true
+      x-qc-latency-p95-ms: 300
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [active, archived, on_hold]
+        - name: q
+          in: query
+          required: false
+          description: Tìm theo tên
+          schema: {type: string, minLength: 1, maxLength: 100}
+      responses:
+        '200':
+          description: Danh sách dự án
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PaginatedProjects'}
+        '401':
+          description: Thiếu hoặc sai token
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '422':
+          description: Tham số truy vấn không hợp lệ
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+
+    post:
+      summary: Tạo dự án mới
+      operationId: createProject
+      tags: [projects]
+      x-qc-id: F-PROJ-02
+      x-qc-priority: High
+      x-qc-requires-auth: true
+      x-qc-latency-p95-ms: 500
+      x-qc-test-data:
+        name: "Dự án mẫu"
+        owner_id: "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProjectCreate'}
+      responses:
+        '201':
+          description: Đã tạo
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Project'}
+        '400':
+          description: Body không đọc được
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401':
+          description: Thiếu hoặc sai token
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '403':
+          description: Không có quyền tạo dự án
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: Tên dự án đã tồn tại
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '422':
+          description: Dữ liệu không hợp lệ
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+
+  # ─── Path parameter ─────────────────────────────────────────────────────────
+  /projects/{project_id}:
+    parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+
+    get:
+      summary: Lấy chi tiết một dự án
+      operationId: getProject
+      tags: [projects]
+      x-qc-id: F-PROJ-03
+      x-qc-priority: Medium
+      x-qc-requires-auth: true
+      x-qc-latency-p95-ms: 200
+      responses:
+        '200':
+          description: Chi tiết dự án
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Project'}
+        '401':
+          description: Thiếu hoặc sai token
+        '403':
+          description: Không có quyền xem dự án này
+        '404':
+          description: Không tìm thấy dự án
+
+    delete:
+      summary: Xoá dự án
+      operationId: deleteProject
+      tags: [projects]
+      x-qc-id: F-PROJ-04
+      x-qc-priority: Medium
+      x-qc-requires-auth: true
+      responses:
+        '204':
+          description: Đã xoá, không có nội dung trả về
+        '401':
+          description: Thiếu hoặc sai token
+        '403':
+          description: Không có quyền xoá
+        '404':
+          description: Không tìm thấy dự án
+        '409':
+          description: Dự án còn công việc chưa xong, không xoá được
+
+  # ─── Object lồng nhau trong body ────────────────────────────────────────────
+  /projects/{project_id}/tasks:
+    parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+
+    post:
+      summary: Tạo công việc trong dự án
+      operationId: createTask
+      tags: [tasks]
+      x-qc-id: F-TASK-01
+      x-qc-priority: High
+      x-qc-requires-auth: true
+      x-qc-test-data:
+        title: "Việc mẫu"
+        status: todo
+        estimate_hours: 4
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: {type: string, minLength: 1, maxLength: 200}
+                status:
+                  type: string
+                  enum: [todo, in_progress, done, cancelled]
+                  default: todo
+                estimate_hours: {type: number, minimum: 0, maximum: 1000}
+                assignee_id: {type: [string, "null"], format: uuid}
+                tags:
+                  type: array
+                  maxItems: 5
+                  items: {type: string, minLength: 1, maxLength: 24}
+      responses:
+        '201':
+          description: Đã tạo công việc
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Task'}
+        '400':
+          description: Body không đọc được
+        '401':
+          description: Thiếu hoặc sai token
+        '403':
+          description: Không có quyền tạo công việc trong dự án này
+        '404':
+          description: Không tìm thấy dự án
+        '422':
+          description: Dữ liệu không hợp lệ
+
+    get:
+      summary: Liệt kê công việc của dự án
+      operationId: listTasks
+      tags: [tasks]
+      x-qc-id: F-TASK-02
+      x-qc-priority: Medium
+      x-qc-requires-auth: true
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [todo, in_progress, done, cancelled]
+      responses:
+        '200':
+          description: Danh sách công việc
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/Task'}
+        '401':
+          description: Thiếu hoặc sai token
+        '404':
+          description: Không tìm thấy dự án
