@@ -1,0 +1,1052 @@
+openapi: 3.1.0
+info:
+  title: VD Data Platform Portal — Review Module — QC Dashboard
+  version: 1.0.0
+  summary: review / qc-dashboard
+  description: |
+    Đặc tả OpenAPI cho **Review Module — QC Dashboard** — sub-module `review`, feature `qc-dashboard`.
+
+    Spec sinh từ `app.openapi()` của backend FastAPI (không viết tay), bổ sung thông tin
+    mà OpenAPI không có: permission key thật của từng handler, envelope lỗi 401/403 của
+    `backend/app/shared/deps.py`, và file/handler cài đặt (`x-code`).
+
+    ## Dùng cho test
+
+    - **Phạm vi:** 7 path / 8 operation.
+    - `x-portal-permissions` = permission key handler yêu cầu. Có key ⇒ viết được case 403
+      bằng cách gọi endpoint với user thiếu quyền đó; **không có** key ⇒ handler chỉ cần
+      đăng nhập, đừng kỳ vọng 403.
+    - Xác thực: Bearer JWT (Keycloak) — xem `../../authentication/openapi.yaml`.
+    - Nguồn nghiệp vụ: `docs/review/qc-dashboard/srs.md`
+    .
+
+    ## Endpoint dùng chung — contract nằm ở spec khác
+
+    Feature này gọi các endpoint dưới đây nhưng bản đầy đủ (schema, param, ví dụ) nằm
+    ở spec của feature sở hữu, để tránh hai bản contract lệch nhau:
+
+    - `/api/v1/qc/auto-assign/reviewers` → `../qc-queue/openapi.yaml`
+  x-module: review
+  x-feature: qc-dashboard
+  x-source-docs:
+  - docs/review/qc-dashboard/urd.md
+  - docs/review/qc-dashboard/srs.md
+  x-generated-from: app.openapi() + dependency introspection (scripts/dump_portal_openapi.py)
+  x-generated-at: 2026-09-21 11:55 +0700
+servers:
+- url: /api/v1
+  description: Cùng origin với SPA (`VITE_API_BASE_URL ?? "/api/v1"`)
+tags:
+- name: qc
+  description: 'Nhóm endpoint `qc` của portal (tag do router FastAPI đặt). Prefix: `/api/v1/qc/…`.'
+paths:
+  /api/v1/qc/annotation-dashboard/analytics:
+    get:
+      tags:
+      - qc
+      summary: Annotation Dashboard Analytics
+      operationId: annotation_dashboard_analytics_api_v1_qc_annotation_dashboard_analytics_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcDashboardAnalyticsOut'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:queue:view`. `details` trong body trả về đúng
+            danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id001
+                    - qc:queue:view
+      security:
+      - bearerAuth: []
+      x-portal-permissions: *id001
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.annotation_dashboard_analytics
+  /api/v1/qc/auto-assign/reassign:
+    post:
+      tags:
+      - qc
+      summary: Run Auto Reassign
+      operationId: run_auto_reassign_api_v1_qc_auto_assign_reassign_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcAutoAssignRunResponse'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:assign`. `details` trong body trả về đúng danh
+            sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id002
+                    - qc:assign
+        '422':
+          description: Body/query/path sai schema (định dạng lỗi mặc định của FastAPI).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+      security:
+      - bearerAuth: []
+      x-portal-permissions: *id002
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.run_auto_reassign
+  /api/v1/qc/auto-assign/rules:
+    get:
+      tags:
+      - qc
+      summary: Get Auto Assign Rules
+      operationId: get_auto_assign_rules_api_v1_qc_auto_assign_rules_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcAutoAssignRulesOut'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:assign`. `details` trong body trả về đúng danh
+            sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id003
+                    - qc:assign
+      security:
+      - bearerAuth: []
+      x-portal-permissions: *id003
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.get_auto_assign_rules
+    put:
+      tags:
+      - qc
+      summary: Update Auto Assign Rules
+      operationId: update_auto_assign_rules_api_v1_qc_auto_assign_rules_put
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QcAutoAssignRulesUpdate'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcAutoAssignRulesOut'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:assign`. `details` trong body trả về đúng danh
+            sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id004
+                    - qc:assign
+        '422':
+          description: Body/query/path sai schema (định dạng lỗi mặc định của FastAPI).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+      security:
+      - bearerAuth: []
+      x-portal-permissions: *id004
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.update_auto_assign_rules
+  /api/v1/qc/auto-assign/run:
+    post:
+      tags:
+      - qc
+      summary: Run Auto Assign
+      operationId: run_auto_assign_api_v1_qc_auto_assign_run_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcAutoAssignRunResponse'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:assign`. `details` trong body trả về đúng danh
+            sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id005
+                    - qc:assign
+        '422':
+          description: Body/query/path sai schema (định dạng lỗi mặc định của FastAPI).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+      security:
+      - bearerAuth: []
+      x-portal-permissions: *id005
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.run_auto_assign
+  /api/v1/qc/auto-assign/stats:
+    get:
+      tags:
+      - qc
+      summary: Get Auto Assign Stats
+      operationId: get_auto_assign_stats_api_v1_qc_auto_assign_stats_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcAutoAssignStatsOut'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:assign`. `details` trong body trả về đúng danh
+            sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id006
+                    - qc:assign
+      security:
+      - bearerAuth: []
+      x-portal-permissions: *id006
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.get_auto_assign_stats
+  /api/v1/qc/dashboard:
+    get:
+      tags:
+      - qc
+      summary: Qc Dashboard
+      operationId: qc_dashboard_api_v1_qc_dashboard_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: manual_annotation_only
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Manual Annotation Only
+      - name: include_analytics
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Include Analytics
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcDashboardOut'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `dashboard:qc:view`. `details` trong body trả về
+            đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id007
+                    - dashboard:qc:view
+      x-portal-permissions: *id007
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.qc_dashboard
+  /api/v1/qc/dashboard/analytics:
+    get:
+      tags:
+      - qc
+      summary: Qc Dashboard Analytics
+      operationId: qc_dashboard_analytics_api_v1_qc_dashboard_analytics_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: manual_annotation_only
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Manual Annotation Only
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcDashboardAnalyticsOut'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `dashboard:qc:view`. `details` trong body trả về
+            đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id008
+                    - dashboard:qc:view
+      x-portal-permissions: *id008
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.qc_dashboard_analytics
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: OIDC token của Keycloak — chi tiết ở docs/OAS/authentication/openapi.yaml
+  schemas:
+    QcAnnotationSessionHolderOut:
+      properties:
+        reviewer_id:
+          type: string
+          title: Reviewer Id
+        reviewer_name:
+          type: string
+          title: Reviewer Name
+        opened_at:
+          type: string
+          format: date-time
+          title: Opened At
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+      type: object
+      required:
+      - reviewer_id
+      - reviewer_name
+      - opened_at
+      - expires_at
+      title: QcAnnotationSessionHolderOut
+      description: Other user currently holding the annotation session for an item.
+    QcAutoAssignRulesOut:
+      properties:
+        enabled:
+          type: boolean
+          title: Enabled
+        strategy:
+          type: string
+          title: Strategy
+        max_queue_per_reviewer:
+          type: integer
+          title: Max Queue Per Reviewer
+        auto_assign_high_priority:
+          type: boolean
+          title: Auto Assign High Priority
+        reviewer_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Reviewer Ids
+      type: object
+      required:
+      - enabled
+      - strategy
+      - max_queue_per_reviewer
+      - auto_assign_high_priority
+      title: QcAutoAssignRulesOut
+    QcAutoAssignRulesUpdate:
+      properties:
+        enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Enabled
+        strategy:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Strategy
+        max_queue_per_reviewer:
+          anyOf:
+          - type: integer
+            maximum: 50.0
+            minimum: 1.0
+          - type: 'null'
+          title: Max Queue Per Reviewer
+        auto_assign_high_priority:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Auto Assign High Priority
+        reviewer_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Reviewer Ids
+      type: object
+      title: QcAutoAssignRulesUpdate
+    QcAutoAssignRunResponse:
+      properties:
+        assigned:
+          type: integer
+          title: Assigned
+        skipped:
+          type: integer
+          title: Skipped
+      type: object
+      required:
+      - assigned
+      - skipped
+      title: QcAutoAssignRunResponse
+    QcAutoAssignStatsOut:
+      properties:
+        unassigned:
+          type: integer
+          title: Unassigned
+          default: 0
+        reassignable:
+          type: integer
+          title: Reassignable
+          default: 0
+      type: object
+      title: QcAutoAssignStatsOut
+    QcDashboardAnalyticsOut:
+      properties:
+        needs_review:
+          $ref: '#/components/schemas/QcDashboardCohortOut'
+        passed:
+          $ref: '#/components/schemas/QcDashboardCohortOut'
+        assignee_pass_rates:
+          items:
+            $ref: '#/components/schemas/QcDashboardAssigneeRateOut'
+          type: array
+          title: Assignee Pass Rates
+        ops:
+          $ref: '#/components/schemas/QcDashboardOpsOut'
+        pilot:
+          anyOf:
+          - $ref: '#/components/schemas/QcDashboardPilotOut'
+          - type: 'null'
+        l1_caps:
+          items:
+            $ref: '#/components/schemas/QcDashboardCapOut'
+          type: array
+          title: L1 Caps
+        difficulty_targets:
+          items:
+            $ref: '#/components/schemas/QcDashboardDifficultyTargetOut'
+          type: array
+          title: Difficulty Targets
+        skill_groups_covered:
+          type: integer
+          title: Skill Groups Covered
+          default: 0
+        skill_groups_target:
+          type: integer
+          title: Skill Groups Target
+          default: 18
+      type: object
+      required:
+      - needs_review
+      - passed
+      title: QcDashboardAnalyticsOut
+    QcDashboardAssigneeRateOut:
+      properties:
+        assignee_id:
+          type: string
+          title: Assignee Id
+        assignee_name:
+          type: string
+          title: Assignee Name
+        passed_hours:
+          type: number
+          title: Passed Hours
+        failed_hours:
+          type: number
+          title: Failed Hours
+        pass_rate:
+          type: number
+          title: Pass Rate
+      type: object
+      required:
+      - assignee_id
+      - assignee_name
+      - passed_hours
+      - failed_hours
+      - pass_rate
+      title: QcDashboardAssigneeRateOut
+    QcDashboardBucketOut:
+      properties:
+        key:
+          type: string
+          title: Key
+        label:
+          type: string
+          title: Label
+        count:
+          type: integer
+          title: Count
+        hours:
+          type: number
+          title: Hours
+      type: object
+      required:
+      - key
+      - label
+      - count
+      - hours
+      title: QcDashboardBucketOut
+    QcDashboardCapOut:
+      properties:
+        key:
+          type: string
+          title: Key
+        label:
+          type: string
+          title: Label
+        actual_hours:
+          type: number
+          title: Actual Hours
+        cap_hours:
+          type: number
+          title: Cap Hours
+        cap_pct:
+          type: number
+          title: Cap Pct
+        pct_of_pilot:
+          type: number
+          title: Pct Of Pilot
+        over_cap:
+          type: boolean
+          title: Over Cap
+      type: object
+      required:
+      - key
+      - label
+      - actual_hours
+      - cap_hours
+      - cap_pct
+      - pct_of_pilot
+      - over_cap
+      title: QcDashboardCapOut
+    QcDashboardCohortOut:
+      properties:
+        total_files:
+          type: integer
+          title: Total Files
+        total_hours:
+          type: number
+          title: Total Hours
+        by_assignee:
+          items:
+            $ref: '#/components/schemas/QcDashboardBucketOut'
+          type: array
+          title: By Assignee
+        by_status:
+          items:
+            $ref: '#/components/schemas/QcDashboardBucketOut'
+          type: array
+          title: By Status
+        by_project:
+          items:
+            $ref: '#/components/schemas/QcDashboardBucketOut'
+          type: array
+          title: By Project
+        by_environment_l1:
+          items:
+            $ref: '#/components/schemas/QcDashboardBucketOut'
+          type: array
+          title: By Environment L1
+        by_environment_l2:
+          items:
+            $ref: '#/components/schemas/QcDashboardBucketOut'
+          type: array
+          title: By Environment L2
+        by_environment_l3:
+          items:
+            $ref: '#/components/schemas/QcDashboardBucketOut'
+          type: array
+          title: By Environment L3
+        by_task:
+          items:
+            $ref: '#/components/schemas/QcDashboardBucketOut'
+          type: array
+          title: By Task
+        by_skill_group:
+          items:
+            $ref: '#/components/schemas/QcDashboardBucketOut'
+          type: array
+          title: By Skill Group
+        by_task_difficulty:
+          items:
+            $ref: '#/components/schemas/QcDashboardBucketOut'
+          type: array
+          title: By Task Difficulty
+      type: object
+      required:
+      - total_files
+      - total_hours
+      title: QcDashboardCohortOut
+    QcDashboardDifficultyTargetOut:
+      properties:
+        difficulty:
+          type: string
+          title: Difficulty
+        hours:
+          type: number
+          title: Hours
+        actual_pct:
+          type: number
+          title: Actual Pct
+        target_pct:
+          type: number
+          title: Target Pct
+      type: object
+      required:
+      - difficulty
+      - hours
+      - actual_pct
+      - target_pct
+      title: QcDashboardDifficultyTargetOut
+    QcDashboardOpsOut:
+      properties:
+        unassigned_files:
+          type: integer
+          title: Unassigned Files
+          default: 0
+        unassigned_hours:
+          type: number
+          title: Unassigned Hours
+          default: 0.0
+        wip_by_assignee:
+          items:
+            $ref: '#/components/schemas/QcDashboardBucketOut'
+          type: array
+          title: Wip By Assignee
+        metadata_complete_files:
+          type: integer
+          title: Metadata Complete Files
+          default: 0
+        metadata_incomplete_files:
+          type: integer
+          title: Metadata Incomplete Files
+          default: 0
+        metadata_complete_hours:
+          type: number
+          title: Metadata Complete Hours
+          default: 0.0
+        metadata_incomplete_hours:
+          type: number
+          title: Metadata Incomplete Hours
+          default: 0.0
+        passed_files_7d:
+          type: integer
+          title: Passed Files 7D
+          default: 0
+        passed_hours_7d:
+          type: number
+          title: Passed Hours 7D
+          default: 0.0
+      type: object
+      title: QcDashboardOpsOut
+    QcDashboardOut:
+      properties:
+        pending:
+          type: integer
+          title: Pending
+        in_review:
+          type: integer
+          title: In Review
+        passed:
+          type: integer
+          title: Passed
+        rejected:
+          type: integer
+          title: Rejected
+        needs_revision:
+          type: integer
+          title: Needs Revision
+        total_raw:
+          type: number
+          title: Total Raw
+          default: 0.0
+        total_review:
+          type: number
+          title: Total Review
+          default: 0.0
+        total_pass:
+          type: number
+          title: Total Pass
+          default: 0.0
+        pending_hours:
+          type: number
+          title: Pending Hours
+          default: 0.0
+        in_review_hours:
+          type: number
+          title: In Review Hours
+          default: 0.0
+        passed_hours:
+          type: number
+          title: Passed Hours
+          default: 0.0
+        rejected_hours:
+          type: number
+          title: Rejected Hours
+          default: 0.0
+        needs_revision_hours:
+          type: number
+          title: Needs Revision Hours
+          default: 0.0
+        total_hours:
+          type: number
+          title: Total Hours
+          default: 0.0
+        my_queue:
+          items:
+            $ref: '#/components/schemas/QcQueueItemOut'
+          type: array
+          title: My Queue
+        analytics:
+          anyOf:
+          - $ref: '#/components/schemas/QcDashboardAnalyticsOut'
+          - type: 'null'
+      type: object
+      required:
+      - pending
+      - in_review
+      - passed
+      - rejected
+      - needs_revision
+      - my_queue
+      title: QcDashboardOut
+    QcDashboardPilotOut:
+      properties:
+        target_hours:
+          type: number
+          title: Target Hours
+        qa_passed_hours:
+          type: number
+          title: Qa Passed Hours
+        pct_complete:
+          type: number
+          title: Pct Complete
+      type: object
+      required:
+      - target_hours
+      - qa_passed_hours
+      - pct_complete
+      title: QcDashboardPilotOut
+    QcQueueItemOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        external_id:
+          type: string
+          title: External Id
+        upload_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Upload Id
+        project_id:
+          type: string
+          title: Project Id
+        project_name:
+          type: string
+          title: Project Name
+        filename:
+          type: string
+          title: Filename
+        duration:
+          type: string
+          title: Duration
+        status:
+          type: string
+          title: Status
+        priority:
+          type: string
+          title: Priority
+        assignee_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Assignee Id
+        assignee_name:
+          type: string
+          title: Assignee Name
+        assignee_initials:
+          type: string
+          title: Assignee Initials
+        age:
+          type: string
+          title: Age
+        thumbnail_color:
+          type: string
+          title: Thumbnail Color
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+        stereo_review:
+          type: boolean
+          title: Stereo Review
+          default: false
+        reject_reason_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reject Reason Code
+        reject_comment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reject Comment
+        tags:
+          items:
+            type: string
+          type: array
+          title: Tags
+        batch_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Batch Id
+        annotation_session_holder:
+          anyOf:
+          - $ref: '#/components/schemas/QcAnnotationSessionHolderOut'
+          - type: 'null'
+      type: object
+      required:
+      - id
+      - external_id
+      - project_id
+      - project_name
+      - filename
+      - duration
+      - status
+      - priority
+      - assignee_name
+      - assignee_initials
+      - age
+      - thumbnail_color
+      - created_at
+      - updated_at
+      title: QcQueueItemOut
+    ValidationError:
+      type: object
+      title: ValidationError
+      description: Lỗi 422 theo định dạng mặc định của FastAPI/Pydantic.
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              loc:
+                type: array
+                items: {}
+              msg:
+                type: string
+              input: {}
+    PortalError:
+      type: object
+      title: PortalError
+      description: Envelope lỗi 401/403 của portal. `detail` là **object** (khác định dạng mặc định của FastAPI). Sinh bởi
+        `backend/app/shared/deps.py`.
+      required:
+      - detail
+      properties:
+        detail:
+          type: object
+          required:
+          - error
+          properties:
+            error:
+              type: object
+              required:
+              - code
+              - message
+              - details
+              properties:
+                code:
+                  type: string
+                  enum:
+                  - UNAUTHORIZED
+                  - FORBIDDEN
+                message:
+                  type: string
+                details:
+                  type: array
+                  items:
+                    type: string
+                  description: 403 → permission key còn thiếu; 401 → mảng rỗng.

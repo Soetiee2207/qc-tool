@@ -1,0 +1,617 @@
+openapi: 3.1.0
+info:
+  title: VD Data Platform Portal — Review Module — QC Checklists
+  version: 1.0.0
+  summary: review / qc-checklists
+  description: |
+    Đặc tả OpenAPI cho **Review Module — QC Checklists** — sub-module `review`, feature `qc-checklists`.
+
+    Spec sinh từ `app.openapi()` của backend FastAPI (không viết tay), bổ sung thông tin
+    mà OpenAPI không có: permission key thật của từng handler, envelope lỗi 401/403 của
+    `backend/app/shared/deps.py`, và file/handler cài đặt (`x-code`).
+
+    ## Dùng cho test
+
+    - **Phạm vi:** 4 path / 6 operation.
+    - `x-portal-permissions` = permission key handler yêu cầu. Có key ⇒ viết được case 403
+      bằng cách gọi endpoint với user thiếu quyền đó; **không có** key ⇒ handler chỉ cần
+      đăng nhập, đừng kỳ vọng 403.
+    - Xác thực: Bearer JWT (Keycloak) — xem `../../authentication/openapi.yaml`.
+    - Nguồn nghiệp vụ: `docs/review/qc-checklists/srs.md`
+    .
+  x-module: review
+  x-feature: qc-checklists
+  x-source-docs:
+  - docs/review/qc-checklists/urd.md
+  - docs/review/qc-checklists/srs.md
+  x-generated-from: app.openapi() + dependency introspection (scripts/dump_portal_openapi.py)
+  x-generated-at: 2026-09-21 11:55 +0700
+servers:
+- url: /api/v1
+  description: Cùng origin với SPA (`VITE_API_BASE_URL ?? "/api/v1"`)
+tags:
+- name: checklists
+  description: 'Nhóm endpoint `checklists` của portal (tag do router FastAPI đặt). Prefix: `/api/v1/qc/…`.'
+paths:
+  /api/v1/qc/checklists:
+    get:
+      tags:
+      - checklists
+      summary: List Checklist Versions
+      operationId: list_checklist_versions_api_v1_qc_checklists_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistVersionListResponse'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:checklist:manage`. `details` trong body trả
+            về đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id001
+                    - qc:checklist:manage
+      security:
+      - bearerAuth: []
+      x-portal-permissions: *id001
+      x-code:
+        file: backend/app/features/checklists/router.py
+        handler: app.features.checklists.router.list_checklist_versions
+    post:
+      tags:
+      - checklists
+      summary: Create Checklist Version
+      operationId: create_checklist_version_api_v1_qc_checklists_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChecklistVersionCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistVersionDetailOut'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:checklist:manage`. `details` trong body trả
+            về đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id002
+                    - qc:checklist:manage
+        '422':
+          description: Body/query/path sai schema (định dạng lỗi mặc định của FastAPI).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+      security:
+      - bearerAuth: []
+      x-portal-permissions: *id002
+      x-code:
+        file: backend/app/features/checklists/router.py
+        handler: app.features.checklists.router.create_checklist_version
+  /api/v1/qc/checklists/options:
+    get:
+      tags:
+      - checklists
+      summary: List Checklist Options
+      operationId: list_checklist_options_api_v1_qc_checklists_options_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistOptionListResponse'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `project:view`. `details` trong body trả về đúng
+            danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id003
+                    - project:view
+      security:
+      - bearerAuth: []
+      x-portal-permissions: *id003
+      x-code:
+        file: backend/app/features/checklists/router.py
+        handler: app.features.checklists.router.list_checklist_options
+  /api/v1/qc/checklists/published/criteria:
+    get:
+      tags:
+      - checklists
+      summary: Published Checklist Criteria
+      operationId: published_checklist_criteria_api_v1_qc_checklists_published_criteria_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:review:perform`. `details` trong body trả về
+            đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id004
+                    - qc:review:perform
+      security:
+      - bearerAuth: []
+      x-portal-permissions: *id004
+      x-code:
+        file: backend/app/features/checklists/router.py
+        handler: app.features.checklists.router.published_checklist_criteria
+  /api/v1/qc/checklists/{version_id}:
+    get:
+      tags:
+      - checklists
+      summary: Get Checklist Version
+      operationId: get_checklist_version_api_v1_qc_checklists__version_id__get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: version_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Version Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistVersionDetailOut'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:checklist:manage`. `details` trong body trả
+            về đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id005
+                    - qc:checklist:manage
+      x-portal-permissions: *id005
+      x-code:
+        file: backend/app/features/checklists/router.py
+        handler: app.features.checklists.router.get_checklist_version
+    patch:
+      tags:
+      - checklists
+      summary: Patch Checklist Version
+      operationId: patch_checklist_version_api_v1_qc_checklists__version_id__patch
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: version_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Version Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChecklistVersionPatch'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistVersionOut'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:checklist:manage`. `details` trong body trả
+            về đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id006
+                    - qc:checklist:manage
+        '422':
+          description: Body/query/path sai schema (định dạng lỗi mặc định của FastAPI).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+      x-portal-permissions: *id006
+      x-code:
+        file: backend/app/features/checklists/router.py
+        handler: app.features.checklists.router.patch_checklist_version
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: OIDC token của Keycloak — chi tiết ở docs/OAS/authentication/openapi.yaml
+  schemas:
+    ChecklistCriterionCreate:
+      properties:
+        name_en:
+          type: string
+          title: Name En
+        name_vi:
+          type: string
+          title: Name Vi
+        section:
+          type: string
+          title: Section
+          default: manual
+        expected:
+          type: string
+          title: Expected
+          default: ''
+        standard:
+          type: string
+          title: Standard
+          default: ''
+        sort_order:
+          type: integer
+          title: Sort Order
+          default: 0
+      type: object
+      required:
+      - name_en
+      - name_vi
+      title: ChecklistCriterionCreate
+    ChecklistCriterionOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        name_en:
+          type: string
+          title: Name En
+        name_vi:
+          type: string
+          title: Name Vi
+        section:
+          type: string
+          title: Section
+        expected:
+          type: string
+          title: Expected
+        standard:
+          type: string
+          title: Standard
+        sort_order:
+          type: integer
+          title: Sort Order
+      type: object
+      required:
+      - id
+      - name_en
+      - name_vi
+      - section
+      - expected
+      - standard
+      - sort_order
+      title: ChecklistCriterionOut
+    ChecklistOptionListResponse:
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/ChecklistOptionOut'
+          type: array
+          title: Data
+      type: object
+      required:
+      - data
+      title: ChecklistOptionListResponse
+    ChecklistOptionOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        version:
+          type: string
+          title: Version
+        status:
+          type: string
+          title: Status
+        criteria_count:
+          type: integer
+          title: Criteria Count
+      type: object
+      required:
+      - id
+      - version
+      - status
+      - criteria_count
+      title: ChecklistOptionOut
+    ChecklistVersionCreate:
+      properties:
+        version:
+          type: string
+          title: Version
+        status:
+          type: string
+          title: Status
+          default: draft
+        criteria:
+          items:
+            $ref: '#/components/schemas/ChecklistCriterionCreate'
+          type: array
+          title: Criteria
+      type: object
+      required:
+      - version
+      title: ChecklistVersionCreate
+    ChecklistVersionDetailOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        version:
+          type: string
+          title: Version
+        status:
+          type: string
+          title: Status
+        created_by:
+          type: string
+          title: Created By
+        criteria_count:
+          type: integer
+          title: Criteria Count
+          default: 0
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+        criteria:
+          items:
+            $ref: '#/components/schemas/ChecklistCriterionOut'
+          type: array
+          title: Criteria
+      type: object
+      required:
+      - id
+      - version
+      - status
+      - created_by
+      - created_at
+      - updated_at
+      - criteria
+      title: ChecklistVersionDetailOut
+    ChecklistVersionListResponse:
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/ChecklistVersionOut'
+          type: array
+          title: Data
+      type: object
+      required:
+      - data
+      title: ChecklistVersionListResponse
+    ChecklistVersionOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        version:
+          type: string
+          title: Version
+        status:
+          type: string
+          title: Status
+        created_by:
+          type: string
+          title: Created By
+        criteria_count:
+          type: integer
+          title: Criteria Count
+          default: 0
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      type: object
+      required:
+      - id
+      - version
+      - status
+      - created_by
+      - created_at
+      - updated_at
+      title: ChecklistVersionOut
+    ChecklistVersionPatch:
+      properties:
+        version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Version
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+      type: object
+      title: ChecklistVersionPatch
+    ValidationError:
+      type: object
+      title: ValidationError
+      description: Lỗi 422 theo định dạng mặc định của FastAPI/Pydantic.
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              loc:
+                type: array
+                items: {}
+              msg:
+                type: string
+              input: {}
+    PortalError:
+      type: object
+      title: PortalError
+      description: Envelope lỗi 401/403 của portal. `detail` là **object** (khác định dạng mặc định của FastAPI). Sinh bởi
+        `backend/app/shared/deps.py`.
+      required:
+      - detail
+      properties:
+        detail:
+          type: object
+          required:
+          - error
+          properties:
+            error:
+              type: object
+              required:
+              - code
+              - message
+              - details
+              properties:
+                code:
+                  type: string
+                  enum:
+                  - UNAUTHORIZED
+                  - FORBIDDEN
+                message:
+                  type: string
+                details:
+                  type: array
+                  items:
+                    type: string
+                  description: 403 → permission key còn thiếu; 401 → mảng rỗng.

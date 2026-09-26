@@ -1,0 +1,205 @@
+openapi: 3.1.0
+info:
+  title: VD Data Platform Portal — Export — QC Review List (Excel/CSV)
+  version: 1.0.0
+  summary: review / qc-review-export-list
+  description: |
+    Đặc tả OpenAPI cho **Export — QC Review List (Excel/CSV)** — sub-module `review`, feature `qc-review-export-list`.
+
+    Spec sinh từ `app.openapi()` của backend FastAPI (không viết tay), bổ sung thông tin
+    mà OpenAPI không có: permission key thật của từng handler, envelope lỗi 401/403 của
+    `backend/app/shared/deps.py`, và file/handler cài đặt (`x-code`).
+
+    ## Dùng cho test
+
+    - **Phạm vi:** 1 path / 1 operation.
+    - `x-portal-permissions` = permission key handler yêu cầu. Có key ⇒ viết được case 403
+      bằng cách gọi endpoint với user thiếu quyền đó; **không có** key ⇒ handler chỉ cần
+      đăng nhập, đừng kỳ vọng 403.
+    - Xác thực: Bearer JWT (Keycloak) — xem `../../authentication/openapi.yaml`.
+    - Nguồn nghiệp vụ: `docs/review/qc-review-export-list/srs.md`
+    .
+
+    ## Endpoint dùng chung — contract nằm ở spec khác
+
+    Feature này gọi các endpoint dưới đây nhưng bản đầy đủ (schema, param, ví dụ) nằm
+    ở spec của feature sở hữu, để tránh hai bản contract lệch nhau:
+
+    - `/api/v1/qc/queue/export` → `../qc-queue/openapi.yaml`
+    - `/api/v1/qc/queue/export/preview` → `../qc-queue/openapi.yaml`
+  x-module: review
+  x-feature: qc-review-export-list
+  x-source-docs:
+  - docs/review/qc-review-export-list/urd.md
+  - docs/review/qc-review-export-list/srs.md
+  x-generated-from: app.openapi() + dependency introspection (scripts/dump_portal_openapi.py)
+  x-generated-at: 2026-09-21 11:55 +0700
+servers:
+- url: /api/v1
+  description: Cùng origin với SPA (`VITE_API_BASE_URL ?? "/api/v1"`)
+tags:
+- name: qc
+  description: 'Nhóm endpoint `qc` của portal (tag do router FastAPI đặt). Prefix: `/api/v1/qc/…`.'
+paths:
+  /api/v1/qc/queue/{item_id}/export-downloads:
+    post:
+      tags:
+      - qc
+      summary: Qc Export Downloads
+      operationId: qc_export_downloads_api_v1_qc_queue__item_id__export_downloads_post
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QcExportDownloadsRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcExportDownloadsResponse'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:review:perform`. `details` trong body trả về
+            đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id001
+                    - qc:review:perform
+        '422':
+          description: Body/query/path sai schema (định dạng lỗi mặc định của FastAPI).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+      x-portal-permissions: *id001
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.qc_export_downloads
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: OIDC token của Keycloak — chi tiết ở docs/OAS/authentication/openapi.yaml
+  schemas:
+    QcExportDownloadItem:
+      properties:
+        id:
+          type: string
+          title: Id
+        url:
+          type: string
+          title: Url
+        filename:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Filename
+      type: object
+      required:
+      - id
+      - url
+      title: QcExportDownloadItem
+    QcExportDownloadsRequest:
+      properties:
+        export_target_ids:
+          items:
+            type: string
+          type: array
+          minItems: 1
+          title: Export Target Ids
+      type: object
+      required:
+      - export_target_ids
+      title: QcExportDownloadsRequest
+    QcExportDownloadsResponse:
+      properties:
+        downloads:
+          items:
+            $ref: '#/components/schemas/QcExportDownloadItem'
+          type: array
+          title: Downloads
+      type: object
+      title: QcExportDownloadsResponse
+    ValidationError:
+      type: object
+      title: ValidationError
+      description: Lỗi 422 theo định dạng mặc định của FastAPI/Pydantic.
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              loc:
+                type: array
+                items: {}
+              msg:
+                type: string
+              input: {}
+    PortalError:
+      type: object
+      title: PortalError
+      description: Envelope lỗi 401/403 của portal. `detail` là **object** (khác định dạng mặc định của FastAPI). Sinh bởi
+        `backend/app/shared/deps.py`.
+      required:
+      - detail
+      properties:
+        detail:
+          type: object
+          required:
+          - error
+          properties:
+            error:
+              type: object
+              required:
+              - code
+              - message
+              - details
+              properties:
+                code:
+                  type: string
+                  enum:
+                  - UNAUTHORIZED
+                  - FORBIDDEN
+                message:
+                  type: string
+                details:
+                  type: array
+                  items:
+                    type: string
+                  description: 403 → permission key còn thiếu; 401 → mảng rỗng.

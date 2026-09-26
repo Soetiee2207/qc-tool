@@ -1,0 +1,2104 @@
+openapi: 3.1.0
+info:
+  title: VD Data Platform Portal — Tapdata QC Review — module standalone (1 video preview)
+  version: 1.0.0
+  summary: review / qc-review-detail-tapdata
+  description: |
+    Đặc tả OpenAPI cho **Tapdata QC Review — module standalone (1 video preview)** — sub-module `review`, feature `qc-review-detail-tapdata`.
+
+    Spec sinh từ `app.openapi()` của backend FastAPI (không viết tay), bổ sung thông tin
+    mà OpenAPI không có: permission key thật của từng handler, envelope lỗi 401/403 của
+    `backend/app/shared/deps.py`, và file/handler cài đặt (`x-code`).
+
+    ## Dùng cho test
+
+    - **Phạm vi:** 9 path / 11 operation.
+    - `x-portal-permissions` = permission key handler yêu cầu. Có key ⇒ viết được case 403
+      bằng cách gọi endpoint với user thiếu quyền đó; **không có** key ⇒ handler chỉ cần
+      đăng nhập, đừng kỳ vọng 403.
+    - Xác thực: Bearer JWT (Keycloak) — xem `../../authentication/openapi.yaml`.
+    - Nguồn nghiệp vụ: `docs/review/qc-review-detail-tapdata/srs.md`
+    .
+
+    ## Endpoint dùng chung — contract nằm ở spec khác
+
+    Feature này gọi các endpoint dưới đây nhưng bản đầy đủ (schema, param, ví dụ) nằm
+    ở spec của feature sở hữu, để tránh hai bản contract lệch nhau:
+
+    - `/api/v1/qc/queue` → `../qc-queue/openapi.yaml`
+    - `/api/v1/qc/queue/{item_id}/playback` → `../qc-queue/openapi.yaml`
+  x-module: review
+  x-feature: qc-review-detail-tapdata
+  x-source-docs:
+  - docs/review/qc-review-detail-tapdata/urd.md
+  - docs/review/qc-review-detail-tapdata/srs.md
+  x-generated-from: app.openapi() + dependency introspection (scripts/dump_portal_openapi.py)
+  x-generated-at: 2026-09-21 11:55 +0700
+servers:
+- url: /api/v1
+  description: Cùng origin với SPA (`VITE_API_BASE_URL ?? "/api/v1"`)
+tags:
+- name: qc
+  description: 'Nhóm endpoint `qc` của portal (tag do router FastAPI đặt). Prefix: `/api/v1/qc/…`.'
+paths:
+  /api/v1/qc/queue/{item_id}/blur-review:
+    get:
+      tags:
+      - qc
+      summary: Get Qc Blur Review
+      operationId: get_qc_blur_review_api_v1_qc_queue__item_id__blur_review_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcBlurReviewOut'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:review:perform`. `details` trong body trả về
+            đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id001
+                    - qc:review:perform
+      x-portal-permissions: *id001
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.get_qc_blur_review
+    put:
+      tags:
+      - qc
+      summary: Put Qc Blur Review
+      operationId: put_qc_blur_review_api_v1_qc_queue__item_id__blur_review_put
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QcBlurReviewSaveRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcBlurReviewOut'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:review:perform`. `details` trong body trả về
+            đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id002
+                    - qc:review:perform
+        '422':
+          description: Body/query/path sai schema (định dạng lỗi mặc định của FastAPI).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+      x-portal-permissions: *id002
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.put_qc_blur_review
+  /api/v1/qc/queue/{item_id}/config:
+    put:
+      tags:
+      - qc
+      summary: Save Qc Config
+      operationId: save_qc_config_api_v1_qc_queue__item_id__config_put
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QcConfigSaveRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcConfigSaveResponse'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:review:perform`. `details` trong body trả về
+            đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id003
+                    - qc:review:perform
+        '422':
+          description: Body/query/path sai schema (định dạng lỗi mặc định của FastAPI).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+      x-portal-permissions: *id003
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.save_qc_config
+  /api/v1/qc/queue/{item_id}/face-detections:
+    get:
+      tags:
+      - qc
+      summary: Get Qc Face Detections
+      operationId: get_qc_face_detections_api_v1_qc_queue__item_id__face_detections_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      - name: view
+        in: query
+        required: false
+        schema:
+          type: string
+          default: left
+          title: View
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Qc Face Detections Api V1 Qc Queue  Item Id  Face Detections Get
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:review:perform`. `details` trong body trả về
+            đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id004
+                    - qc:review:perform
+      x-portal-permissions: *id004
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.get_qc_face_detections
+    put:
+      tags:
+      - qc
+      summary: Put Qc Face Detections
+      operationId: put_qc_face_detections_api_v1_qc_queue__item_id__face_detections_put
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      - name: view
+        in: query
+        required: false
+        schema:
+          type: string
+          default: left
+          title: View
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              title: Body
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Put Qc Face Detections Api V1 Qc Queue  Item Id  Face Detections Put
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:review:perform`. `details` trong body trả về
+            đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id005
+                    - qc:review:perform
+        '422':
+          description: Body/query/path sai schema (định dạng lỗi mặc định của FastAPI).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+      x-portal-permissions: *id005
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.put_qc_face_detections
+  /api/v1/qc/queue/{item_id}/face-detections/propagate-from-left:
+    post:
+      tags:
+      - qc
+      summary: Propagate Qc Faces
+      operationId: propagate_qc_faces_api_v1_qc_queue__item_id__face_detections_propagate_from_left_post
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Propagate Qc Faces Api V1 Qc Queue  Item Id  Face Detections Propagate From Left Post
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:review:perform`. `details` trong body trả về
+            đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id006
+                    - qc:review:perform
+        '422':
+          description: Body/query/path sai schema (định dạng lỗi mặc định của FastAPI).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+      x-portal-permissions: *id006
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.propagate_qc_faces
+  /api/v1/qc/queue/{item_id}/metadata:
+    patch:
+      tags:
+      - qc
+      summary: Patch Qc Metadata
+      operationId: patch_qc_metadata_api_v1_qc_queue__item_id__metadata_patch
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QcMetadataPatchRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Patch Qc Metadata Api V1 Qc Queue  Item Id  Metadata Patch
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:review:perform`. `details` trong body trả về
+            đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id007
+                    - qc:review:perform
+        '422':
+          description: Body/query/path sai schema (định dạng lỗi mặc định của FastAPI).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+      x-portal-permissions: *id007
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.patch_qc_metadata
+  /api/v1/qc/queue/{item_id}/metadata-versions:
+    get:
+      tags:
+      - qc
+      summary: Get Qc Metadata Versions
+      operationId: get_qc_metadata_versions_api_v1_qc_queue__item_id__metadata_versions_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcSubmissionMetadataVersionListOut'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:review:perform`. `details` trong body trả về
+            đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id008
+                    - qc:review:perform
+      x-portal-permissions: *id008
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.get_qc_metadata_versions
+  /api/v1/qc/queue/{item_id}/review:
+    get:
+      tags:
+      - qc
+      summary: Get Qc Review Detail
+      operationId: get_qc_review_detail_api_v1_qc_queue__item_id__review_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      - name: include_versions
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Include Versions
+      - name: include_sessions
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Include Sessions
+      - name: multicam_source
+        in: query
+        required: false
+        schema:
+          type: string
+          default: auto
+          title: Multicam Source
+      - name: annotation_lock
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Annotation Lock
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcReviewDetailOut'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:review:perform`. `details` trong body trả về
+            đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id009
+                    - qc:review:perform
+      x-portal-permissions: *id009
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.get_qc_review_detail
+  /api/v1/qc/queue/{item_id}/review-sessions:
+    get:
+      tags:
+      - qc
+      summary: Get Qc Review Sessions
+      operationId: get_qc_review_sessions_api_v1_qc_queue__item_id__review_sessions_get
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+          title: Page
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 50
+          minimum: 1
+          default: 50
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcReviewSessionListOut'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:review:perform`. `details` trong body trả về
+            đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id010
+                    - qc:review:perform
+      x-portal-permissions: *id010
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.get_qc_review_sessions
+  /api/v1/qc/queue/{item_id}/submit:
+    post:
+      tags:
+      - qc
+      summary: Submit Qc Review
+      operationId: submit_qc_review_api_v1_qc_queue__item_id__submit_post
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QcReviewSubmitRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QcReviewSubmitResponse'
+        '401':
+          description: 'Thiếu hoặc không hợp lệ `Authorization: Bearer`. Backend sinh từ `backend/app/shared/deps.py`; SPA
+            thử refresh token rồi replay một lần, thất bại thì clear session và điều hướng `/login`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: UNAUTHORIZED
+                    message: Invalid or missing bearer token
+                    details: []
+        '403':
+          description: 'Thiếu quyền — handler so khớp **tất cả** key sau: `qc:review:perform`. `details` trong body trả về
+            đúng danh sách này.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalError'
+              example:
+                detail:
+                  error:
+                    code: FORBIDDEN
+                    message: Insufficient permissions
+                    details: &id011
+                    - qc:review:perform
+        '422':
+          description: Body/query/path sai schema (định dạng lỗi mặc định của FastAPI).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+      x-portal-permissions: *id011
+      x-code:
+        file: backend/app/features/qc/router.py
+        handler: app.features.qc.router.submit_qc_review
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: OIDC token của Keycloak — chi tiết ở docs/OAS/authentication/openapi.yaml
+  schemas:
+    QcAnnotationSessionHolderOut:
+      properties:
+        reviewer_id:
+          type: string
+          title: Reviewer Id
+        reviewer_name:
+          type: string
+          title: Reviewer Name
+        opened_at:
+          type: string
+          format: date-time
+          title: Opened At
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+      type: object
+      required:
+      - reviewer_id
+      - reviewer_name
+      - opened_at
+      - expires_at
+      title: QcAnnotationSessionHolderOut
+      description: Other user currently holding the annotation session for an item.
+    QcBlurReviewOut:
+      properties:
+        start_seconds:
+          type: number
+          title: Start Seconds
+          default: 0
+        end_seconds:
+          type: number
+          title: End Seconds
+          default: 0
+        status:
+          type: string
+          title: Status
+          default: pending
+        reason_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason Code
+        reason_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason Text
+      type: object
+      title: QcBlurReviewOut
+    QcBlurReviewSaveRequest:
+      properties:
+        start_seconds:
+          type: number
+          minimum: 0.0
+          title: Start Seconds
+        end_seconds:
+          type: number
+          minimum: 0.0
+          title: End Seconds
+        status:
+          type: string
+          pattern: ^(pending|pass|failed)$
+          title: Status
+          default: pending
+        reason_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason Code
+        reason_text:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason Text
+      type: object
+      required:
+      - start_seconds
+      - end_seconds
+      title: QcBlurReviewSaveRequest
+    QcConfigSaveRequest:
+      properties:
+        validation_actuals:
+          additionalProperties: true
+          type: object
+          title: Validation Actuals
+        review_config:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Review Config
+        segment_decisions:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          title: Segment Decisions
+        export_target_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Export Target Ids
+        delivery_overrides:
+          anyOf:
+          - additionalProperties:
+              additionalProperties:
+                type: string
+              type: object
+            type: object
+          - type: 'null'
+          title: Delivery Overrides
+        delivery_active_profile_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Delivery Active Profile Id
+        event_type:
+          type: string
+          title: Event Type
+          default: draft
+        expected_revision:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Expected Revision
+      type: object
+      title: QcConfigSaveRequest
+    QcConfigSaveResponse:
+      properties:
+        saved:
+          type: boolean
+          title: Saved
+          default: true
+        uuidv7:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Uuidv7
+        revision:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Revision
+      type: object
+      title: QcConfigSaveResponse
+    QcDeliverableArtifactOut:
+      properties:
+        segment_id:
+          type: string
+          title: Segment Id
+          default: ''
+        modality:
+          type: string
+          title: Modality
+          default: ''
+        uri:
+          type: string
+          title: Uri
+          default: ''
+        start_sec:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Start Sec
+        end_sec:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: End Sec
+        duration_sec:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Duration Sec
+        codec:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Codec
+        file_size_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: File Size Bytes
+      type: object
+      title: QcDeliverableArtifactOut
+    QcDeliverablePackageOut:
+      properties:
+        status:
+          type: string
+          title: Status
+          default: pending_packaging
+        segmentation_version:
+          type: integer
+          title: Segmentation Version
+          default: 0
+        review_revision:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Review Revision
+        delivery_profile_id:
+          type: string
+          title: Delivery Profile Id
+          default: default
+        packaged_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Packaged At
+        artifacts:
+          items:
+            $ref: '#/components/schemas/QcDeliverableArtifactOut'
+          type: array
+          title: Artifacts
+        delivery_metadata:
+          additionalProperties:
+            type: string
+          type: object
+          title: Delivery Metadata
+      type: object
+      title: QcDeliverablePackageOut
+    QcDeliveryBundleOut:
+      properties:
+        profiles:
+          items:
+            $ref: '#/components/schemas/QcDeliveryProfileOut'
+          type: array
+          title: Profiles
+        active_profile_id:
+          type: string
+          title: Active Profile Id
+          default: default
+        delivery_json:
+          additionalProperties:
+            type: string
+          type: object
+          title: Delivery Json
+        all_complete:
+          type: boolean
+          title: All Complete
+          default: true
+      type: object
+      title: QcDeliveryBundleOut
+    QcDeliveryFieldOut:
+      properties:
+        key:
+          type: string
+          title: Key
+        label:
+          type: string
+          title: Label
+        value:
+          type: string
+          title: Value
+          default: ''
+        required:
+          type: boolean
+          title: Required
+          default: false
+        missing:
+          type: boolean
+          title: Missing
+          default: false
+        source:
+          type: string
+          title: Source
+          default: empty
+        editable:
+          type: boolean
+          title: Editable
+          default: false
+      type: object
+      required:
+      - key
+      - label
+      title: QcDeliveryFieldOut
+    QcDeliveryProfileOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        label:
+          type: string
+          title: Label
+        export_target_ids:
+          items:
+            type: string
+          type: array
+          title: Export Target Ids
+        fields:
+          items:
+            $ref: '#/components/schemas/QcDeliveryFieldOut'
+          type: array
+          title: Fields
+        complete:
+          type: boolean
+          title: Complete
+          default: false
+        required_count:
+          type: integer
+          title: Required Count
+          default: 0
+        filled_required_count:
+          type: integer
+          title: Filled Required Count
+          default: 0
+      type: object
+      required:
+      - id
+      - label
+      title: QcDeliveryProfileOut
+    QcFaceBboxOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        x:
+          type: number
+          title: X
+        y:
+          type: number
+          title: Y
+        width:
+          type: number
+          title: Width
+        height:
+          type: number
+          title: Height
+        frameStart:
+          type: integer
+          title: Framestart
+        frameEnd:
+          type: integer
+          title: Frameend
+        status:
+          type: string
+          title: Status
+        confidence:
+          type: number
+          title: Confidence
+      type: object
+      required:
+      - id
+      - x
+      - y
+      - width
+      - height
+      - frameStart
+      - frameEnd
+      - status
+      - confidence
+      title: QcFaceBboxOut
+    QcLastReviewOut:
+      properties:
+        decision:
+          type: string
+          title: Decision
+        reason_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason Code
+        comment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Comment
+        reviewed_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Reviewed At
+      type: object
+      required:
+      - decision
+      title: QcLastReviewOut
+    QcMetadataFieldOut:
+      properties:
+        key:
+          type: string
+          title: Key
+        label:
+          type: string
+          title: Label
+        value:
+          type: string
+          title: Value
+          default: ''
+        required:
+          type: boolean
+          title: Required
+          default: false
+        missing:
+          type: boolean
+          title: Missing
+          default: false
+        invalid:
+          type: boolean
+          title: Invalid
+          default: false
+        mock:
+          type: boolean
+          title: Mock
+          default: false
+        source:
+          type: string
+          title: Source
+          default: ''
+        control:
+          type: string
+          title: Control
+          default: ''
+        options:
+          items:
+            type: string
+          type: array
+          title: Options
+        group:
+          type: string
+          title: Group
+          default: ''
+      type: object
+      required:
+      - key
+      - label
+      title: QcMetadataFieldOut
+    QcMetadataPatchRequest:
+      properties:
+        recording:
+          additionalProperties: true
+          type: object
+          title: Recording
+      type: object
+      title: QcMetadataPatchRequest
+    QcMetadataSectionOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        title:
+          type: string
+          title: Title
+        source:
+          type: string
+          title: Source
+          default: ''
+        available:
+          type: boolean
+          title: Available
+          default: false
+        fields:
+          items:
+            $ref: '#/components/schemas/QcMetadataFieldOut'
+          type: array
+          title: Fields
+        enriched_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Enriched At
+        provider:
+          type: string
+          title: Provider
+          default: ''
+        model:
+          type: string
+          title: Model
+          default: ''
+        validation_ok:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Validation Ok
+        metadata_s3_uri:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Metadata S3 Uri
+      type: object
+      required:
+      - id
+      - title
+      title: QcMetadataSectionOut
+    QcMetadataSidecarOut:
+      properties:
+        sections:
+          items:
+            $ref: '#/components/schemas/QcMetadataSectionOut'
+          type: array
+          title: Sections
+        missing_required_count:
+          type: integer
+          title: Missing Required Count
+          default: 0
+        required_count:
+          type: integer
+          title: Required Count
+          default: 0
+      type: object
+      title: QcMetadataSidecarOut
+    QcQueueItemOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        external_id:
+          type: string
+          title: External Id
+        upload_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Upload Id
+        project_id:
+          type: string
+          title: Project Id
+        project_name:
+          type: string
+          title: Project Name
+        filename:
+          type: string
+          title: Filename
+        duration:
+          type: string
+          title: Duration
+        status:
+          type: string
+          title: Status
+        priority:
+          type: string
+          title: Priority
+        assignee_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Assignee Id
+        assignee_name:
+          type: string
+          title: Assignee Name
+        assignee_initials:
+          type: string
+          title: Assignee Initials
+        age:
+          type: string
+          title: Age
+        thumbnail_color:
+          type: string
+          title: Thumbnail Color
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+        stereo_review:
+          type: boolean
+          title: Stereo Review
+          default: false
+        reject_reason_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reject Reason Code
+        reject_comment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reject Comment
+        tags:
+          items:
+            type: string
+          type: array
+          title: Tags
+        batch_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Batch Id
+        annotation_session_holder:
+          anyOf:
+          - $ref: '#/components/schemas/QcAnnotationSessionHolderOut'
+          - type: 'null'
+      type: object
+      required:
+      - id
+      - external_id
+      - project_id
+      - project_name
+      - filename
+      - duration
+      - status
+      - priority
+      - assignee_name
+      - assignee_initials
+      - age
+      - thumbnail_color
+      - created_at
+      - updated_at
+      title: QcQueueItemOut
+    QcReviewCriterionOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        name_en:
+          type: string
+          title: Name En
+        name_vi:
+          type: string
+          title: Name Vi
+        section:
+          type: string
+          title: Section
+        expected:
+          type: string
+          title: Expected
+        standard:
+          type: string
+          title: Standard
+        reviewer_input:
+          type: string
+          title: Reviewer Input
+          default: ''
+        result:
+          type: string
+          title: Result
+          default: pending
+      type: object
+      required:
+      - id
+      - name_en
+      - name_vi
+      - section
+      - expected
+      - standard
+      title: QcReviewCriterionOut
+    QcReviewDetailOut:
+      properties:
+        item:
+          $ref: '#/components/schemas/QcQueueItemOut'
+        last_review:
+          anyOf:
+          - $ref: '#/components/schemas/QcLastReviewOut'
+          - type: 'null'
+        review_sessions:
+          items:
+            $ref: '#/components/schemas/QcReviewSessionOut'
+          type: array
+          title: Review Sessions
+        metadata:
+          $ref: '#/components/schemas/QcReviewMetadataOut'
+        timeline:
+          items:
+            $ref: '#/components/schemas/QcTimelineSegmentOut'
+          type: array
+          title: Timeline
+        face_bboxes:
+          items:
+            $ref: '#/components/schemas/QcFaceBboxOut'
+          type: array
+          title: Face Bboxes
+        criteria:
+          items:
+            $ref: '#/components/schemas/QcReviewCriterionOut'
+          type: array
+          title: Criteria
+        hand_visibility:
+          items:
+            $ref: '#/components/schemas/QcTimelineLaneOut'
+          type: array
+          title: Hand Visibility
+        face_visibility:
+          items:
+            $ref: '#/components/schemas/QcTimelineLaneOut'
+          type: array
+          title: Face Visibility
+        face_tracks:
+          items:
+            $ref: '#/components/schemas/QcTimelineLaneOut'
+          type: array
+          title: Face Tracks
+        process_status:
+          type: string
+          title: Process Status
+          default: ''
+        export_targets:
+          items: {}
+          type: array
+          title: Export Targets
+        blur_review:
+          anyOf:
+          - $ref: '#/components/schemas/QcBlurReviewOut'
+          - type: 'null'
+        ingestion_uuidv7:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ingestion Uuidv7
+        stereo_review:
+          type: boolean
+          title: Stereo Review
+          default: false
+        scaleai_multicam_review:
+          type: boolean
+          title: Scaleai Multicam Review
+          default: false
+        multicam_rig_source:
+          type: boolean
+          title: Multicam Rig Source
+          default: false
+        qc_ui_profile:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Qc Ui Profile
+        multicam_sync_offsets:
+          additionalProperties:
+            type: number
+          type: object
+          title: Multicam Sync Offsets
+        delivery:
+          anyOf:
+          - $ref: '#/components/schemas/QcDeliveryBundleOut'
+          - type: 'null'
+        deliverable:
+          anyOf:
+          - $ref: '#/components/schemas/QcDeliverablePackageOut'
+          - type: 'null'
+        annotation_mode:
+          type: string
+          title: Annotation Mode
+          default: manual
+        skip_manual_annotation:
+          type: boolean
+          title: Skip Manual Annotation
+          default: false
+        annotation_session_holder:
+          anyOf:
+          - $ref: '#/components/schemas/QcAnnotationSessionHolderOut'
+          - type: 'null'
+        review_revision:
+          type: integer
+          title: Review Revision
+          default: 0
+        review_config:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Review Config
+        metadata_sidecar:
+          anyOf:
+          - $ref: '#/components/schemas/QcMetadataSidecarOut'
+          - type: 'null'
+        metadata_versions:
+          items:
+            $ref: '#/components/schemas/QcSubmissionMetadataVersionOut'
+          type: array
+          title: Metadata Versions
+        active_enrichment_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Active Enrichment Id
+      type: object
+      required:
+      - item
+      - metadata
+      - timeline
+      - face_bboxes
+      - criteria
+      title: QcReviewDetailOut
+    QcReviewMetadataOut:
+      properties:
+        operator:
+          type: string
+          title: Operator
+          default: ''
+        site:
+          type: string
+          title: Site
+          default: ''
+        task:
+          type: string
+          title: Task
+          default: ''
+        device:
+          type: string
+          title: Device
+          default: ''
+        startTime:
+          type: string
+          title: Starttime
+          default: ''
+        endTime:
+          type: string
+          title: Endtime
+          default: ''
+        duration:
+          type: string
+          title: Duration
+          default: ''
+        resolution:
+          type: string
+          title: Resolution
+          default: ''
+        fps:
+          type: integer
+          title: Fps
+          default: 0
+        codec:
+          type: string
+          title: Codec
+          default: ''
+        bitrate:
+          type: string
+          title: Bitrate
+          default: ''
+        fileSize:
+          type: string
+          title: Filesize
+          default: ''
+        sourceFilename:
+          type: string
+          title: Sourcefilename
+          default: ''
+        mlStatus:
+          type: string
+          title: Mlstatus
+          default: ''
+        requestId:
+          type: string
+          title: Requestid
+          default: ''
+        rigType:
+          type: string
+          title: Rigtype
+          default: ''
+        modality:
+          type: string
+          title: Modality
+          default: ''
+        catalogSite:
+          type: string
+          title: Catalogsite
+          default: ''
+        environmentId:
+          type: string
+          title: Environmentid
+          default: ''
+        locationAddress:
+          type: string
+          title: Locationaddress
+          default: ''
+        environmentL1:
+          type: string
+          title: Environmentl1
+          default: ''
+        environmentL1Vi:
+          type: string
+          title: Environmentl1Vi
+          default: ''
+        venueL2:
+          type: string
+          title: Venuel2
+          default: ''
+        venueL2Vi:
+          type: string
+          title: Venuel2Vi
+          default: ''
+        sceneL3:
+          type: string
+          title: Scenel3
+          default: ''
+        sceneL3Vi:
+          type: string
+          title: Scenel3Vi
+          default: ''
+        taskNameEn:
+          type: string
+          title: Tasknameen
+          default: ''
+        taskNameVi:
+          type: string
+          title: Tasknamevi
+          default: ''
+        descriptionEn:
+          type: string
+          title: Descriptionen
+          default: ''
+        descriptionVi:
+          type: string
+          title: Descriptionvi
+          default: ''
+        difficulty:
+          type: string
+          title: Difficulty
+          default: ''
+        skillGroup:
+          type: string
+          title: Skillgroup
+          default: ''
+        jobOperator:
+          type: string
+          title: Joboperator
+          default: ''
+        taskId:
+          type: string
+          title: Taskid
+          default: ''
+        coordinatorId:
+          type: string
+          title: Coordinatorid
+          default: ''
+        operatorId:
+          type: string
+          title: Operatorid
+          default: ''
+        sceneId:
+          type: string
+          title: Sceneid
+          default: ''
+        parentVideoId:
+          type: string
+          title: Parentvideoid
+          default: ''
+        segmentId:
+          type: string
+          title: Segmentid
+          default: ''
+        segmentIndex:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Segmentindex
+        segmentStartSec:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Segmentstartsec
+        segmentEndSec:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Segmentendsec
+        parentDurationSec:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Parentdurationsec
+      type: object
+      title: QcReviewMetadataOut
+    QcReviewSessionListOut:
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/QcReviewSessionOut'
+          type: array
+          title: Data
+        total:
+          type: integer
+          title: Total
+        page:
+          type: integer
+          title: Page
+        limit:
+          type: integer
+          title: Limit
+      type: object
+      required:
+      - data
+      - total
+      - page
+      - limit
+      title: QcReviewSessionListOut
+    QcReviewSessionOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        reviewer_id:
+          type: string
+          title: Reviewer Id
+        reviewer_name:
+          type: string
+          title: Reviewer Name
+        opened_at:
+          type: string
+          format: date-time
+          title: Opened At
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+        status:
+          type: string
+          title: Status
+          default: active
+        submitted_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Submitted At
+        decision:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Decision
+        revision:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Revision
+        reason_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason Code
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+      type: object
+      required:
+      - id
+      - reviewer_id
+      - reviewer_name
+      - opened_at
+      - expires_at
+      title: QcReviewSessionOut
+    QcReviewSubmitRequest:
+      properties:
+        decision:
+          type: string
+          pattern: ^(pass|reject)$
+          title: Decision
+        comment:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Comment
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+        export_target_ids:
+          items:
+            type: string
+          type: array
+          title: Export Target Ids
+        validation_actuals:
+          additionalProperties: true
+          type: object
+          title: Validation Actuals
+        review_config:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Review Config
+      type: object
+      required:
+      - decision
+      title: QcReviewSubmitRequest
+    QcReviewSubmitResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+        external_id:
+          type: string
+          title: External Id
+        status:
+          type: string
+          title: Status
+        decision:
+          type: string
+          title: Decision
+      type: object
+      required:
+      - id
+      - external_id
+      - status
+      - decision
+      title: QcReviewSubmitResponse
+    QcSegmentTaskOut:
+      properties:
+        task_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Task Id
+        task_description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Task Description
+        skill_group:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Skill Group
+        task_category:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Task Category
+        task_difficulty:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Task Difficulty
+      type: object
+      title: QcSegmentTaskOut
+    QcSubmissionMetadataVersionListOut:
+      properties:
+        uuidv7:
+          type: string
+          title: Uuidv7
+        active_enrichment_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Active Enrichment Id
+        versions:
+          items:
+            $ref: '#/components/schemas/QcSubmissionMetadataVersionOut'
+          type: array
+          title: Versions
+      type: object
+      required:
+      - uuidv7
+      title: QcSubmissionMetadataVersionListOut
+    QcSubmissionMetadataVersionOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        uuidv7:
+          type: string
+          title: Uuidv7
+        enrichment_id:
+          type: string
+          title: Enrichment Id
+        source:
+          type: string
+          title: Source
+        metadata_revision:
+          type: integer
+          title: Metadata Revision
+          default: 0
+        batch_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Batch Id
+        enriched_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Enriched At
+        is_latest:
+          type: boolean
+          title: Is Latest
+          default: false
+        payload_snapshot:
+          additionalProperties:
+            type: string
+          type: object
+          title: Payload Snapshot
+        reviews:
+          items:
+            $ref: '#/components/schemas/QcSubmissionMetadataVersionReviewOut'
+          type: array
+          title: Reviews
+      type: object
+      required:
+      - id
+      - uuidv7
+      - enrichment_id
+      - source
+      title: QcSubmissionMetadataVersionOut
+    QcSubmissionMetadataVersionReviewOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        decision:
+          type: string
+          title: Decision
+        reason_code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason Code
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+        reviewer_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reviewer Id
+        qc_review_revision:
+          type: integer
+          title: Qc Review Revision
+          default: 0
+        reviewed_at:
+          type: string
+          format: date-time
+          title: Reviewed At
+      type: object
+      required:
+      - id
+      - decision
+      - reviewed_at
+      title: QcSubmissionMetadataVersionReviewOut
+    QcTimelineLaneOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        startPct:
+          type: number
+          title: Startpct
+        endPct:
+          type: number
+          title: Endpct
+        opacity:
+          type: number
+          title: Opacity
+          default: 0.5
+        label:
+          type: string
+          title: Label
+          default: ''
+      type: object
+      required:
+      - id
+      - startPct
+      - endPct
+      title: QcTimelineLaneOut
+    QcTimelineSegmentOut:
+      properties:
+        id:
+          type: string
+          title: Id
+        startPct:
+          type: number
+          title: Startpct
+        endPct:
+          type: number
+          title: Endpct
+        type:
+          type: string
+          title: Type
+        label:
+          type: string
+          title: Label
+        task:
+          anyOf:
+          - $ref: '#/components/schemas/QcSegmentTaskOut'
+          - type: 'null'
+      type: object
+      required:
+      - id
+      - startPct
+      - endPct
+      - type
+      - label
+      title: QcTimelineSegmentOut
+    ValidationError:
+      type: object
+      title: ValidationError
+      description: Lỗi 422 theo định dạng mặc định của FastAPI/Pydantic.
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              loc:
+                type: array
+                items: {}
+              msg:
+                type: string
+              input: {}
+    PortalError:
+      type: object
+      title: PortalError
+      description: Envelope lỗi 401/403 của portal. `detail` là **object** (khác định dạng mặc định của FastAPI). Sinh bởi
+        `backend/app/shared/deps.py`.
+      required:
+      - detail
+      properties:
+        detail:
+          type: object
+          required:
+          - error
+          properties:
+            error:
+              type: object
+              required:
+              - code
+              - message
+              - details
+              properties:
+                code:
+                  type: string
+                  enum:
+                  - UNAUTHORIZED
+                  - FORBIDDEN
+                message:
+                  type: string
+                details:
+                  type: array
+                  items:
+                    type: string
+                  description: 403 → permission key còn thiếu; 401 → mảng rỗng.
