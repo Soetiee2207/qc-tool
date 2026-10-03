@@ -1,0 +1,106 @@
+"""Read-only diagnosis of whether a testcase can be attempted by the current runner.
+
+Validation is reported separately: incomplete steps can have useful execution gaps
+even though ``Step.validate()`` rejects their missing required arguments.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from .execute.runner import UI_VERBS
+from .testcase import ACTION_SPECS, TestCase, ValidationError
+
+
+@dataclass(frozen=True)
+class ExecutionGap:
+    code: str
+    message: str
+    step_seq: int | None = None
+
+
+@dataclass(frozen=True)
+class ExecutabilityReport:
+    executable: bool
+    gaps: tuple[ExecutionGap, ...]
+    validation_error: str | None = None
+
+
+# These are the concrete branches of runner._run_step. UI branches come from
+# UI_VERBS; ACTION_SPECS describes valid syntax, including verbs without adapters.
+_NON_UI_ADAPTERS = frozenset({
+    "http.request", "assert.http_status", "assert.json_schema",
+    "assert.json_field", "assert.response_time", "wait",
+})
+_RESPONSE_ASSERTIONS = frozenset({
+    "assert.http_status", "assert.json_schema", "assert.json_field",
+    "assert.response_time",
+})
+
+
+def analyze_executability(case: TestCase) -> ExecutabilityReport:
+    """Inspect one case without changing it or touching its execution environment.
+
+    ``validation_error`` preserves the model's own invalid-case decision. A
+    structurally valid unmapped/manual case instead has gaps with no validation
+    error. Runtime availability (URL, credentials, network, page elements) cannot
+    be established from a TestCase alone.
+    """
+    try:
+        case.validate()
+    except ValidationError as exc:
+        validation_error = str(exc)
+    else:
+        validation_error = None
+
+    gaps: list[ExecutionGap] = []
+    if case.execution == "manual":
+        gaps.append(ExecutionGap("MANUAL_EXECUTION", "Case is marked for manual execution."))
+    if case.requires:
+        gaps.append(ExecutionGap("MISSING_PRECONDITION", f"Requires setup: {case.requires}"))
+
+    saved_responses: set[str] = set()
+    executable_assertion = False
+    for step in case.steps:
+        action, args = step.action, step.args
+        if action not in ACTION_SPECS:
+            gaps.append(ExecutionGap("INVALID_ACTION", f"Unknown action: {action}", step.seq))
+            continue
+        if action in case.UNMAPPED_ACTIONS:
+            gaps.append(ExecutionGap("UNMAPPED_ACTION", f"Action is not mapped: {action}", step.seq))
+            continue
+
+        before = len(gaps)
+        for name in ACTION_SPECS[action].required:
+            if name not in args or args[name] in (None, ""):
+                if name == "target" and action in UI_VERBS:
+                    code, message = "MISSING_LOCATOR", "Missing UI locator: target"
+                elif action == "http.request" and name == "method":
+                    code, message = "MISSING_HTTP_METHOD", "Missing HTTP method"
+                elif action == "http.request" and name == "path":
+                    code, message = "MISSING_HTTP_PATH", "Missing HTTP path"
+                elif action == "ui.goto" and name == "url":
+                    code, message = "MISSING_URL", "Missing navigation URL"
+                else:
+                    code, message = "MISSING_ARGUMENT", f"Missing {action} argument: {name}"
+                gaps.append(ExecutionGap(code, message, step.seq))
+
+        if action not in UI_VERBS and action not in _NON_UI_ADAPTERS:
+            gaps.append(ExecutionGap("UNSUPPORTED_ACTION", f"No runner adapter for {action}", step.seq))
+
+        if action in _RESPONSE_ASSERTIONS:
+            source = args.get("source", "res")
+            if source not in saved_responses:
+                gaps.append(ExecutionGap(
+                    "MISSING_RESPONSE", f"No preceding HTTP response saved as {source!r}", step.seq
+                ))
+
+        if action == "http.request" and len(gaps) == before:
+            saved_responses.add(args.get("save_as", "res"))
+        if action.startswith("assert.") and action != "assert.screenshot" and len(gaps) == before:
+            executable_assertion = True
+
+    if not executable_assertion:
+        gaps.append(ExecutionGap("MISSING_ASSERTION", "No executable assertion in testcase."))
+
+    return ExecutabilityReport(not gaps and validation_error is None, tuple(gaps), validation_error)
