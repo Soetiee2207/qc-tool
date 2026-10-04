@@ -20,6 +20,7 @@ MAX_TEXT = 40
 MAX_FORMS = 10
 MAX_NETWORK = 40
 MAX_STRING = 160
+SESSION_MODES = frozenset({"anonymous", "authenticated"})
 
 
 def _redact(value: str) -> str:
@@ -49,7 +50,7 @@ def _safe_url(value: str) -> str:
 
 def _origin(url: str) -> tuple[str, str, int | None]:
     parts = urlsplit(url)
-    port = parts.port or {"http": 80, "https": 443}.get(parts.scheme)
+    port = parts.port if parts.port is not None else {"http": 80, "https": 443}.get(parts.scheme)
     return parts.scheme.lower(), (parts.hostname or "").lower(), port
 
 
@@ -69,6 +70,28 @@ class ExplorationRequest:
 class ExplorationIssue:
     code: str
     message: str
+
+
+def validate_exploration_request(
+    request: ExplorationRequest, *, base_url: str,
+    timeout_ms: int = 10000, render_wait_ms: int = 2000,
+) -> tuple[str | None, tuple[ExplorationIssue, ...]]:
+    """Resolve a target and check syntax/session/origin without browser or filesystem access."""
+    try:
+        target = urljoin(base_url.rstrip("/") + "/", request.target)
+        if (request.session not in SESSION_MODES
+                or not request.target or not 1 <= timeout_ms <= 30000
+                or not 0 <= render_wait_ms <= 10000
+                or urlsplit(base_url).scheme not in {"http", "https"}
+                or not urlsplit(base_url).hostname
+                or urlsplit(target).scheme not in {"http", "https"}
+                or urlsplit(target).username or urlsplit(target).password):
+            raise ValueError("Invalid exploration request")
+        if _origin(target) != _origin(base_url):
+            return None, (ExplorationIssue("OUT_OF_SCOPE_TARGET", "Target belongs to another origin."),)
+    except (ValueError, TypeError):
+        return None, (ExplorationIssue("INVALID_REQUEST", "Invalid target, session, or timeout."),)
+    return target, ()
 
 
 @dataclass(frozen=True)
@@ -200,21 +223,11 @@ def explore_page(
         return ExplorationResult(safe_request, final_url, page_map, forms, tuple(network),
                                  tuple(issues), observed_at, redirect_url, tuple(sorted(truncated)))
 
-    try:
-        target = urljoin(base_url.rstrip("/") + "/", request.target)
-        if (request.session not in {"anonymous", "authenticated"}
-                or not request.target or not 1 <= timeout_ms <= 30000
-                or not 0 <= render_wait_ms <= 10000
-                or urlsplit(base_url).scheme not in {"http", "https"}
-                or not urlsplit(base_url).hostname
-                or urlsplit(target).scheme not in {"http", "https"}
-                or urlsplit(target).username or urlsplit(target).password):
-            raise ValueError("Invalid exploration request")
-        if _origin(target) != _origin(base_url):
-            issues.append(ExplorationIssue("OUT_OF_SCOPE_TARGET", "Target belongs to another origin."))
-            return result()
-    except (ValueError, TypeError):
-        issues.append(ExplorationIssue("INVALID_REQUEST", "Invalid target, session, or timeout."))
+    target, request_issues = validate_exploration_request(
+        request, base_url=base_url, timeout_ms=timeout_ms, render_wait_ms=render_wait_ms,
+    )
+    if request_issues:
+        issues.extend(request_issues)
         return result()
 
     if request.session == "authenticated" and (storage_state is None or not Path(storage_state).is_file()):
