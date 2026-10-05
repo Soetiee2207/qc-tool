@@ -167,3 +167,79 @@ def test_parser_does_not_claim_action_or_evidence_is_validated():
     change["proposed"] = {"action": "browser.submit_form", "args": {"target": "invented"}}
     proposal = parse_resolution_proposal(_response(changes=[change]))
     assert proposal.changes[0].action == "browser.submit_form"
+
+
+@pytest.mark.parametrize("source,ref", [
+    ("ui-map", {"url": "https://salonhub-soe.vercel.app/login"}),
+    ("ui-map", {"test_id": "login-submit-btn"}),
+    ("ui-map", {"page": "/login", "session": "anonymous"}),
+    ("ui-map", {"page": "/login", "url": "/login"}),
+    ("testcase-step", {"seq": 2}),
+    ("testcase-step", {"seq": 1, "text": "Phiên anonymous ở /login"}),
+    ("requirement", {"quote": "URL vẫn ở /login"}),
+    ("testcase-step", {"step_seq": "2"}),
+    ("testcase-step", {"step_seq": True}),
+    ("openapi", {"method": "POST"}),
+])
+def test_salonhub_malformed_evidence_is_rejected_without_correction(source, ref):
+    change = _change()
+    change["evidence"] = [{"source": source, "ref": ref}]
+    before = json.dumps(change)
+    with pytest.raises(LLMResponseError, match="ref"):
+        parse_resolution_proposal(_response(changes=[change]))
+    assert json.dumps(change) == before
+
+
+def test_salonhub_duplicate_step_changes_are_not_merged():
+    first = _change()
+    second = {**_change(), "proposed": {"action": "ui.session", "args": {"mode": "anonymous"}}}
+    with pytest.raises(LLMResponseError, match="duplicates"):
+        parse_resolution_proposal(_response(changes=[first, second]))
+
+
+@pytest.mark.parametrize("source,ref", [
+    ("requirement", {"id": "FR-LOGIN-001"}),
+    ("openapi", {"operation_id": "login"}),
+    ("openapi", {"method": "POST", "path": "/api/auth/login"}),
+    ("openapi", {"operation_id": "login", "method": "POST", "path": "/api/auth/login"}),
+    ("ui-map", {"page": "https://portal.test/login"}),
+    ("ui-map", {"page": "https://portal.test/login", "role": "button", "name": "Login"}),
+    ("testcase-step", {"step_seq": 2}),
+    ("testcase-step", {"step_seq": 2, "action": "perform.unmapped"}),
+])
+def test_exact_validator_reference_shapes_parse(source, ref):
+    change = _change()
+    change["evidence"] = [{"source": source, "ref": ref}]
+    parsed = parse_resolution_proposal(_response(changes=[change]))
+    assert parsed.changes[0].evidence[0].ref == ref
+
+
+def test_prompt_catalog_has_only_selected_identifiers_and_exact_schema():
+    context = _context(_case())
+    before = context.to_dict()
+    prompt = build_resolution_prompt(context)
+    catalog = json.loads(prompt.split(
+        "EVIDENCE REFERENCES — identifiers present in this context only\n", 1
+    )[1].split("\n\n", 1)[0])
+    assert {"source": "ui-map", "ref": {
+        "page": "https://portal.test/login", "test_id": "btn-login", "role": "button", "name": "Login",
+    }} in catalog
+    assert {"source": "testcase-step", "ref": {"step_seq": 2, "action": "perform.unmapped"}} in catalog
+    assert {"source": "requirement", "ref": {"id": "FR-LOGIN-001"}} in catalog
+    assert not any(item["source"] == "openapi" for item in catalog)
+    assert "At most one change per step_seq" in prompt
+    assert "use step_seq, never seq" in prompt
+    assert "Use page, never url" in prompt
+    assert "leave the gap unresolved; do not guess evidence" in prompt
+    assert context.to_dict() == before
+
+
+def test_structurally_correct_fabricated_reference_still_requires_validator():
+    from qctool.proposal_validation import validate_resolution_proposal
+
+    change = _change()
+    change["evidence"] = [{"source": "requirement", "ref": {"id": "INVENTED"}}]
+    proposal = parse_resolution_proposal(_response(changes=[change]))
+    result = validate_resolution_proposal(proposal, _context(_case()), _case())
+    assert not result.valid_changes
+    assert any(issue.code == "FABRICATED_EVIDENCE" for issue in result.issues)

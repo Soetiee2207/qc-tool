@@ -90,8 +90,7 @@ _OUTPUT_SHAPE = {
         "gap_codes": ["<listed gap code>"],
         "proposed": {"action": "<allowed action>", "args": {}},
         "reason": "<evidence-based reason>",
-        "evidence": [{"source": "<requirement|openapi|ui-map|testcase-step>",
-                      "ref": {"<identifier field>": "<identifier value>"}}],
+        "evidence": [],
     }],
     "unresolved": [{
         "code": "<listed gap code>", "step_seq": "<step sequence or null>",
@@ -100,9 +99,54 @@ _OUTPUT_SHAPE = {
 }
 
 
+def _evidence_catalog(data: dict) -> list[dict]:
+    """Expose identifiers from the selected packet only; no evidence retrieval."""
+    references: list[dict] = []
+
+    def add(source: str, ref: dict) -> None:
+        item = {"source": source, "ref": ref}
+        if item not in references:
+            references.append(item)
+
+    for item in data["specification"].get("requirements", []):
+        if item.get("id"):
+            add("requirement", {"id": item["id"]})
+    for item in data["interface_contract"].get("api_operations", []):
+        ref = {key: item[key] for key in ("operation_id", "method", "path")
+               if item.get(key)}
+        if "operation_id" in ref or {"method", "path"} <= ref.keys():
+            add("openapi", ref)
+    for page in data["observations"].get("ui_pages", []):
+        if not page.get("url"):
+            continue
+        add("ui-map", {"page": page["url"]})
+        for element in page.get("elements", []):
+            locator = {key: element[key] for key in ("test_id", "role", "name")
+                       if element.get(key)}
+            if locator:
+                add("ui-map", {"page": page["url"], **locator})
+    for step in data["testcase"].get("steps", []):
+        add("testcase-step", {"step_seq": step["seq"], "action": step["action"]})
+    return references
+
+
+_EVIDENCE_SCHEMA = {
+    "requirement": {"required": ["id"], "optional": [], "types": {"id": "nonempty string"}},
+    "openapi": {"required": "operation_id OR both method and path",
+                "optional": ["operation_id", "method", "path"], "types": "nonempty strings"},
+    "ui-map": {"required": ["page"], "optional": ["test_id", "role", "name"],
+               "types": "nonempty strings; page is the exact context page URL"},
+    "testcase-step": {"required": ["step_seq"], "optional": ["action"],
+                      "types": {"step_seq": "positive integer", "action": "nonempty string"}},
+}
+
+
 def build_resolution_prompt(context: ResolutionContext) -> str:
     """Build stable model input from only the already selected context packet."""
     data = context.to_dict()
+    catalog = _evidence_catalog(data)
+    output_shape = json.loads(json.dumps(_OUTPUT_SHAPE))
+    output_shape["changes"][0]["evidence"] = catalog[:1]
 
     def section(name: str, value: object) -> str:
         return f"{name}\n{json.dumps(value, ensure_ascii=False, sort_keys=True)}"
@@ -123,6 +167,20 @@ def build_resolution_prompt(context: ResolutionContext) -> str:
         section("EXECUTION GAPS", data["gaps"]),
         section("ALLOWED ACTIONS — ACTION_SPECS", data["allowed_actions"]),
         section("CONSTRAINTS", data["constraints"]),
+        section("EVIDENCE REFERENCE SCHEMA — exact ref field names, no additional fields", _EVIDENCE_SCHEMA),
+        section("EVIDENCE REFERENCES — identifiers present in this context only", catalog),
+        "Each evidence entry is exactly {\"source\": <source>, \"ref\": <object>}. "
+        "Copy references from EVIDENCE REFERENCES. Use page, never url, in UI refs; "
+        "use step_seq, never seq, in step refs. UI element refs require page. "
+        "Do not include session, text, quote, or other extra reference fields. "
+        "At most one change per step_seq. A change replaces one step with one action, "
+        "not a sequence. Do not split a step into duplicate changes. Preserve the entire "
+        "original step meaning: if it needs multiple actions or assertions that cannot "
+        "be expressed by one replacement, leave it unresolved. Do not drop credential "
+        "entry, API status, toast, or other required outcomes to make a repair appear complete. "
+        "Copy unresolved (code, step_seq) pairs exactly from EXECUTION GAPS; use null "
+        "for case-level gaps. Missing credentials/test data must remain unresolved. "
+        "If no reference supports a repair, leave the gap unresolved; do not guess evidence.",
         "Return one JSON object only, without Markdown or prose outside JSON. "
         "Each change needs step_seq, from_action, gap_codes, proposed action/args, "
         "reason, and evidence references. Evidence source is requirement, openapi, "
@@ -131,7 +189,7 @@ def build_resolution_prompt(context: ResolutionContext) -> str:
         "Angle-bracket strings in the shape are placeholders, not evidence. "
         "Do not propose perform.unmapped or assert.unmapped as a repair. "
         "An empty changes list is valid when nothing can be grounded.",
-        section("OUTPUT JSON SHAPE", _OUTPUT_SHAPE),
+        section("OUTPUT JSON SHAPE", output_shape),
     ])
 
 
@@ -161,10 +219,15 @@ def parse_resolution_proposal(response: str) -> ResolutionProposal:
         raise LLMResponseError("Proposal must contain a change or unresolved gap")
 
     changes: list[ProposedChange] = []
+    seen_steps: set[int] = set()
     for index, item in enumerate(changes_raw):
         where = f"changes[{index}]"
         _fields(item, {"step_seq", "from_action", "gap_codes", "proposed", "reason", "evidence"},
                 where)
+        seq = _positive_int(item["step_seq"], f"{where}.step_seq")
+        if seq in seen_steps:
+            raise LLMResponseError(f"{where}.step_seq duplicates an earlier change")
+        seen_steps.add(seq)
         proposed = item["proposed"]
         _fields(proposed, {"action", "args"}, f"{where}.proposed")
         if not isinstance(proposed["args"], dict) or not all(
@@ -183,11 +246,7 @@ def parse_resolution_proposal(response: str) -> ResolutionProposal:
             if source not in {"requirement", "openapi", "ui-map", "testcase-step"}:
                 raise LLMResponseError(f"{label}.source is unknown")
             fields = ref["ref"]
-            if (not isinstance(fields, dict) or not fields
-                    or not all(isinstance(key, str) and key
-                               and type(value) in (str, int) and value != ""
-                               for key, value in fields.items())):
-                raise LLMResponseError(f"{label}.ref must contain scalar identifiers")
+            _evidence_fields(source, fields, f"{label}.ref")
             evidence.append(EvidenceReference(source, fields))
         changes.append(ProposedChange(
             step_seq=_positive_int(item["step_seq"], f"{where}.step_seq"),
@@ -209,6 +268,31 @@ def parse_resolution_proposal(response: str) -> ResolutionProposal:
             reason=_nonempty(item["reason"], f"{where}.reason"),
         ))
     return ResolutionProposal(testcase_id, tuple(changes), tuple(unresolved))
+
+
+def _evidence_fields(source: str, fields: object, where: str) -> None:
+    """Check reference structure, never whether the referenced evidence is trusted."""
+    if not isinstance(fields, dict) or not fields:
+        raise LLMResponseError(f"{where} must be a nonempty object")
+    keys = set(fields)
+    if source == "requirement":
+        _fields(fields, {"id"}, where)
+    elif source == "openapi":
+        if not keys <= {"operation_id", "method", "path"} or not (
+            "operation_id" in keys or {"method", "path"} <= keys
+        ):
+            raise LLMResponseError(f"{where} requires operation_id or method and path; no extra fields")
+    elif source == "ui-map":
+        if "page" not in keys or not keys <= {"page", "test_id", "role", "name"}:
+            raise LLMResponseError(f"{where} requires page; optional test_id, role, name only")
+    elif source == "testcase-step":
+        if "step_seq" not in keys or not keys <= {"step_seq", "action"}:
+            raise LLMResponseError(f"{where} requires step_seq; optional action only")
+    for key, value in fields.items():
+        if source == "testcase-step" and key == "step_seq":
+            _positive_int(value, f"{where}.step_seq")
+        else:
+            _nonempty(value, f"{where}.{key}")
 
 
 def _unique_keys(pairs: list[tuple[str, object]]) -> dict:
