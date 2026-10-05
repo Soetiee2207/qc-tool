@@ -171,6 +171,35 @@ Có OAS thì tool sinh thẳng case chạy được: giá trị biên, mã lỗi
 
 ---
 
+## LLM tùy chọn cho generation
+
+Mặc định không gọi model. Adapter dùng endpoint Chat Completions tương thích
+OpenAI (`<base URL>/chat/completions`), cùng một model cho resolution và exploration
+planning. Chỉ hỗ trợ provider/model nhận `response_format: json_object`.
+
+Điền `.env` (gitignored) hoặc export biến môi trường:
+
+```bash
+export QCTOOL_LLM_BASE_URL=https://api.openai.com/v1
+export QCTOOL_LLM_MODEL='your-model-id'
+# QCTOOL_LLM_API_KEY đặt qua .env hoặc secret manager, không commit vào repo.
+export QCTOOL_LLM_TIMEOUT_SECONDS=30
+uv run qctool all --config qctool.yaml --llm
+```
+
+`--llm` bật tường minh; `--no-llm` tắt kể cả khi config/env đã bật. Cũng có thể đặt
+`llm.enabled: true` trong YAML, hoặc `QCTOOL_LLM_ENABLED=true` trong env khi YAML
+không ghi `llm.enabled`. Chỉ có API key/model không đủ để tự bật LLM.
+Python caller có thể dùng `PipelineConfig(llm_enabled=True, ...)`, hoặc truyền
+adapter qua `run_pipeline(..., resolution_llm=..., exploration_llm=...)`.
+
+Provider không retry request. Timeout, lỗi HTTP và JSON sai/rỗng được báo có kiểm
+soát, không ghi API key/provider body vào lỗi. Proposal/plan vẫn phải qua parser,
+validator và applier hiện có; model không được sửa testcase trực tiếp. Chỉ phần
+context đã chọn được gửi đi. Xem `generation.json` để biết case unresolved/lỗi
+stage; pipeline hoàn tất không có nghĩa coverage đã hoàn tất. Replay offline
+không đọc/tạo provider này, kể cả khi env bật LLM.
+
 ## Giới hạn hiện tại
 
 | Chưa có | Ảnh hưởng |
@@ -198,4 +227,3 @@ Có OAS thì tool sinh thẳng case chạy được: giá trị biên, mã lỗi
 | Báo cáo có mục "Test chập chờn" | Đọc Mục 6 và 7: trace + ảnh nằm trong `evidence/`, mở bằng `playwright show-trace` |
 | Tool tự đăng nhập dù không muốn | Đặt `auth.mode: manual` trong `qc.yaml` — chế độ này không bao giờ tự đăng nhập |
 | Đăng nhập hỏng nhưng vẫn muốn chạy case UI khác | Cứ chạy: case cần xác thực báo `Bị chặn`, case còn lại vẫn chạy |
-

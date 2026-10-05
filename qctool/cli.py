@@ -312,11 +312,15 @@ def cmd_all(args: argparse.Namespace) -> int:
             bearer_token=args.token or env.bearer_token,
             skip_run=args.skip_run,
             headless=not args.show_browser,
+            llm_enabled=config._flag("QCTOOL_LLM_ENABLED", False),
         )
         _apply_ui_flags(cfg, args)
         if not cfg.docs_dir and not cfg.openapi:
             print("LỖI  Cần --config, hoặc --docs-dir / --openapi", file=sys.stderr)
             return 2
+
+    if getattr(args, "llm", None) is not None:
+        cfg.llm_enabled = args.llm
 
     def on_progress(stage: str, message: str) -> None:
         print(f"  [{stage:<9}] {message}")
@@ -430,6 +434,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_all = sub.add_parser("all", help="Chạy cả pipeline: tài liệu + spec → testcase → chạy → báo cáo")
     p_all.add_argument("--config", help="File cấu hình qctool.yaml (thay cho các tham số dưới)")
+    p_all.add_argument("--llm", action=argparse.BooleanOptionalAction, default=None,
+                       help="Bật/tắt provider LLM; model/key/base URL/timeout lấy từ QCTOOL_LLM_*")
     p_all.add_argument("--docs-dir", help="Thư mục chứa urd.md + srs.md")
     p_all.add_argument("--openapi", help="File OpenAPI spec")
     p_all.add_argument("--feature", help="Tên feature")

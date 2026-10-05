@@ -32,6 +32,9 @@ run:
 #
 # ĐỪNG ghi mật khẩu vào file này rồi commit. Dùng biến môi trường thay thế,
 # hoặc chạy qua giao diện web (bí mật không lưu lại).
+llm:
+  enabled: false  # bật khi đã điền QCTOOL_LLM_MODEL/API_KEY trong env; không ghi key vào YAML
+
 auth:
   mode: manual
   # token: "eyJhbGciOi…"

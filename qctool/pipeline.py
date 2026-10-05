@@ -25,6 +25,7 @@ from .coverage import analyze_coverage
 from .executability import analyze_executability
 from .llm_resolution import ResolutionLLM
 from .llm_exploration import ExplorationLLM
+from .llm_provider import load_llm_provider
 
 ProgressFn = Callable[[str, str], None]      # (bước, mô tả)
 
@@ -58,6 +59,7 @@ class PipelineConfig:
     headless: bool = True               # chạy trình duyệt ẩn
     out_dir: Path | None = None         # mặc định: artifacts/<feature>/
     created_by: str = "qc-tool"
+    llm_enabled: bool = False          # chỉ bật tường minh; không suy từ credential
 
     # ── UI/UX test (Playwright) ────────────────────────────────────────────
     ui_retry: int = 0                   # số lần chạy lại case hỏng (tối đa 3)
@@ -82,11 +84,15 @@ class PipelineConfig:
         auth = data.get("auth", {}) or {}
         out = data.get("out", {}) or {}
         ui = data.get("ui", {}) or {}
+        llm = data.get("llm", {}) or {}
 
         # Tài khoản lấy từ `.env` nếu file cấu hình không ghi.
         # Nhờ vậy `qc.yaml` commit được mà không lộ bí mật, còn người dùng vẫn
         # chỉ cần chạy một lệnh.
         env = cfg_mod.load_config()
+        llm_enabled = llm.get("enabled", cfg_mod._flag("QCTOOL_LLM_ENABLED", False))
+        if type(llm_enabled) is not bool:
+            raise cfg_mod.ConfigError("llm.enabled must be a boolean.")
 
         username = auth.get("username") or env.username
         password = auth.get("password") or env.password
@@ -118,6 +124,7 @@ class PipelineConfig:
             headless=bool(out.get("headless", True)),
             out_dir=resolve(out.get("dir")),
             created_by=out.get("created_by") or "qc-tool",
+            llm_enabled=llm_enabled,
             ui_retry=max(0, min(int(ui.get("retry", 0) or 0), 3)),
             ui_evidence=str(ui.get("evidence", "on-fail") or "on-fail"),
             ui_trace=bool(ui.get("trace", False)),
@@ -198,6 +205,11 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
         result.log.append(message)
 
     try:
+        if cfg.llm_enabled and (resolution_llm is None or exploration_llm is None):
+            adapter = load_llm_provider()
+            resolution_llm = resolution_llm if resolution_llm is not None else adapter
+            exploration_llm = exploration_llm if exploration_llm is not None else adapter
+            log("LLM provider bật tường minh; proposal/plan vẫn qua deterministic validator")
         out_dir = cfg.out_dir or Path("artifacts") / cfg.feature
         result.out_dir = out_dir
         out_dir.mkdir(parents=True, exist_ok=True)
