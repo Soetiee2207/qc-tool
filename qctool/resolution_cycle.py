@@ -15,6 +15,7 @@ from .exploration_plan import ExplorationPlan, ExplorationPlanValidationResult, 
 from .generate.from_openapi import Endpoint
 from .llm_exploration import ExplorationLLM, propose_exploration
 from .llm_resolution import LLMResponseError, ResolutionLLM, ResolutionProposal, propose_resolution
+from .llm_provider import LLMProviderError
 from .proposal_validation import ProposalValidationResult, validate_resolution_proposal
 from .resolution_context import ResolutionContext, build_resolution_context
 from .resolve import ResolutionResult, resolve_deterministically
@@ -67,6 +68,11 @@ def _refresh_context(
     # without replacing previous states or changing specification expectations.
     for field, key in (("observations", "ui_pages"), ("interface_contract", "api_operations")):
         records = getattr(detached, field).setdefault(key, [])
+        unique = []
+        for record in records:
+            if record not in unique:
+                unique.append(record)
+        records[:] = unique
         for record in getattr(fresh, field)[key]:
             if record not in records:
                 records.append(record)
@@ -108,7 +114,16 @@ def run_resolution_cycle(
             value = deepcopy(operation())
         except Exception as exc:
             code = "LLM_RESPONSE_ERROR" if isinstance(exc, LLMResponseError) else "STAGE_FAILED"
-            issues.append(ResolutionCycleIssue(stage, code, f"{stage} failed; earlier progress retained."))
+            message = f"{stage} failed; earlier progress retained."
+            if isinstance(exc, LLMProviderError):
+                # Never serialize str(exc), transport URLs, headers or response body.
+                # Whitelist codes too: an arbitrary adapter may construct this error.
+                code = exc.code if exc.code in {
+                    "INVALID_PROMPT", "HTTP_ERROR", "TIMEOUT", "NETWORK_ERROR",
+                    "INVALID_RESPONSE", "EMPTY_RESPONSE", "INVALID_COMPLETION",
+                } else "LLM_PROVIDER_ERROR"
+                message = f"{stage}: {exc.safe_message} Earlier progress retained."
+            issues.append(ResolutionCycleIssue(stage, code, message))
             audit.append(ResolutionCycleStage(stage, "FAILED"))
             return False, None
         audit.append(ResolutionCycleStage(stage, getattr(value, "status", "COMPLETED")))

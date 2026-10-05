@@ -87,6 +87,10 @@ def test_failure_is_controlled_secret_free_and_not_retried(monkeypatch, failure,
     with pytest.raises(provider.LLMProviderError) as caught:
         client().complete("JSON")
     assert caught.value.code == code
+    assert KEY not in caught.value.safe_message
+    if isinstance(failure, HTTPError):
+        assert caught.value.http_status == failure.code
+        assert f"HTTP {failure.code}" in caught.value.safe_message
     assert KEY not in str(caught.value)
     assert KEY not in "".join(traceback.format_exception(caught.value))
     assert KEY not in repr(client())

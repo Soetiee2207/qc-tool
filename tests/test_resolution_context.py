@@ -1,9 +1,11 @@
 """Exact, bounded evidence for future resolution without repair."""
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import yaml
+import pytest
 
 from qctool.executability import analyze_executability
 from qctool.generate.loader import load_endpoints
@@ -73,6 +75,57 @@ def test_ui_evidence_is_scoped_to_explicit_login_route():
     assert [element["test_id"] for element in pages[0]["elements"]] == ["email", "btn-login"]
     assert pages[0]["evidence"]["type"] == "ui-map"
     assert "btn-delete" not in json.dumps(context.to_dict())
+
+
+def test_literal_references_in_logical_candidate_select_evidence_without_repair():
+    case = _case(
+        _step(1, "perform.unmapped", {"description": "Anonymous at /login; account supplied"}),
+        _step(2, "perform.unmapped", {"description": "Click Login"}),
+        _step(3, "assert.unmapped", {"expected": "POST /projects returns 201; URL /login"}),
+    )
+    ui = _ui_map()
+    ui.pages.append(deepcopy(ui.pages[0]))
+    saved = deepcopy((case, ui))
+    context = build_resolution_context(case, analyze_executability(case).gaps,
+                                       ui_map=ui, endpoints=_endpoints())
+    assert [p["url"] for p in context.observations["ui_pages"]] == ["https://portal.test/login"]
+    assert [(op["method"], op["path"]) for op in context.interface_contract["api_operations"]] == [
+        ("POST", "/projects")]
+    assert (case, ui) == saved
+    assert all(s.action in case.UNMAPPED_ACTIONS for s in case.steps)
+
+
+@pytest.mark.parametrize("reference", [
+    "/login-extra", "/login/subpage", "/login?next=/admin", "/login$", "/login.*",
+    "https://foreign.test/login", "login", "sign in",
+])
+def test_literal_reference_selection_does_not_guess_routes(reference):
+    case = _case(_step(1, "perform.unmapped", {"description": f"Inspect {reference}"}))
+    assert build_resolution_context(case, (), ui_map=_ui_map()).observations["ui_pages"] == []
+
+
+def test_conflicting_duplicate_page_states_remain_ambiguous():
+    ui = _ui_map()
+    changed = deepcopy(ui.pages[0])
+    changed.elements[0].name = "Different email control"
+    ui.pages.append(changed)
+    case = _case(_step(1, "perform.unmapped", {"description": "Inspect /login"}))
+    assert build_resolution_context(case, (), ui_map=ui).observations["ui_pages"] == []
+
+
+def test_api_identifiers_must_be_adjacent_in_the_same_field():
+    case = _case(_step(1, "perform.unmapped", {"description": "POST"}),
+                 _step(2, "assert.unmapped", {"expected": "/projects"}))
+    assert build_resolution_context(case, (), endpoints=_endpoints()).interface_contract["api_operations"] == []
+
+
+def test_negative_literal_reference_only_selects_observation_not_expectation():
+    case = _case(_step(1, "assert.unmapped", {"expected": "URL not /login"}))
+    before = case.to_dict()
+    context = build_resolution_context(case, (), ui_map=_ui_map())
+    assert context.observations["ui_pages"][0]["url"].endswith("/login")
+    assert context.testcase["steps"][0]["args"]["expected"] == "URL not /login"
+    assert case.to_dict() == before
 
 
 def test_unique_locator_scopes_ui_without_a_route():

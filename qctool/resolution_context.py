@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Iterable, Sequence
 from urllib.parse import urlsplit
 
@@ -154,12 +154,29 @@ def _ui_pages(case: TestCase, ui_map: UIMap) -> list[dict]:
                 if isinstance(value := step.args.get(key), str) and value.strip():
                     locator_hints.add(value.strip())
 
+    # Evidence selection only: literal path/URL tokens are identifiers, not
+    # inferred actions or expectations. Never convert prose into executable steps.
+    route_hints.extend(token for tokens in _reference_tokens(case) for token in tokens
+                       if _route(token) and any(
+                           page.url == token if token.startswith(("http://", "https://"))
+                           else _route(page.url) == _route(token) for page in ui_map.pages))
+
+    # Crawling anonymous and default sessions can repeat the exact same snapshot.
+    # Distinct states at the same URL remain ambiguous; do not pick one arbitrarily.
+    unique_pages = []
+    snapshots = set()
+    for page in ui_map.pages:
+        snapshot = json.dumps(asdict(page), sort_keys=True, ensure_ascii=False)
+        if snapshot not in snapshots:
+            snapshots.add(snapshot)
+            unique_pages.append(page)
+
     pages: list = []
     for hint in dict.fromkeys(route_hints):
         if hint.startswith(("http://", "https://")):
-            matches = [page for page in ui_map.pages if page.url == hint]
+            matches = [page for page in unique_pages if page.url == hint]
         else:
-            matches = [page for page in ui_map.pages if _route(page.url) == _route(hint)]
+            matches = [page for page in unique_pages if _route(page.url) == _route(hint)]
         if len(matches) == 1 and all(page is not matches[0] for page in pages):
             pages.append(matches[0])
 
@@ -167,7 +184,7 @@ def _ui_pages(case: TestCase, ui_map: UIMap) -> list[dict]:
     # Explicit routes take precedence so a shared label cannot pull in another page.
     if not route_hints:
         for hint in sorted(locator_hints):
-            matches = [page for page in ui_map.pages for element in page.elements
+            matches = [page for page in unique_pages for element in page.elements
                        if hint in {element.id, element.test_id}
                        or _norm(hint) == _norm(element.name) and bool(_norm(hint))]
             if len(matches) == 1 and all(page is not matches[0] for page in pages):
@@ -194,6 +211,23 @@ def _ui_pages(case: TestCase, ui_map: UIMap) -> list[dict]:
 _HTTP_NOTE = re.compile(r"^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(/\S+)$", re.I)
 
 
+def _reference_tokens(case: TestCase) -> list[list[str]]:
+    """Exact whitespace-delimited identifiers in existing logical case fields.
+
+    Strip only surrounding quotes and clause separators. Retain query, fragment,
+    path suffixes, regex characters and case: /login-other never becomes /login.
+    Credentials/test_data and unrelated requirements are not retrieval signals.
+    """
+    texts = list(case.preconditions)
+    for step in case.steps:
+        texts.append(step.note)
+        if step.action in case.UNMAPPED_ACTIONS:
+            texts.extend(step.args.get(key, "") for key in (
+                "description", "expected", "expectation"))
+    return [[token.strip("`\"';,") for token in text.split()]
+            for text in texts if isinstance(text, str)]
+
+
 def _api_operations(case: TestCase, endpoints: Sequence[Endpoint]) -> list[dict]:
     op_id = None
     if case.source_ref.startswith("openapi:"):
@@ -217,6 +251,10 @@ def _api_operations(case: TestCase, endpoints: Sequence[Endpoint]) -> list[dict]
     if not http_steps:
         for step in case.steps:
             if match := _HTTP_NOTE.fullmatch(step.note.strip()):
+                references.append((match.group(1).upper(), match.group(2), None))
+    for tokens in _reference_tokens(case):
+        for method, path in zip(tokens, tokens[1:]):
+            if match := _HTTP_NOTE.fullmatch(f"{method} {path}"):
                 references.append((match.group(1).upper(), match.group(2), None))
 
     matched = [ep for ep in endpoints if any(

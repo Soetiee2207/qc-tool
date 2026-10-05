@@ -25,9 +25,26 @@ class LLMConfigurationError(ConfigError):
 
 
 class LLMProviderError(RuntimeError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, http_status: int | None = None):
         self.code = code
+        self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
         super().__init__(f"{code}: {message}")
+
+    @property
+    def safe_message(self) -> str:
+        """Audit only controlled diagnostics, never arbitrary exception text/body."""
+        messages = {
+            "INVALID_PROMPT": "Completion requires a nonempty prompt.",
+            "HTTP_ERROR": "Provider HTTP request failed; body omitted.",
+            "TIMEOUT": "Provider request timed out.",
+            "NETWORK_ERROR": "Provider transport failed; underlying text omitted.",
+            "INVALID_RESPONSE": "Malformed, oversized, refused or incomplete provider response; body omitted.",
+            "EMPTY_RESPONSE": "Provider returned no completion text.",
+            "INVALID_COMPLETION": "Completion must be a JSON object; content omitted.",
+        }
+        if self.code == "HTTP_ERROR" and self.http_status is not None:
+            return f"Provider returned HTTP {self.http_status}; body omitted."
+        return messages.get(self.code, "Provider failed; details omitted.")
 
 
 class _NoRedirect(request.HTTPRedirectHandler):
@@ -82,7 +99,8 @@ class OpenAICompatibleLLM:
         except error.HTTPError as exc:
             status = f" HTTP {exc.code}" if type(exc.code) is int else ""
             exc.close()
-            raise LLMProviderError("HTTP_ERROR", f"Provider returned{status}; body omitted.") from None
+            raise LLMProviderError("HTTP_ERROR", f"Provider returned{status}; body omitted.",
+                                   http_status=exc.code) from None
         except (TimeoutError, error.URLError) as exc:
             timeout = isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError)
             raise LLMProviderError("TIMEOUT" if timeout else "NETWORK_ERROR",

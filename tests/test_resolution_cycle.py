@@ -191,6 +191,34 @@ def test_malformed_llm_can_still_collect_evidence(monkeypatch):
     assert result.needs_another_cycle
 
 
+@pytest.mark.parametrize("code,status,diagnostic", [
+    ("TIMEOUT", None, "timed out"), ("HTTP_ERROR", 401, "HTTP 401"),
+    ("INVALID_COMPLETION", None, "JSON object"),
+    ("PRIVATE_SECRET", None, "details omitted"),
+])
+def test_provider_root_error_is_persisted_without_untrusted_error_text(code, status, diagnostic):
+    from qctool.llm_provider import LLMProviderError
+    from qctool.generation import _serializable
+    case, context, _ = _inputs()
+    adapter = FakeLLM(LLMProviderError(code, "api_key=PRIVATE Bearer PRIVATE", http_status=status))
+    result = cycle.run_resolution_cycle(case, context, resolution_llm=adapter)
+    issue = next(i for i in result.issues if i.stage == "resolution_llm")
+    assert issue.code == (code if code != "PRIVATE_SECRET" else "LLM_PROVIDER_ERROR")
+    assert diagnostic in issue.message
+    assert "PRIVATE" not in json.dumps(_serializable(result))
+    assert result.case == case
+
+
+def test_refresh_deduplicates_only_identical_selected_evidence():
+    from copy import deepcopy
+    case, context, _ = _inputs()
+    context.observations["ui_pages"].append(deepcopy(context.observations["ui_pages"][0]))
+    result = cycle.run_resolution_cycle(case, context, resolution_llm=FakeLLM(_proposal()))
+    assert result.after.executable
+    assert len(result.context.observations["ui_pages"]) == 1
+    assert len(context.observations["ui_pages"]) == 2
+
+
 def test_failure_after_llm_application_retains_llm_repairs(monkeypatch):
     case, context, _ = _inputs(extra_step=True)
     def fail(*a, **kw):

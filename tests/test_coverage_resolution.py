@@ -65,6 +65,33 @@ class MustNotCall:
         pytest.fail("No exploration is needed after a fully executable repair")
 
 
+def test_candidate_evidence_and_safe_provider_failure_survive_real_coverage_stack():
+    from qctool.generate.loader import load_endpoints
+    from qctool.llm_provider import LLMProviderError
+    from pathlib import Path
+    requirements = [{"id": "AC-LOGIN", "kind": "acceptance_criterion",
+                     "given": "Anonymous at /login; existing account supplied",
+                     "when": "Click Login", "then": "POST /projects returns 201"}]
+    source = analyze_coverage(requirements, [])
+    saved = deepcopy(source)
+    endpoints = load_endpoints(Path("samples/openapi/task-manager-sample.yaml"))[0]
+    class FailedProvider:
+        def complete(self, prompt):
+            assert BASE + "/login" in prompt
+            assert '"operation_id": "createProject"' in prompt
+            raise LLMProviderError("TIMEOUT", "PRIVATE transport payload")
+    result = coverage_pass.run_coverage_resolution_pass(source, requirements=requirements,
+        ui_map=ui_map(), endpoints=endpoints, resolution_llm=FailedProvider(), base_url=BASE)
+    assert source == saved
+    record = result.case_results[0]
+    context = record.resolution.cycles[0].context
+    assert len(context.observations["ui_pages"]) == 1
+    assert len(context.interface_contract["api_operations"]) == 1
+    assert record.case.steps == result.plan.cases[0].steps
+    assert any(issue.code == "TIMEOUT" and "timed out" in issue.message for issue in result.issues)
+    assert "PRIVATE" not in repr(result.issues)
+
+
 def test_real_loop_resolves_logical_case_and_accepts_only_executable():
     adapter = RepairLLM()
     result = coverage_pass.run_coverage_resolution_pass(
