@@ -11,13 +11,14 @@ import json
 import re
 from collections import Counter
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urlsplit
 
 from .executability import ExecutabilityReport, analyze_executability
 from .generate.mapper import RE_CLICK, RE_HTTP, RE_OPEN_PATH
-from .llm_resolution import EvidenceReference, ProposedChange, ResolutionProposal, UnresolvedGap
+from .llm_resolution import AtomicProposal, EvidenceReference, ProposedChange, ResolutionProposal, UnresolvedGap
 from .resolution_context import ResolutionContext
+from .step_expansion import candidate_with_changes, expected_expansion
 from .testcase import ACTION_SPECS, Step, TestCase, ValidationError
 from .ui.crawl import _norm
 
@@ -67,6 +68,7 @@ def validate_resolution_proposal(
     fingerprint = _case_fingerprint(case)
     issues: list[ValidationIssue] = []
     working = deepcopy(case)
+    origins = {step.seq: step.seq for step in case.steps}
 
     if proposal.testcase_id != case.id or proposal.testcase_id != context.testcase.get("id"):
         issues.append(ValidationIssue("TESTCASE_MISMATCH", "Proposal and context must name this testcase."))
@@ -90,7 +92,7 @@ def validate_resolution_proposal(
         def fail(code: str, message: str) -> None:
             failures.append(ValidationIssue(code, message, index, change.step_seq))
 
-        matches = [step for step in working.steps if step.seq == change.step_seq]
+        matches = [step for step in case.steps if step.seq == change.step_seq]
         if len(matches) != 1:
             fail("STEP_NOT_FOUND", "Step sequence must identify exactly one current step.")
         elif change_counts[change.step_seq] != 1:
@@ -107,6 +109,33 @@ def validate_resolution_proposal(
                 for code in change.gap_codes
             ):
                 fail("NO_MATCHING_GAP", "Change must address listed gaps on this step.")
+
+            if change.expansion:
+                if not failures:
+                    error = _validate_expansion(step, change, context, working, origins)
+                    if error:
+                        fail(error, "Expansion must ground and preserve every source clause in order.")
+                if not failures:
+                    candidate, new_origins = candidate_with_changes(case, [*valid, change])
+                    before = _origin_gaps(analyze_executability(working), origins)
+                    after = analyze_executability(candidate)
+                    after_counts = _origin_gaps(after, new_origins)
+                    new = after_counts - before
+                    if new:
+                        code = "UNSUPPORTED_ACTION" if any(code == "UNSUPPORTED_ACTION" for code, _ in new) else "NEW_EXECUTION_GAP"
+                        fail(code, "Expansion introduces new execution blockers.")
+                    elif after.validation_error is not None and original.validation_error is None:
+                        fail("NEW_VALIDATION_ERROR", "Expanded candidate failed model validation.")
+                    elif not after_counts[("UNMAPPED_ACTION", step.seq)] < before[("UNMAPPED_ACTION", step.seq)]:
+                        fail("NO_EXECUTABILITY_PROGRESS", "Expansion removes no source-step gap.")
+                    else:
+                        working, origins = candidate, new_origins
+                if failures:
+                    rejected.append(RejectedChange(change, tuple(failures)))
+                    issues.extend(failures)
+                else:
+                    valid.append(change)
+                continue
 
             if change.action not in ACTION_SPECS:
                 fail("UNKNOWN_ACTION", "Proposed action is outside ACTION_SPECS.")
@@ -135,11 +164,8 @@ def validate_resolution_proposal(
                     fail("INVALID_ARGUMENTS", f"Step validation rejected proposed arguments: {exc}")
 
             if not failures:
-                probe = deepcopy(working)
-                target = next(item for item in probe.steps if item.seq == step.seq)
-                target.action = change.action
-                target.args = deepcopy(change.args)
-                if any(gap.code == "UNSUPPORTED_ACTION" and gap.step_seq == step.seq
+                probe, probe_origins = candidate_with_changes(case, [*valid, change])
+                if any(gap.code == "UNSUPPORTED_ACTION" and probe_origins.get(gap.step_seq) == step.seq
                        for gap in analyze_executability(probe).gaps):
                     fail("UNSUPPORTED_ACTION", "ACTION_SPECS contains this verb but the runner has no adapter.")
 
@@ -157,12 +183,11 @@ def validate_resolution_proposal(
 
             if not failures:
                 before = analyze_executability(working)
-                candidate = deepcopy(working)
-                target = next(item for item in candidate.steps if item.seq == step.seq)
-                target.action = change.action
-                target.args = deepcopy(change.args)
+                candidate, candidate_origins = candidate_with_changes(case, [*valid, change])
                 after = analyze_executability(candidate)
-                new = _gap_counts(after) - _gap_counts(before)
+                before_counts = _origin_gaps(before, origins)
+                after_counts = _origin_gaps(after, candidate_origins)
+                new = after_counts - before_counts
                 if "UNSUPPORTED_ACTION" in {code for code, _ in new}:
                     fail("UNSUPPORTED_ACTION", "ACTION_SPECS contains this verb but the runner has no adapter.")
                 elif new:
@@ -170,14 +195,14 @@ def validate_resolution_proposal(
                 elif before.validation_error is None and after.validation_error is not None:
                     fail("NEW_VALIDATION_ERROR", f"Candidate becomes invalid: {after.validation_error}")
                 elif not any(
-                    _gap_counts(after)[key] < _gap_counts(before)[key]
+                    after_counts[key] < before_counts[key]
                     for code in change.gap_codes
                     for key in ((code, step.seq), (code, None))
-                    if _gap_counts(before)[key]
+                    if before_counts[key]
                 ):
                     fail("NO_EXECUTABILITY_PROGRESS", "Candidate removes none of its claimed gaps.")
                 else:
-                    working = candidate
+                    working, origins = candidate, candidate_origins
 
         if failures:
             rejected.append(RejectedChange(change, tuple(failures)))
@@ -185,7 +210,7 @@ def validate_resolution_proposal(
         else:
             valid.append(change)
 
-    remaining_gaps = _gap_counts(analyze_executability(working))
+    remaining_gaps = _origin_gaps(analyze_executability(working), origins)
     unresolved: list[UnresolvedGap] = []
     for item in proposal.unresolved:
         key = _gap_key(item.code, item.step_seq)
@@ -202,6 +227,99 @@ def validate_resolution_proposal(
         original, analyze_executability(working), case.id, fingerprint,
         _changes_fingerprint(valid),
     )
+
+
+def _origin_gaps(report: ExecutabilityReport, origins: dict[int, int]) -> Counter:
+    return Counter((gap.code, origins.get(gap.step_seq, gap.step_seq)) for gap in report.gaps)
+
+
+def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionContext,
+                        working: TestCase, origins: dict[int, int]) -> str | None:
+    if step.action not in TestCase.UNMAPPED_ACTIONS:
+        return "EXPANSION_NOT_ALLOWED"
+    if (not isinstance(change.expansion, (tuple, list))
+            or not all(isinstance(atom, AtomicProposal) and isinstance(atom.args, dict)
+                       for atom in change.expansion)
+            or change.action or change.args or not 2 <= len(change.expansion) <= 8):
+        return "INVALID_EXPANSION"
+    if _resolve_references(change.evidence, context) is None:
+        return "FABRICATED_EVIDENCE"
+    expected = expected_expansion(step, context.testcase.get("test_data", {}))
+    if expected is None or len(expected) != len(change.expansion):
+        return "EXPANSION_SEMANTICS_UNPROVEN"
+    for atom, meaning in zip(change.expansion, expected):
+        if atom.action not in ACTION_SPECS:
+            return "UNKNOWN_ACTION"
+        if atom.action != meaning["action"]:
+            return "EXPANSION_SEMANTICS_UNPROVEN"
+        try:
+            Step(step.seq, step.kind, atom.action, atom.args).validate()
+        except (ValidationError, TypeError, ValueError, AttributeError):
+            return "INVALID_ARGUMENTS"
+        refs = _resolve_references(atom.evidence, context)
+        if refs is None:
+            return "FABRICATED_EVIDENCE"
+        single = replace(change, action=atom.action, args=atom.args,
+                         evidence=atom.evidence, expansion=())
+        if error := _ground_action(single, refs, context):
+            return error
+        required = dict(meaning.get("args", {}))
+        if "hint" in meaning:
+            element = next((element for source, _, element in refs
+                            if source == "ui-map" and element is not None
+                            and atom.args.get("target") in {element.get("test_id"), element.get("id")}), None)
+            if not element:
+                return "UI_EVIDENCE_NOT_FOUND"
+            hint = meaning["hint"]
+            def matches_hint(item: dict) -> bool:
+                name = item.get("name", "")
+                if (atom.action == "ui.fill" and item.get("role") != "textbox"
+                        and not item.get("input_type")):
+                    return False
+                if atom.action == "ui.fill" and hint in {"email", "password"}:
+                    return (item.get("input_type") == hint or
+                            hint == "email" and "email" in _norm(name).split())
+                return _norm(hint) == _norm(name)
+            matches = [item for page in context.observations.get("ui_pages", [])
+                       for item in page.get("elements", []) if matches_hint(item)]
+            if len(matches) != 1 or matches[0] is not element:
+                return "EXPANSION_SEMANTICS_UNPROVEN"
+            required["target"] = atom.args.get("target")
+        if "value" in meaning:
+            required["value"] = meaning["value"]
+        if "operation" in meaning:
+            method, path = meaning["operation"]
+            operations = [item for source, item, _ in refs if source == "openapi"]
+            if not any(item.get("method") == method and item.get("path") == path
+                       and (atom.action != "assert.http_status" or
+                            str(required["expected"]) in item.get("response_codes", []))
+                       for item in operations):
+                return "API_EVIDENCE_NOT_FOUND"
+            source_name = atom.args.get("source", "res")
+            requests = [item for item in working.steps
+                        if origins[item.seq] < step.seq and item.action == "http.request"
+                        and item.args.get("save_as", "res") == source_name]
+            if not requests or (requests[-1].args.get("method", "").upper(), requests[-1].args.get("path")) != (method, path):
+                return "MISSING_RESPONSE"
+            if "source" in atom.args:
+                required["source"] = source_name
+        if "route" in meaning:
+            if any((match := re.fullmatch(r"\s*URL not\s+(/\S*)\s*", text, re.I))
+                   and match[1] == meaning["route"] for text in _expectation_texts(step, context)):
+                return "SPECIFICATION_CONFLICT"
+            if not any(source == "ui-map" and _same_route(meaning["route"], page["url"])
+                       for source, page, _ in refs):
+                return "UI_EVIDENCE_NOT_FOUND"
+        if "by_name" in atom.args and "hint" in meaning:
+            required["by_name"] = atom.args["by_name"]  # already checked against cited UI element
+        if atom.args != required:
+            return "EXPANSION_SEMANTICS_UNPROVEN"
+        if atom.action in {"assert.visible", "assert.not_visible"}:
+            prefix = "visible " if atom.action == "assert.visible" else "not visible "
+            probe = Step(step.seq, step.kind, "assert.unmapped", {"expected": prefix + meaning["hint"]})
+            if error := _check_semantics(probe, single, refs, context):
+                return error
+    return None
 
 
 def _case_fingerprint(case: TestCase) -> str:

@@ -14,6 +14,7 @@ from .llm_resolution import ProposedChange
 from .proposal_validation import (
     ProposalValidationResult, _case_fingerprint, _changes_fingerprint,
 )
+from .step_expansion import candidate_with_changes
 from .testcase import TestCase, ValidationError
 
 
@@ -34,7 +35,9 @@ class AppliedChange:
         return {
             "step_seq": self.change.step_seq,
             "before": {"action": self.change.from_action, "args": deepcopy(self.before_args)},
-            "after": {"action": self.change.action, "args": deepcopy(self.change.args)},
+            "after": ({"steps": [atom.to_dict() for atom in self.change.expansion]}
+                      if self.change.expansion else
+                      {"action": self.change.action, "args": deepcopy(self.change.args)}),
             "reason": self.change.reason,
             "evidence": [evidence.to_dict() for evidence in self.change.evidence],
             "validated_by": self.validated_by,
@@ -90,8 +93,7 @@ def apply_validated_resolution(
     for change in validation_result.valid_changes:
         step = next(step for step in detached.steps if step.seq == change.step_seq)
         applied.append(AppliedChange(deepcopy(change), deepcopy(step.args)))
-        step.action = change.action
-        step.args = deepcopy(change.args)
+    detached, _ = candidate_with_changes(case, validation_result.valid_changes)
 
     try:
         detached.validate()

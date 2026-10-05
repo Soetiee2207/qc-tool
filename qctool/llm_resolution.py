@@ -33,6 +33,17 @@ class EvidenceReference:
 
 
 @dataclass(frozen=True)
+class AtomicProposal:
+    action: str
+    args: dict
+    evidence: tuple[EvidenceReference, ...]
+
+    def to_dict(self) -> dict:
+        return {"action": self.action, "args": dict(self.args),
+                "evidence": [ref.to_dict() for ref in self.evidence]}
+
+
+@dataclass(frozen=True)
 class ProposedChange:
     step_seq: int
     from_action: str
@@ -41,12 +52,14 @@ class ProposedChange:
     args: dict
     reason: str
     evidence: tuple[EvidenceReference, ...]
+    expansion: tuple[AtomicProposal, ...] = ()
 
     def to_dict(self) -> dict:
         return {
             "step_seq": self.step_seq, "from_action": self.from_action,
             "gap_codes": list(self.gap_codes),
-            "proposed": {"action": self.action, "args": dict(self.args)},
+            "proposed": ({"steps": [atom.to_dict() for atom in self.expansion]}
+                         if self.expansion else {"action": self.action, "args": dict(self.args)}),
             "reason": self.reason,
             "evidence": [item.to_dict() for item in self.evidence],
         }
@@ -174,9 +187,9 @@ def build_resolution_prompt(context: ResolutionContext) -> str:
         "use step_seq, never seq, in step refs. UI element refs require page. "
         "Do not include session, text, quote, or other extra reference fields. "
         "At most one change per step_seq. A change replaces one step with one action, "
-        "not a sequence. Do not split a step into duplicate changes. Preserve the entire "
+        "for a normal replacement. Do not split a step into duplicate changes. Preserve the entire "
         "original step meaning: if it needs multiple actions or assertions that cannot "
-        "be expressed by one replacement, leave it unresolved. Do not drop credential "
+        "be expressed by a validated ordered expansion, leave it unresolved. Do not drop credential "
         "entry, API status, toast, or other required outcomes to make a repair appear complete. "
         "Copy unresolved (code, step_seq) pairs exactly from EXECUTION GAPS; use null "
         "for case-level gaps. Missing credentials/test data must remain unresolved. "
@@ -189,6 +202,20 @@ def build_resolution_prompt(context: ResolutionContext) -> str:
         "Angle-bracket strings in the shape are placeholders, not evidence. "
         "Do not propose perform.unmapped or assert.unmapped as a repair. "
         "An empty changes list is valid when nothing can be grounded.",
+        "For unmapped steps ONLY, one change may instead propose an ordered expansion: "
+        '"proposed": {"steps": [{"action": "<allowed action>", "args": {}, '
+        '"evidence": [<copy actual reference objects>]}, ...]}. '
+        "Include 2–8 atoms. Never mix steps with action/args. Each atom needs its own evidence. "
+        "One expansion still counts as one change per original step_seq. List changes in source-step order. "
+        "Every source clause must be preserved in order; unknown clauses must remain unresolved. "
+        "Supported narrow forms: semicolon-separated fill/click actions, 'Nhập email và mật khẩu "
+        "đúng|sai|không trống; bấm <exact button name>', explicit URL outcomes, visible/not visible "
+        "controls, and documented HTTP status outcomes. Fill values must exist in test_data or be "
+        "explicit literals in source. For the Vietnamese email/password form use supplied email and "
+        "correct_password/wrong_password/non_empty_password respectively. Do not invent these values. "
+        "HTTP assertions require a preceding actual http.request; observed UI requests do not create "
+        "a saved runner response. Do not add a request solely to manufacture such a response. "
+        "Runtime UI evidence never establishes the expected business outcome.",
         section("OUTPUT JSON SHAPE", output_shape),
     ])
 
@@ -229,11 +256,24 @@ def parse_resolution_proposal(response: str) -> ResolutionProposal:
             raise LLMResponseError(f"{where}.step_seq duplicates an earlier change")
         seen_steps.add(seq)
         proposed = item["proposed"]
-        _fields(proposed, {"action", "args"}, f"{where}.proposed")
-        if not isinstance(proposed["args"], dict) or not all(
-            isinstance(key, str) for key in proposed["args"]
-        ):
-            raise LLMResponseError(f"{where}.proposed.args must be an object")
+        expansion: tuple[AtomicProposal, ...] = ()
+        if isinstance(proposed, dict) and "steps" in proposed:
+            _fields(proposed, {"steps"}, f"{where}.proposed")
+            atoms = _list(proposed["steps"], f"{where}.proposed.steps")
+            if not 2 <= len(atoms) <= 8:
+                raise LLMResponseError("Expansion must contain 2–8 atomic steps")
+            parsed_atoms = []
+            for i, atom in enumerate(atoms):
+                label = f"{where}.proposed.steps[{i}]"
+                _fields(atom, {"action", "args", "evidence"}, label)
+                _arguments(atom["args"], label)
+                parsed_atoms.append(AtomicProposal(
+                    _nonempty(atom["action"], label), atom["args"],
+                    _parse_references(atom["evidence"], label)))
+            expansion = tuple(parsed_atoms)
+        else:
+            _fields(proposed, {"action", "args"}, f"{where}.proposed")
+            _arguments(proposed["args"], where)
         codes = _list(item["gap_codes"], f"{where}.gap_codes")
         evidence_raw = _list(item["evidence"], f"{where}.evidence")
         if not codes or not evidence_raw:
@@ -252,9 +292,9 @@ def parse_resolution_proposal(response: str) -> ResolutionProposal:
             step_seq=_positive_int(item["step_seq"], f"{where}.step_seq"),
             from_action=_nonempty(item["from_action"], f"{where}.from_action"),
             gap_codes=tuple(_nonempty(code, f"{where}.gap_codes") for code in codes),
-            action=_nonempty(proposed["action"], f"{where}.proposed.action"),
-            args=proposed["args"], reason=_nonempty(item["reason"], f"{where}.reason"),
-            evidence=tuple(evidence),
+            action="" if expansion else _nonempty(proposed["action"], f"{where}.proposed.action"),
+            args={} if expansion else proposed["args"], reason=_nonempty(item["reason"], f"{where}.reason"),
+            evidence=tuple(evidence), expansion=expansion,
         ))
 
     unresolved: list[UnresolvedGap] = []
@@ -268,6 +308,26 @@ def parse_resolution_proposal(response: str) -> ResolutionProposal:
             reason=_nonempty(item["reason"], f"{where}.reason"),
         ))
     return ResolutionProposal(testcase_id, tuple(changes), tuple(unresolved))
+
+
+def _arguments(args: object, where: str) -> None:
+    if not isinstance(args, dict) or not all(isinstance(key, str) for key in args):
+        raise LLMResponseError(f"{where}.args must be an object")
+
+
+def _parse_references(raw: object, where: str) -> tuple[EvidenceReference, ...]:
+    items = _list(raw, f"{where}.evidence")
+    if not items:
+        raise LLMResponseError(f"{where} needs evidence")
+    result = []
+    for item in items:
+        _fields(item, {"source", "ref"}, where)
+        source = _nonempty(item["source"], f"{where}.source")
+        if source not in {"requirement", "openapi", "ui-map", "testcase-step"}:
+            raise LLMResponseError(f"{where}.source is unknown")
+        _evidence_fields(source, item["ref"], where)
+        result.append(EvidenceReference(source, item["ref"]))
+    return tuple(result)
 
 
 def _evidence_fields(source: str, fields: object, where: str) -> None:
