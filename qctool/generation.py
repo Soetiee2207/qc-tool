@@ -1,8 +1,8 @@
-"""Điều phối generation độc lập; không ghi file hoặc nối vào pipeline."""
+"""Điều phối generation; trả kết quả độc lập, caller quyết định ghi/chạy."""
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Iterable, Mapping
@@ -63,6 +63,27 @@ class GenerationResult:
     def accepted_generated_cases(self) -> tuple[TestCase, ...]:
         executable_ids = {case.id for case in self.executable_cases}
         return tuple(case for case in self.generated_cases if case.id in executable_ids)
+
+    def to_dict(self) -> dict:
+        """Serialize audits with native serializers, including explorer redaction."""
+        payload = {field.name: _serializable(getattr(self, field.name)) for field in fields(self)}
+        return {**payload, "success": self.success}
+
+
+def _serializable(value):
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Path):
+        return str(value)
+    if hasattr(value, "to_dict"):
+        return _serializable(value.to_dict())
+    if is_dataclass(value):
+        return {field.name: _serializable(getattr(value, field.name)) for field in fields(value)}
+    if isinstance(value, dict):
+        return {key: _serializable(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_serializable(item) for item in value]
+    return value
 
 
 def run_generation(

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import traceback
 import urllib.parse
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -19,6 +20,11 @@ import yaml
 
 from . import config as cfg_mod
 from . import execute, generate, ingest, render, report, validate
+from .generation import GenerationResult, GenerationStatus, run_generation
+from .coverage import analyze_coverage
+from .executability import analyze_executability
+from .llm_resolution import ResolutionLLM
+from .llm_exploration import ExplorationLLM
 
 ProgressFn = Callable[[str, str], None]      # (bước, mô tả)
 
@@ -164,6 +170,16 @@ class PipelineResult:
     run_result: object | None = None            # execute.RunResult
     error: str | None = None
     log: list[str] = field(default_factory=list)
+    generation_result: GenerationResult | None = None
+    generation_path: Path | None = None
+
+    @property
+    def generation_status(self) -> str | None:
+        return self.generation_result.status.value if self.generation_result is not None else None
+
+    @property
+    def generation_success(self) -> bool:
+        return self.generation_result is not None and self.generation_result.success
 
     @property
     def pass_rate(self) -> float:
@@ -171,7 +187,9 @@ class PipelineResult:
         return (self.counts.get("Pass", 0) / executed * 100) if executed else 0.0
 
 
-def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> PipelineResult:
+def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
+                 resolution_llm: ResolutionLLM | None = None,
+                 exploration_llm: ExplorationLLM | None = None) -> PipelineResult:
     """Chạy toàn bộ pipeline. Không bao giờ ném lỗi ra ngoài — trả về `error`."""
     notify = on_progress or _noop
     result = PipelineResult(feature=cfg.feature)
@@ -232,9 +250,35 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
         # Không truyền module mặc định: `generate_all` tự suy module theo từng
         # feature. Truyền cứng ở đây sẽ dồn 29 feature vào một module duy nhất và
         # làm ID testcase đụng nhau.
+        # Compatibility seeds retain existing API/NFR/flow generators and IDs.
+        # run_generation below owns final generation and executable coverage.
         cases, validation, meta = generate.generate_all(
             requirements_path, openapi_path, cfg.module,
         )
+        source_data = (yaml.safe_load(requirements_path.read_text(encoding="utf-8")) or {}
+                       if requirements_path else {})
+        endpoints = generate.load_endpoints(openapi_path)[0] if openapi_path else None
+        cases = deepcopy(cases)
+        # Legacy OAS seeds without x-qc-id have source_ref but no traces_to.
+        # Attach only a verified interface identity, never an invented requirement.
+        for case in cases:
+            if case.traces_to or not case.source_ref.startswith("openapi:"):
+                continue
+            operation = case.source_ref.removeprefix("openapi:").split("#", 1)[0]
+            requests = [step for step in case.steps if step.action == "http.request"]
+            matches = [endpoint for endpoint in endpoints or []
+                       if endpoint.operation_id == operation and requests
+                       and all(step.args.get("method") == endpoint.method
+                               and step.args.get("path") == endpoint.path for step in requests)]
+            if len(matches) == 1:
+                case.traces_to = [f"openapi:{operation}"]
+                log(f"  Trace interface OpenAPI: {case.id} → openapi:{operation}")
+        coverage_probe = analyze_coverage(
+            source_data.get("requirements", []),
+            [case for case in cases if analyze_executability(case).executable],
+            flows=source_data.get("flows"))
+        needs_ui_evidence = (any(c.needs_mapping for c in cases)
+                             or bool(coverage_probe.missing_obligations))
 
         # ── Chặng 2b: đăng nhập + map văn xuôi → hành động cụ thể ──────────
         # Cảnh báo từ lúc đọc spec (operation bị bỏ qua, spec trộn nhiều service…)
@@ -247,7 +291,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
         state_path = out_dir / ".auth-state.json"
         token_path = out_dir / ".token"
         ui_map = None
-        if cfg.web_url and (any(c.needs_mapping for c in cases) or not cfg.skip_run):
+        if cfg.web_url and (needs_ui_evidence or not cfg.skip_run):
             notify("crawl", f"Mở trình duyệt tới {cfg.web_url}…")
             # Đăng nhập chỉ khi người dùng CHỌN chế độ trình duyệt. `auth.mode:
             # manual` nghĩa là "không xác thực" — chỉ vì `.env` có sẵn tài khoản
@@ -297,7 +341,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
                         notify("crawl", "Đăng nhập không thành công — crawl không cần "
                                         "đăng nhập vẫn chạy tiếp")
             try:
-                if any(c.needs_mapping for c in cases):
+                if needs_ui_evidence:
                     from .ui import crawl as _crawl
 
                     doc_paths = _paths_from_docs(requirements_path)
@@ -360,6 +404,50 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
             if len(stats.reasons) > 8:
                 log(f"    · … và {len(stats.reasons) - 8} câu nữa")
 
+        # Reuse a cached map even when no fresh crawl is required or available.
+        # Only evidence from this application may ground new resolutions.
+        if ui_map is None and cfg.web_url and (out_dir / "ui-map.yaml").is_file():
+            try:
+                cached = _load_map(out_dir / "ui-map.yaml")
+                if cached.base_url.rstrip("/") == cfg.web_url.rstrip("/"):
+                    ui_map = cached
+            except Exception:
+                log("  ⚠ Không đọc được UI map đã lưu — generation không dùng bản đồ này")
+
+        notify("generate", "Phân tích coverage và giải quyết testcase còn thiếu…")
+        generation_result = run_generation(
+            source_data.get("requirements", []), existing_cases=cases,
+            flows=source_data.get("flows"), ui_map=ui_map, endpoints=endpoints,
+            base_url=cfg.web_url or _resolve_base_url(cfg, meta) or None,
+            storage_state=state_path if state_path.is_file() else None,
+            resolution_llm=resolution_llm, exploration_llm=exploration_llm,
+            module=cfg.module or "COV",
+        )
+        result.generation_result = generation_result
+        generation_path = out_dir / "generation.json"
+        generation_path.write_text(json.dumps(generation_result.to_dict(),
+                                             ensure_ascii=False, indent=2), encoding="utf-8")
+        result.generation_path = generation_path
+        summary = (f"Generation: {result.generation_status} · "
+                   f"{len(generation_result.executable_cases)} executable · "
+                   f"{len(generation_result.unresolved_cases)} unresolved")
+        notify("generate", summary)
+        log(summary)
+        if not generation_result.success:
+            log("  ⚠ Coverage executable chưa được xác nhận đầy đủ; xem generation.json")
+        for issue in generation_result.issues:
+            log(f"  ⚠ Generation {issue.code}: {issue.message}")
+
+        cases = list(deepcopy(generation_result.cases))
+        # Keep unresolved generated candidates in Excel/results for diagnosis,
+        # while the unchanged runner's manual gate prevents any execution.
+        pending_ids = {case.id for case in generation_result.generated_cases} - {
+            case.id for case in generation_result.accepted_generated_cases}
+        for case in cases:
+            if case.id in pending_ids:
+                case.execution = "manual"
+        validation = validate.validate_batch(cases, source_data.get("requirements", []),
+                                             sources=meta.get("coverage_sources"))
         result.total_cases = len(cases)
         result.generated_report = validation
 
@@ -393,6 +481,12 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
                 log(f"  chưa có test · {kind}: {shown}")
 
         # ── Chặng 3 + 4 ────────────────────────────────────────────────────
+        if (not validation.ok or generation_result.status in {
+                GenerationStatus.INVALID_TESTCASES, GenerationStatus.FAILED}):
+            result.error = f"Generation {result.generation_status}: xem generation.json"
+            log(f"LỖI: {result.error}")
+            notify("error", result.error)
+            return result
         if cfg.skip_run:
             notify("run", "Bỏ qua chạy test (skip_run = true)")
             log("Bỏ qua chạy test theo cấu hình")
