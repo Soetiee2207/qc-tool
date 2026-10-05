@@ -1,0 +1,28 @@
+# Contract hư cấu chỉ để ground replay; không gọi API thật.
+openapi: 3.0.3
+info: {title: Offline resolution benchmark, version: "1.0"}
+paths:
+  /api/health:
+    get:
+      operationId: getHealth
+      summary: Read health
+      responses:
+        "200": {description: Healthy}
+  /api/login:
+    post:
+      operationId: login
+      summary: Login
+      responses:
+        "200": {description: Accepted}
+        "401": {description: Invalid credentials}
+  /api/projects:
+    get:
+      operationId: listProjects
+      summary: Read projects
+      responses:
+        "200": {description: Project list}
+    post:
+      operationId: createProject
+      summary: Create project
+      responses:
+        "201": {description: Created}

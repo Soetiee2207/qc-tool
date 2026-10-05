@@ -1,0 +1,1751 @@
+# Benchmark hư cấu, replay offline hoàn toàn. Không truy cập URL trong file.
+benchmark:
+  name: resolution-failure-modes-v1
+  max_cycles: 3
+  note: Fictional offline replays derived from existing repository failure-mode tests. Expected unresolved
+    outcomes are safe abstentions, not executable successes.
+  expected_summary:
+    total_cases: 24
+    executable_before: 0
+    executable_after: 13
+    cases_regressed: 0
+    false_repairs: 0
+    unsafe_repairs: 0
+    rejected_proposed_changes: 6
+    replay_errors: 0
+  label_policy: Allowed snapshots for abstention cases mean preserving unresolved source semantics, not executable
+    repair. Two business assertions without a deterministic oracle are deliberately unlabelled.
+cases:
+- category: deterministic_ui
+  covers:
+  - missing_locator
+  - valid_deterministic_repair
+  references:
+  - tests/test_resolve.py::test_unique_ui_match_resolves_locator_and_records_evidence
+  expected:
+    executable: true
+    cycle_count: 1
+    stop_reason: EXECUTABLE
+    applied_repairs: 1
+    rejected_proposals: 0
+    issue_codes: []
+  case:
+    id: TC_BENCH_001
+    module: BENCH
+    title: Unique Sign in locator
+    objective: Click Sign in using the unique named control
+    traces_to:
+    - FR-BENCH-001
+    provenance:
+      source_quote: Click Sign in using the unique named control
+      source_ref: fixture:benchmark:1
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: when
+      action: ui.click
+      args:
+        by_name: Sign in
+    - seq: 3
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /dashboard
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-001
+    statement: Click Sign in using the unique named control
+  ground_truth:
+  - step_seq: 2
+    allowed:
+    - action: ui.click
+      args:
+        by_name: Sign in
+        target: btn-signin
+  resolution_responses: []
+  exploration_responses: []
+  explorations: []
+  ui_map: benchmark-ui-map.yaml
+- category: deterministic_ui
+  covers:
+  - missing_url
+  - valid_deterministic_repair
+  references:
+  - tests/test_resolve.py::test_explicit_crawled_route_resolves_missing_url
+  expected:
+    executable: true
+    cycle_count: 1
+    stop_reason: EXECUTABLE
+    applied_repairs: 1
+    rejected_proposals: 0
+    issue_codes: []
+  case:
+    id: TC_BENCH_002
+    module: BENCH
+    title: Explicit missing navigation URL
+    objective: Explicit missing navigation URL
+    traces_to:
+    - FR-BENCH-002
+    provenance:
+      source_quote: Explicit missing navigation URL
+      source_ref: fixture:benchmark:2
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args: {}
+      note: /login
+    - seq: 2
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /login
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-002
+    statement: Explicit missing navigation URL
+  ground_truth:
+  - step_seq: 1
+    allowed:
+    - action: ui.goto
+      args:
+        url: https://benchmark.test/login
+  resolution_responses: []
+  exploration_responses: []
+  explorations: []
+  ui_map: benchmark-ui-map.yaml
+- category: deterministic_ui
+  covers:
+  - missing_locator
+  - known_test_data
+  - valid_deterministic_repair
+  references:
+  - tests/test_proposal_validation.py::test_missing_locator_repair_cannot_rewrite_existing_fill_value
+  expected:
+    executable: true
+    cycle_count: 1
+    stop_reason: EXECUTABLE
+    applied_repairs: 1
+    rejected_proposals: 0
+    issue_codes: []
+  case:
+    id: TC_BENCH_003
+    module: BENCH
+    title: Fill Email without changing known value
+    objective: Fill Email without changing known value
+    traces_to:
+    - FR-BENCH-003
+    provenance:
+      source_quote: Fill Email without changing known value
+      source_ref: fixture:benchmark:3
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: when
+      action: ui.fill
+      args:
+        by_name: Email
+        value: qa@example.test
+    - seq: 3
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /dashboard
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-003
+    statement: Fill Email without changing known value
+  ground_truth:
+  - step_seq: 2
+    allowed:
+    - action: ui.fill
+      args:
+        by_name: Email
+        value: qa@example.test
+        target: email
+  resolution_responses: []
+  exploration_responses: []
+  explorations: []
+  ui_map: benchmark-ui-map.yaml
+- category: deterministic_http
+  covers:
+  - missing_http_method
+  - valid_deterministic_repair
+  references:
+  - tests/test_resolve.py::test_openapi_unique_path_resolves_missing_method
+  expected:
+    executable: true
+    cycle_count: 1
+    stop_reason: EXECUTABLE
+    applied_repairs: 1
+    rejected_proposals: 0
+    issue_codes: []
+  case:
+    id: TC_BENCH_004
+    module: BENCH
+    title: Unique documented method
+    objective: Unique documented method
+    traces_to:
+    - FR-BENCH-004
+    provenance:
+      source_quote: Unique documented method
+      source_ref: fixture:benchmark:4
+    steps:
+    - seq: 1
+      kind: when
+      action: http.request
+      args:
+        path: /api/health
+    - seq: 2
+      kind: then
+      action: assert.http_status
+      args:
+        expected: 200
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-004
+    statement: Unique documented method
+  ground_truth:
+  - step_seq: 1
+    allowed:
+    - action: http.request
+      args:
+        path: /api/health
+        method: GET
+  resolution_responses: []
+  exploration_responses: []
+  explorations: []
+  openapi: benchmark-openapi.yaml
+- category: deterministic_http
+  covers:
+  - missing_http_path
+  - valid_deterministic_repair
+  references:
+  - tests/test_resolve.py::test_openapi_source_ref_resolves_missing_path_without_guessing_method
+  expected:
+    executable: true
+    cycle_count: 1
+    stop_reason: EXECUTABLE
+    applied_repairs: 1
+    rejected_proposals: 0
+    issue_codes: []
+  case:
+    id: TC_BENCH_005
+    module: BENCH
+    title: Operation ID grounds missing path
+    objective: Operation ID grounds missing path
+    traces_to:
+    - FR-BENCH-005
+    provenance:
+      source_quote: Operation ID grounds missing path
+      source_ref: openapi:getHealth
+    steps:
+    - seq: 1
+      kind: when
+      action: http.request
+      args:
+        method: GET
+    - seq: 2
+      kind: then
+      action: assert.http_status
+      args:
+        expected: 200
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-005
+    statement: Operation ID grounds missing path
+  ground_truth:
+  - step_seq: 1
+    allowed:
+    - action: http.request
+      args:
+        method: GET
+        path: /api/health
+  resolution_responses: []
+  exploration_responses: []
+  explorations: []
+  openapi: benchmark-openapi.yaml
+- category: deterministic_http
+  covers:
+  - missing_http_method
+  - missing_http_path
+  - valid_deterministic_repair
+  references:
+  - tests/test_resolve.py::test_openapi_source_ref_resolves_missing_path_without_guessing_method
+  expected:
+    executable: true
+    cycle_count: 1
+    stop_reason: EXECUTABLE
+    applied_repairs: 1
+    rejected_proposals: 0
+    issue_codes: []
+  case:
+    id: TC_BENCH_006
+    module: BENCH
+    title: Operation ID grounds method and path
+    objective: Operation ID grounds method and path
+    traces_to:
+    - FR-BENCH-006
+    provenance:
+      source_quote: Operation ID grounds method and path
+      source_ref: openapi:getHealth
+    steps:
+    - seq: 1
+      kind: when
+      action: http.request
+      args: {}
+    - seq: 2
+      kind: then
+      action: assert.http_status
+      args:
+        expected: 200
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-006
+    statement: Operation ID grounds method and path
+  ground_truth:
+  - step_seq: 1
+    allowed:
+    - action: http.request
+      args:
+        method: GET
+        path: /api/health
+  resolution_responses: []
+  exploration_responses: []
+  explorations: []
+  openapi: benchmark-openapi.yaml
+- category: llm_repair
+  covers:
+  - perform.unmapped
+  - valid_llm_repair
+  references:
+  - tests/test_proposal_validation.py::test_valid_ui_proposal_is_grounded_and_makes_progress
+  expected:
+    executable: true
+    cycle_count: 1
+    stop_reason: EXECUTABLE
+    applied_repairs: 1
+    rejected_proposals: 0
+    issue_codes: []
+  case:
+    id: TC_BENCH_007
+    module: BENCH
+    title: Click Login from unresolved instruction
+    objective: Click Login from unresolved instruction
+    traces_to:
+    - FR-BENCH-007
+    provenance:
+      source_quote: Click Login from unresolved instruction
+      source_ref: fixture:benchmark:7
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: when
+      action: perform.unmapped
+      args:
+        description: Click Login
+    - seq: 3
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /dashboard
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-007
+    statement: Click Login from unresolved instruction
+  ground_truth:
+  - step_seq: 2
+    allowed:
+    - action: ui.click
+      args:
+        target: btn-login
+  resolution_responses:
+  - testcase_id: TC_BENCH_007
+    changes:
+    - step_seq: 2
+      from_action: perform.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: ui.click
+        args:
+          target: btn-login
+      reason: The original step explicitly identifies this action or expectation
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/login
+          test_id: btn-login
+    unresolved: []
+  exploration_responses: []
+  explorations: []
+  ui_map: benchmark-ui-map.yaml
+- category: llm_repair
+  covers:
+  - missing_locator
+  - valid_llm_repair
+  references:
+  - tests/test_proposal_validation.py::test_existing_click_needs_step_hint_to_choose_a_ui_element
+  expected:
+    executable: true
+    cycle_count: 1
+    stop_reason: EXECUTABLE
+    applied_repairs: 1
+    rejected_proposals: 0
+    issue_codes: []
+  case:
+    id: TC_BENCH_008
+    module: BENCH
+    title: Explicit note grounds missing click locator
+    objective: Explicit note grounds missing click locator
+    traces_to:
+    - FR-BENCH-008
+    provenance:
+      source_quote: Explicit note grounds missing click locator
+      source_ref: fixture:benchmark:8
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: when
+      action: ui.click
+      args: {}
+      note: Click Login
+    - seq: 3
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /dashboard
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-008
+    statement: Explicit note grounds missing click locator
+  ground_truth:
+  - step_seq: 2
+    allowed:
+    - action: ui.click
+      args:
+        target: btn-login
+  resolution_responses:
+  - testcase_id: TC_BENCH_008
+    changes:
+    - step_seq: 2
+      from_action: ui.click
+      gap_codes:
+      - MISSING_LOCATOR
+      proposed:
+        action: ui.click
+        args:
+          target: btn-login
+      reason: The original step explicitly identifies this action or expectation
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/login
+          test_id: btn-login
+    unresolved: []
+  exploration_responses: []
+  explorations: []
+  ui_map: benchmark-ui-map.yaml
+- category: llm_repair
+  covers:
+  - perform.unmapped
+  - assert.unmapped
+  - manual_auto
+  - valid_llm_repair
+  references:
+  - tests/test_apply_resolution.py::test_all_validated_repairs_can_safely_promote_manual_case
+  expected:
+    executable: true
+    cycle_count: 1
+    stop_reason: EXECUTABLE
+    applied_repairs: 2
+    rejected_proposals: 0
+    issue_codes: []
+    execution: auto
+  case:
+    id: TC_BENCH_009
+    module: BENCH
+    title: Fully mapped manual testcase becomes auto
+    objective: After clicking Login, Login hidden
+    traces_to:
+    - FR-BENCH-009
+    provenance:
+      source_quote: After clicking Login, Login hidden
+      source_ref: fixture:benchmark:9
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: when
+      action: perform.unmapped
+      args:
+        description: Click Login
+    - seq: 3
+      kind: then
+      action: assert.unmapped
+      args:
+        expected: Login hidden
+    execution: manual
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-009
+    statement: After clicking Login, Login hidden
+  ground_truth:
+  - step_seq: 2
+    allowed:
+    - action: ui.click
+      args:
+        target: btn-login
+  - step_seq: 3
+    allowed:
+    - action: assert.not_visible
+      args:
+        target: btn-login
+  resolution_responses:
+  - testcase_id: TC_BENCH_009
+    changes:
+    - step_seq: 2
+      from_action: perform.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: ui.click
+        args:
+          target: btn-login
+      reason: The original step explicitly identifies this action or expectation
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/login
+          test_id: btn-login
+    - step_seq: 3
+      from_action: assert.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: assert.not_visible
+        args:
+          target: btn-login
+      reason: The original step explicitly identifies this action or expectation
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/login
+          test_id: btn-login
+    unresolved: []
+  exploration_responses: []
+  explorations: []
+  ui_map: benchmark-ui-map.yaml
+- category: llm_repair
+  covers:
+  - perform.unmapped
+  - valid_llm_repair
+  - http_grounding
+  references:
+  - tests/test_proposal_validation.py::test_documented_http_operation_with_matching_source_step_is_valid
+  expected:
+    executable: true
+    cycle_count: 1
+    stop_reason: EXECUTABLE
+    applied_repairs: 1
+    rejected_proposals: 0
+    issue_codes: []
+  case:
+    id: TC_BENCH_010
+    module: BENCH
+    title: Explicit HTTP instruction maps to contract
+    objective: POST /api/login returns HTTP 200
+    traces_to:
+    - FR-BENCH-010
+    provenance:
+      source_quote: POST /api/login returns HTTP 200
+      source_ref: openapi:login
+    steps:
+    - seq: 1
+      kind: when
+      action: perform.unmapped
+      args:
+        description: POST /api/login
+      note: POST /api/login
+    - seq: 2
+      kind: then
+      action: assert.http_status
+      args:
+        expected: 200
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-010
+    statement: POST /api/login returns HTTP 200
+  ground_truth:
+  - step_seq: 1
+    allowed:
+    - action: http.request
+      args:
+        method: POST
+        path: /api/login
+  resolution_responses:
+  - testcase_id: TC_BENCH_010
+    changes:
+    - step_seq: 1
+      from_action: perform.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: http.request
+        args:
+          method: POST
+          path: /api/login
+      reason: The original step explicitly identifies this action or expectation
+      evidence:
+      - source: openapi
+        ref:
+          operation_id: login
+    unresolved: []
+  exploration_responses: []
+  explorations: []
+  openapi: benchmark-openapi.yaml
+- category: exploration
+  covers:
+  - perform.unmapped
+  - exploration_next_cycle
+  references:
+  - tests/test_resolution_loop.py::test_exploration_enables_second_cycle_repair_and_preserves_history
+  expected:
+    executable: true
+    cycle_count: 2
+    stop_reason: EXECUTABLE
+    applied_repairs: 1
+    rejected_proposals: 0
+    issue_codes: []
+  case:
+    id: TC_BENCH_011
+    module: BENCH
+    title: New Login control enables second-cycle repair
+    objective: New Login control enables second-cycle repair
+    traces_to:
+    - FR-BENCH-011
+    provenance:
+      source_quote: New Login control enables second-cycle repair
+      source_ref: fixture:benchmark:11
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: when
+      action: perform.unmapped
+      args:
+        description: Click Login
+    - seq: 3
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /dashboard
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-011
+    statement: New Login control enables second-cycle repair
+  ground_truth:
+  - step_seq: 2
+    allowed:
+    - action: ui.click
+      args:
+        target: btn-login
+  resolution_responses:
+  - testcase_id: TC_BENCH_011
+    changes: []
+    unresolved:
+    - code: UNMAPPED_ACTION
+      step_seq: 2
+      reason: Evidence cannot establish a unique safe resolution
+  - testcase_id: TC_BENCH_011
+    changes:
+    - step_seq: 2
+      from_action: perform.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: ui.click
+        args:
+          target: btn-login
+      reason: The original step explicitly identifies this action or expectation
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/login
+          test_id: btn-login
+    unresolved: []
+  exploration_responses:
+  - testcase_id: TC_BENCH_011
+    requests:
+    - target: /login
+      session: anonymous
+      purposes:
+      - gap_code: UNMAPPED_ACTION
+        step_seq: 2
+        intent: inspect_page
+        reason: Inspect the explicit testcase route only
+  explorations:
+  - request:
+      target: /login
+      session: anonymous
+    result:
+      request:
+        target: https://benchmark.test/login
+        session: anonymous
+      final_url: https://benchmark.test/login
+      page:
+        url: https://benchmark.test/login
+        title: Login
+        text:
+        - Login
+        elements:
+        - id: btn-login
+          test_id: btn-login
+          role: button
+          name: Login
+          tag: button
+      forms: []
+      network: []
+      issues: []
+      truncated: []
+      source:
+        type: playwright_exploration
+        page: https://benchmark.test/login
+        observed_at: '2026-10-05T09:01:00+07:00'
+- category: exploration
+  covers:
+  - assert.unmapped
+  - exploration_next_cycle
+  - assertion_safety
+  references:
+  - tests/test_proposal_validation.py::test_observed_delete_button_cannot_reverse_hidden_requirement
+  expected:
+    executable: true
+    cycle_count: 2
+    stop_reason: EXECUTABLE
+    applied_repairs: 1
+    rejected_proposals: 0
+    issue_codes: []
+  case:
+    id: TC_BENCH_012
+    module: BENCH
+    title: Observed Profile locator verifies explicit expectation
+    objective: Profile visible on /dashboard
+    traces_to:
+    - FR-BENCH-012
+    provenance:
+      source_quote: Profile visible on /dashboard
+      source_ref: fixture:benchmark:12
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /dashboard
+    - seq: 2
+      kind: then
+      action: assert.unmapped
+      args:
+        expected: Profile visible
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-012
+    statement: Profile visible on /dashboard
+  ground_truth:
+  - step_seq: 2
+    allowed:
+    - action: assert.visible
+      args:
+        target: btn-profile
+  resolution_responses:
+  - testcase_id: TC_BENCH_012
+    changes: []
+    unresolved:
+    - code: UNMAPPED_ACTION
+      step_seq: 2
+      reason: Evidence cannot establish a unique safe resolution
+  - testcase_id: TC_BENCH_012
+    changes:
+    - step_seq: 2
+      from_action: assert.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: assert.visible
+        args:
+          target: btn-profile
+      reason: The original step explicitly identifies this action or expectation
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/dashboard
+          test_id: btn-profile
+    unresolved: []
+  exploration_responses:
+  - testcase_id: TC_BENCH_012
+    requests:
+    - target: /dashboard
+      session: anonymous
+      purposes:
+      - gap_code: UNMAPPED_ACTION
+        step_seq: 2
+        intent: inspect_page
+        reason: Inspect the explicit testcase route only
+  explorations:
+  - request:
+      target: /dashboard
+      session: anonymous
+    result:
+      request:
+        target: https://benchmark.test/dashboard
+        session: anonymous
+      final_url: https://benchmark.test/dashboard
+      page:
+        url: https://benchmark.test/dashboard
+        title: Dashboard
+        text:
+        - Profile
+        elements:
+        - id: btn-profile
+          test_id: btn-profile
+          role: button
+          name: Profile
+          tag: button
+      forms: []
+      network: []
+      issues: []
+      truncated: []
+      source:
+        type: playwright_exploration
+        page: https://benchmark.test/dashboard
+        observed_at: '2026-10-05T09:02:00+07:00'
+- category: exploration
+  covers:
+  - perform.unmapped
+  - insufficient_evidence
+  - repeated_observation
+  - expected_unresolved
+  references:
+  - tests/test_resolution_loop.py::test_repeated_evidence_with_new_timestamp_is_not_progress
+  expected:
+    executable: false
+    cycle_count: 2
+    stop_reason: REPEATED_STATE
+    applied_repairs: 0
+    rejected_proposals: 0
+    issue_codes: []
+  case:
+    id: TC_BENCH_013
+    module: BENCH
+    title: Repeated Login observation cannot resolve Save
+    objective: Repeated Login observation cannot resolve Save
+    traces_to:
+    - FR-BENCH-013
+    provenance:
+      source_quote: Repeated Login observation cannot resolve Save
+      source_ref: fixture:benchmark:13
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: when
+      action: perform.unmapped
+      args:
+        description: Click Save
+    - seq: 3
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /dashboard
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-013
+    statement: Repeated Login observation cannot resolve Save
+  ground_truth:
+  - step_seq: 2
+    allowed:
+    - action: perform.unmapped
+      args:
+        description: Click Save
+    unsafe:
+    - action: ui.click
+      args:
+        target: btn-login
+  resolution_responses:
+  - testcase_id: TC_BENCH_013
+    changes: []
+    unresolved:
+    - code: UNMAPPED_ACTION
+      step_seq: 2
+      reason: No Save control is known
+  - testcase_id: TC_BENCH_013
+    changes: []
+    unresolved:
+    - code: UNMAPPED_ACTION
+      step_seq: 2
+      reason: Only Login was observed; Save is still unknown
+  exploration_responses:
+  - testcase_id: TC_BENCH_013
+    requests:
+    - target: /login
+      session: anonymous
+      purposes:
+      - gap_code: UNMAPPED_ACTION
+        step_seq: 2
+        intent: inspect_page
+        reason: Inspect the explicit testcase route only
+  - testcase_id: TC_BENCH_013
+    requests:
+    - target: /login
+      session: anonymous
+      purposes:
+      - gap_code: UNMAPPED_ACTION
+        step_seq: 2
+        intent: inspect_page
+        reason: Inspect the explicit testcase route only
+  explorations:
+  - request:
+      target: /login
+      session: anonymous
+    result:
+      request:
+        target: https://benchmark.test/login
+        session: anonymous
+      final_url: https://benchmark.test/login
+      page:
+        url: https://benchmark.test/login
+        title: Login
+        text:
+        - Login
+        elements:
+        - id: btn-login
+          test_id: btn-login
+          role: button
+          name: Login
+          tag: button
+      forms: []
+      network: []
+      issues: []
+      truncated: []
+      source:
+        type: playwright_exploration
+        page: https://benchmark.test/login
+        observed_at: '2026-10-05T09:03:00+07:00'
+  - request:
+      target: /login
+      session: anonymous
+    result:
+      request:
+        target: https://benchmark.test/login
+        session: anonymous
+      final_url: https://benchmark.test/login
+      page:
+        url: https://benchmark.test/login
+        title: Login
+        text:
+        - Login
+        elements:
+        - id: btn-login
+          test_id: btn-login
+          role: button
+          name: Login
+          tag: button
+      forms: []
+      network: []
+      issues: []
+      truncated: []
+      source:
+        type: playwright_exploration
+        page: https://benchmark.test/login
+        observed_at: '2026-10-05T09:04:00+07:00'
+- category: unresolved
+  covers:
+  - missing_precondition
+  - expected_unresolved
+  references:
+  - tests/test_apply_resolution.py::test_requires_precondition_prevents_manual_promotion_even_after_mapping
+  expected:
+    executable: false
+    cycle_count: 1
+    stop_reason: REPEATED_STATE
+    applied_repairs: 0
+    rejected_proposals: 0
+    issue_codes: []
+    preserve_requires: true
+  case:
+    id: TC_BENCH_014
+    module: BENCH
+    title: Missing restricted-role account remains blocked
+    objective: Normal user must not see Delete
+    traces_to:
+    - FR-BENCH-014
+    provenance:
+      source_quote: Normal user must not see Delete
+      source_ref: fixture:benchmark:14
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: then
+      action: assert.not_visible
+      args:
+        target: btn-delete
+    requires: Account without delete permission
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-014
+    statement: Normal user must not see Delete
+  ground_truth:
+  - step_seq: 2
+    allowed:
+    - action: assert.not_visible
+      args:
+        target: btn-delete
+  resolution_responses:
+  - testcase_id: TC_BENCH_014
+    changes: []
+    unresolved:
+    - code: MISSING_PRECONDITION
+      step_seq: null
+      reason: No trusted account or role setup is provided
+  exploration_responses:
+  - testcase_id: TC_BENCH_014
+    requests: []
+  explorations: []
+  ui_map: benchmark-ui-map.yaml
+- category: unresolved
+  covers:
+  - ambiguous_ui_controls
+  - missing_locator
+  - expected_unresolved
+  references:
+  - tests/test_resolve.py::test_ambiguous_ui_match_keeps_gap_and_makes_no_change
+  expected:
+    executable: false
+    cycle_count: 1
+    stop_reason: REPEATED_STATE
+    applied_repairs: 0
+    rejected_proposals: 0
+    issue_codes: []
+  case:
+    id: TC_BENCH_015
+    module: BENCH
+    title: Two equally named Login controls are ambiguous
+    objective: Two equally named Login controls are ambiguous
+    traces_to:
+    - FR-BENCH-015
+    provenance:
+      source_quote: Two equally named Login controls are ambiguous
+      source_ref: fixture:benchmark:15
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /ambiguous
+    - seq: 2
+      kind: when
+      action: ui.click
+      args:
+        by_name: Login
+    - seq: 3
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /dashboard
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-015
+    statement: Two equally named Login controls are ambiguous
+  ground_truth:
+  - step_seq: 2
+    allowed:
+    - action: ui.click
+      args:
+        by_name: Login
+    unsafe:
+    - action: ui.click
+      args:
+        by_name: Login
+        target: btn-login-primary
+    - action: ui.click
+      args:
+        by_name: Login
+        target: btn-login-secondary
+  resolution_responses:
+  - testcase_id: TC_BENCH_015
+    changes: []
+    unresolved:
+    - code: MISSING_LOCATOR
+      step_seq: 2
+      reason: Two Login buttons have equal evidence; choosing either would guess
+  exploration_responses:
+  - testcase_id: TC_BENCH_015
+    requests: []
+  explorations: []
+  ui_map: benchmark-ui-map.yaml
+- category: unresolved
+  covers:
+  - perform.unmapped
+  - insufficient_evidence
+  - expected_unresolved
+  references:
+  - tests/test_proposal_validation.py::test_honest_unresolved_only_answer_is_valid_abstention
+  expected:
+    executable: false
+    cycle_count: 1
+    stop_reason: REPEATED_STATE
+    applied_repairs: 0
+    rejected_proposals: 0
+    issue_codes: []
+    preserve_steps:
+    - 2
+    semantic_unknown: true
+  case:
+    id: TC_BENCH_016
+    module: BENCH
+    title: Provisioning meaning has no account data
+    objective: Provisioning meaning has no account data
+    traces_to:
+    - FR-BENCH-016
+    provenance:
+      source_quote: Provisioning meaning has no account data
+      source_ref: fixture:benchmark:16
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: when
+      action: perform.unmapped
+      args:
+        description: Prepare account permissions
+    - seq: 3
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /dashboard
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-016
+    statement: Provisioning meaning has no account data
+  ground_truth: []
+  resolution_responses:
+  - testcase_id: TC_BENCH_016
+    changes: []
+    unresolved:
+    - code: UNMAPPED_ACTION
+      step_seq: 2
+      reason: No account provisioning or permission evidence exists
+  exploration_responses:
+  - testcase_id: TC_BENCH_016
+    requests: []
+  explorations: []
+  ui_map: benchmark-ui-map.yaml
+- category: unresolved
+  covers:
+  - missing_http_method
+  - ambiguous_http_operation
+  - expected_unresolved
+  references:
+  - tests/test_resolve.py::test_openapi_ambiguous_path_does_not_choose_method
+  expected:
+    executable: false
+    cycle_count: 1
+    stop_reason: REPEATED_STATE
+    applied_repairs: 0
+    rejected_proposals: 0
+    issue_codes: []
+  case:
+    id: TC_BENCH_017
+    module: BENCH
+    title: Shared API path cannot determine HTTP method
+    objective: Shared API path cannot determine HTTP method
+    traces_to:
+    - FR-BENCH-017
+    provenance:
+      source_quote: Shared API path cannot determine HTTP method
+      source_ref: fixture:benchmark:17
+    steps:
+    - seq: 1
+      kind: when
+      action: http.request
+      args:
+        path: /api/projects
+    - seq: 2
+      kind: then
+      action: assert.http_status
+      args:
+        expected: 200
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-017
+    statement: Shared API path cannot determine HTTP method
+  ground_truth:
+  - step_seq: 1
+    allowed:
+    - action: http.request
+      args:
+        path: /api/projects
+    unsafe:
+    - action: http.request
+      args:
+        path: /api/projects
+        method: GET
+    - action: http.request
+      args:
+        path: /api/projects
+        method: POST
+  resolution_responses:
+  - testcase_id: TC_BENCH_017
+    changes: []
+    unresolved:
+    - code: MISSING_HTTP_METHOD
+      step_seq: 1
+      reason: Both GET and POST are documented; no operation identity chooses one
+  exploration_responses:
+  - testcase_id: TC_BENCH_017
+    requests: []
+  explorations: []
+  openapi: benchmark-openapi.yaml
+- category: fabricated
+  covers:
+  - perform.unmapped
+  - fabricated_locator
+  - expected_unresolved
+  references:
+  - tests/test_proposal_validation.py::test_fabricated_locator_is_rejected
+  expected:
+    executable: false
+    cycle_count: 1
+    stop_reason: REPEATED_STATE
+    applied_repairs: 0
+    rejected_proposals: 1
+    issue_codes:
+    - UI_EVIDENCE_NOT_FOUND
+  case:
+    id: TC_BENCH_018
+    module: BENCH
+    title: Invented login locator is rejected
+    objective: Invented login locator is rejected
+    traces_to:
+    - FR-BENCH-018
+    provenance:
+      source_quote: Invented login locator is rejected
+      source_ref: fixture:benchmark:18
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: when
+      action: perform.unmapped
+      args:
+        description: Click Login
+    - seq: 3
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /dashboard
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-018
+    statement: Invented login locator is rejected
+  ground_truth:
+  - step_seq: 2
+    allowed:
+    - action: perform.unmapped
+      args:
+        description: Click Login
+    unsafe:
+    - action: ui.click
+      args:
+        target: btn-does-not-exist
+  resolution_responses:
+  - testcase_id: TC_BENCH_018
+    changes:
+    - step_seq: 2
+      from_action: perform.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: ui.click
+        args:
+          target: btn-does-not-exist
+      reason: The original step explicitly identifies this action or expectation
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/login
+          test_id: btn-login
+    unresolved: []
+  exploration_responses:
+  - testcase_id: TC_BENCH_018
+    requests: []
+  explorations: []
+  ui_map: benchmark-ui-map.yaml
+- category: fabricated
+  covers:
+  - perform.unmapped
+  - fabricated_endpoint
+  - expected_unresolved
+  references:
+  - tests/test_proposal_validation.py::test_invented_api_endpoint_is_rejected
+  expected:
+    executable: false
+    cycle_count: 1
+    stop_reason: REPEATED_STATE
+    applied_repairs: 0
+    rejected_proposals: 1
+    issue_codes:
+    - API_EVIDENCE_NOT_FOUND
+  case:
+    id: TC_BENCH_019
+    module: BENCH
+    title: Invented API endpoint is rejected
+    objective: POST /api/login returns HTTP 200
+    traces_to:
+    - FR-BENCH-019
+    provenance:
+      source_quote: POST /api/login returns HTTP 200
+      source_ref: openapi:login
+    steps:
+    - seq: 1
+      kind: when
+      action: perform.unmapped
+      args:
+        description: POST /api/login
+      note: POST /api/login
+    - seq: 2
+      kind: then
+      action: assert.http_status
+      args:
+        expected: 200
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-019
+    statement: POST /api/login returns HTTP 200
+  ground_truth:
+  - step_seq: 1
+    allowed:
+    - action: perform.unmapped
+      args:
+        description: POST /api/login
+    unsafe:
+    - action: http.request
+      args:
+        method: POST
+        path: /api/admin/login
+  resolution_responses:
+  - testcase_id: TC_BENCH_019
+    changes:
+    - step_seq: 1
+      from_action: perform.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: http.request
+        args:
+          method: POST
+          path: /api/admin/login
+      reason: The original step explicitly identifies this action or expectation
+      evidence:
+      - source: openapi
+        ref:
+          operation_id: login
+    unresolved: []
+  exploration_responses:
+  - testcase_id: TC_BENCH_019
+    requests: []
+  explorations: []
+  openapi: benchmark-openapi.yaml
+- category: fabricated
+  covers:
+  - perform.unmapped
+  - fabricated_evidence
+  - expected_unresolved
+  references:
+  - tests/test_proposal_validation.py::test_fabricated_evidence_reference_is_rejected
+  expected:
+    executable: false
+    cycle_count: 1
+    stop_reason: REPEATED_STATE
+    applied_repairs: 0
+    rejected_proposals: 1
+    issue_codes:
+    - FABRICATED_EVIDENCE
+  case:
+    id: TC_BENCH_020
+    module: BENCH
+    title: Fabricated requirement evidence is rejected
+    objective: Fabricated requirement evidence is rejected
+    traces_to:
+    - FR-BENCH-020
+    provenance:
+      source_quote: Fabricated requirement evidence is rejected
+      source_ref: fixture:benchmark:20
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: when
+      action: perform.unmapped
+      args:
+        description: Click Login
+    - seq: 3
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /dashboard
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-020
+    statement: Fabricated requirement evidence is rejected
+  ground_truth:
+  - step_seq: 2
+    allowed:
+    - action: perform.unmapped
+      args:
+        description: Click Login
+  resolution_responses:
+  - testcase_id: TC_BENCH_020
+    changes:
+    - step_seq: 2
+      from_action: perform.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: ui.click
+        args:
+          target: btn-login
+      reason: The original step explicitly identifies this action or expectation
+      evidence:
+      - source: requirement
+        ref:
+          id: FR-NOT-IN-CONTEXT
+    unresolved: []
+  exploration_responses:
+  - testcase_id: TC_BENCH_020
+    requests: []
+  explorations: []
+  ui_map: benchmark-ui-map.yaml
+- category: assertion_safety
+  covers:
+  - assert.unmapped
+  - valid_llm_repair
+  - assertion_safety
+  references:
+  - tests/test_proposal_validation.py::test_observed_delete_button_cannot_reverse_hidden_requirement
+  expected:
+    executable: true
+    cycle_count: 1
+    stop_reason: EXECUTABLE
+    applied_repairs: 1
+    rejected_proposals: 0
+    issue_codes: []
+  case:
+    id: TC_BENCH_021
+    module: BENCH
+    title: Hidden Delete requirement maps to not-visible
+    objective: Normal user must not see Delete
+    traces_to:
+    - FR-BENCH-021
+    provenance:
+      source_quote: Normal user must not see Delete
+      source_ref: fixture:benchmark:21
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: then
+      action: assert.unmapped
+      args:
+        expected: Delete hidden
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-021
+    statement: Normal user must not see Delete
+  ground_truth:
+  - step_seq: 2
+    allowed:
+    - action: assert.not_visible
+      args:
+        target: btn-delete
+    unsafe:
+    - action: assert.visible
+      args:
+        target: btn-delete
+  resolution_responses:
+  - testcase_id: TC_BENCH_021
+    changes:
+    - step_seq: 2
+      from_action: assert.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: assert.not_visible
+        args:
+          target: btn-delete
+      reason: The original step explicitly identifies this action or expectation
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/login
+          test_id: btn-delete
+    unresolved: []
+  exploration_responses: []
+  explorations: []
+  ui_map: benchmark-ui-map.yaml
+- category: assertion_safety
+  covers:
+  - assert.unmapped
+  - assertion_safety
+  - expected_unresolved
+  references:
+  - tests/test_proposal_validation.py::test_observed_delete_button_cannot_reverse_hidden_requirement
+  expected:
+    executable: false
+    cycle_count: 1
+    stop_reason: REPEATED_STATE
+    applied_repairs: 0
+    rejected_proposals: 1
+    issue_codes:
+    - SPECIFICATION_CONFLICT
+  case:
+    id: TC_BENCH_022
+    module: BENCH
+    title: Current visible Delete cannot invert specification
+    objective: Normal user must not see Delete
+    traces_to:
+    - FR-BENCH-022
+    provenance:
+      source_quote: Normal user must not see Delete
+      source_ref: fixture:benchmark:22
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: then
+      action: assert.unmapped
+      args:
+        expected: Delete hidden
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-022
+    statement: Normal user must not see Delete
+  ground_truth:
+  - step_seq: 2
+    allowed:
+    - action: assert.unmapped
+      args:
+        expected: Delete hidden
+    unsafe:
+    - action: assert.visible
+      args:
+        target: btn-delete
+  resolution_responses:
+  - testcase_id: TC_BENCH_022
+    changes:
+    - step_seq: 2
+      from_action: assert.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: assert.visible
+        args:
+          target: btn-delete
+      reason: The original step explicitly identifies this action or expectation
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/login
+          test_id: btn-delete
+    unresolved: []
+  exploration_responses:
+  - testcase_id: TC_BENCH_022
+    requests: []
+  explorations: []
+  ui_map: benchmark-ui-map.yaml
+- category: assertion_safety
+  covers:
+  - assert.unmapped
+  - assertion_safety
+  - insufficient_evidence
+  - expected_unresolved
+  references:
+  - tests/test_proposal_validation.py::test_expected_result_without_explicit_semantics_stays_unresolved
+  expected:
+    executable: false
+    cycle_count: 1
+    stop_reason: REPEATED_STATE
+    applied_repairs: 0
+    rejected_proposals: 1
+    issue_codes:
+    - SEMANTICS_UNPROVEN
+    preserve_steps:
+    - 2
+    semantic_unknown: true
+  case:
+    id: TC_BENCH_023
+    module: BENCH
+    title: Observed Welcome does not prove Dashboard opens
+    objective: Dashboard opens
+    traces_to:
+    - FR-BENCH-023
+    provenance:
+      source_quote: Dashboard opens
+      source_ref: fixture:benchmark:23
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /dashboard
+    - seq: 2
+      kind: then
+      action: assert.unmapped
+      args:
+        expected: Dashboard opens
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-023
+    statement: Dashboard opens
+  ground_truth: []
+  resolution_responses:
+  - testcase_id: TC_BENCH_023
+    changes:
+    - step_seq: 2
+      from_action: assert.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: assert.visible
+        args:
+          target: btn-welcome
+      reason: The original step explicitly identifies this action or expectation
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/dashboard
+          test_id: btn-welcome
+    unresolved: []
+  exploration_responses:
+  - testcase_id: TC_BENCH_023
+    requests: []
+  explorations: []
+  ui_map: benchmark-ui-map.yaml
+- category: assertion_safety
+  covers:
+  - assert.unmapped
+  - assertion_safety
+  - http_expectation
+  - expected_unresolved
+  references:
+  - tests/test_proposal_validation.py::test_expected_result_without_explicit_semantics_stays_unresolved
+  expected:
+    executable: false
+    cycle_count: 1
+    stop_reason: REPEATED_STATE
+    applied_repairs: 0
+    rejected_proposals: 1
+    issue_codes:
+    - SEMANTICS_UNPROVEN
+  case:
+    id: TC_BENCH_024
+    module: BENCH
+    title: HTTP 401 expectation cannot become HTTP 200
+    objective: Invalid credentials must return HTTP 401
+    traces_to:
+    - FR-BENCH-024
+    provenance:
+      source_quote: Invalid credentials must return HTTP 401
+      source_ref: openapi:login
+    steps:
+    - seq: 1
+      kind: when
+      action: http.request
+      args:
+        method: POST
+        path: /api/login
+    - seq: 2
+      kind: then
+      action: assert.unmapped
+      args:
+        expected: HTTP 401
+  base_url: https://benchmark.test
+  requirements:
+  - id: FR-BENCH-024
+    statement: Invalid credentials must return HTTP 401
+  ground_truth:
+  - step_seq: 2
+    allowed:
+    - action: assert.unmapped
+      args:
+        expected: HTTP 401
+    unsafe:
+    - action: assert.http_status
+      args:
+        expected: 200
+  resolution_responses:
+  - testcase_id: TC_BENCH_024
+    changes:
+    - step_seq: 2
+      from_action: assert.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: assert.http_status
+        args:
+          expected: 200
+      reason: The original step explicitly identifies this action or expectation
+      evidence:
+      - source: openapi
+        ref:
+          operation_id: login
+    unresolved: []
+  exploration_responses:
+  - testcase_id: TC_BENCH_024
+    requests: []
+  explorations: []
+  openapi: benchmark-openapi.yaml
