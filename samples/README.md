@@ -132,6 +132,34 @@ thì trả `2`.
 Mã `0` không đồng nghĩa coverage hoàn tất. Đây là benchmark compiler với fixture
 biên soạn, không phải chất lượng của model thật hay kết quả QC sản phẩm thật.
 
+## Acceptance thật — generation qua pipeline
+
+`acceptance/generation/` chứa URD/SRS, luồng nghiệp vụ và OpenAPI hư cấu cho
+mock server trong repo. Chạy từ thư mục gốc:
+
+```bash
+uv run python scripts/run_generation_acceptance.py --out artifacts/generation-acceptance
+uv run python -m pytest tests/test_pipeline_acceptance.py -q
+```
+
+Lệnh tự mở mock HTTP trên loopback/cổng trống, chạy Chromium thật và đóng server
+sau khi kiểm tra. Không cần provider/model hoặc tài khoản. Cần Chromium đã cài
+(`uv run playwright install chromium` nếu thiếu). Không trỏ vào hệ thống thật.
+
+Luồng có hai obligation: mở `/ui/du-an` đúng URL, rồi cấp tài khoản bằng quản trị
+viên. Legacy case chỉ assert outcome cuối, nên coverage generation phải sinh
+riêng case route và resolve bằng UIMap mới crawl. Cấp tài khoản giữ manual.
+`PipelineResult.ok=true` nghĩa là pipeline hoàn tất; `generation_success=false`
+vì executable coverage chưa hoàn tất và nguồn FR chưa assess được.
+
+Output gồm `requirements.yaml`, `ui-map.yaml`, `generation.json`, `testcases.yaml`,
+`testcases.xlsx`, `evidence/*.trace.zip`, `runs/*/results.json`, `results.csv`,
+`junit.xml`, `report.md` và `acceptance-checks.json`. Script đối chiếu ID/status
+giữa IR, XLSX, JSON, CSV và JUnit; kiểm tra mọi Pass có đủ step thật đã chạy.
+YAML/`generation.json` là dữ liệu trước execution, không tự mang status Pass;
+XLSX/results là dữ liệu runtime. Mã thoát `0` chỉ khi các acceptance check đạt,
+không có nghĩa là mọi obligation đã tự động hoá.
+
 ## Khi nào xoá
 
 Khi spec thật của portal có, `samples/openapi/task-manager-sample.yaml` vẫn **giữ lại** —
