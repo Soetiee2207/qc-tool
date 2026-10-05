@@ -1,0 +1,1227 @@
+# Dữ liệu hư cấu, phản hồi/quan sát cố định. Không mở URL trong file.
+benchmark:
+  description: Offline recorded fixture benchmark of the real generation orchestrator; not live product/model evaluation
+  max_passes: 3
+  max_cycles: 3
+  expected_summary:
+    scenarios: 25
+    requirements_total: 6
+    coverage_sources_total: 25
+    flow_sources_total: 19
+    obligations_total: 25
+    covered_requirements_before: 0
+    covered_requirements_after: 1
+    covered_sources_before: 2
+    covered_sources_after: 9
+    covered_obligations_before: 2
+    covered_obligations_after: 10
+    complete_executable_coverage_before: 2
+    complete_executable_coverage_after: 8
+    generated_logical_cases: 20
+    accepted_executable_cases: 7
+    unresolved_generated_cases: 12
+    semantic_scenarios:
+      correct: 25
+      incorrect: 0
+      unknown: 0
+    semantic_obligations:
+      correct: 25
+      incorrect: 0
+      unknown: 0
+    correct_expected_abstentions: 15
+    applied_repairs: 15
+    deterministic_repairs: 8
+    false_applied_repairs: 0
+    unsafe_applied_repairs: 0
+    unknown_applied_repairs: 0
+    rejected_proposed_changes: 4
+    coverage_stop_reasons:
+      COVERAGE_COMPLETE: 8
+      NO_GENERATABLE_OBLIGATIONS: 5
+      REPEATED_STATE: 12
+    resolution_stop_reasons:
+      EXECUTABLE: 7
+      REPEATED_STATE: 13
+    generation_statuses:
+      INCOMPLETE_COVERAGE: 12
+      SUCCESS: 8
+      UNASSESSABLE_COVERAGE: 5
+    pass_counts:
+      '0': 7
+      '1': 17
+      '2': 1
+    cycle_counts:
+      '1': 19
+      '2': 1
+    average_passes: 0.76
+    max_passes: 2
+    average_cycles: 1.05
+    max_cycles: 2
+    replay_errors: 0
+scenarios:
+- id: G01
+  category: already_complete
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: Open /login → URL /login
+      steps:
+      - action: Open /login
+        expected: URL /login
+  existing_cases:
+  - id: TC_EXISTING_001
+    module: EXISTING
+    title: Recorded existing route test
+    objective: Check explicit route metadata
+    traces_to:
+    - FLOW-1
+    provenance:
+      source_quote: Explicit route requirement
+      source_ref: benchmark.md:1
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /login
+  ground_truth:
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      allowed_steps:
+      - - action: ui.goto
+          args:
+            url: /login
+        - action: assert.url_matches
+          args:
+            pattern: /login
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: SUCCESS
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 0
+    passes: 0
+    stop_reason: COVERAGE_COMPLETE
+- id: G02
+  category: missing_happy_path
+  requirements:
+  - id: AC-HAPPY
+    kind: acceptance_criterion
+    title: Login opens dashboard
+    given: Open /login
+    when: Click Login
+    then: URL /dashboard
+    source:
+      file: benchmark.md
+      line: 2
+      quote: Given Open /login / When Click Login / Then URL /dashboard
+  flows: null
+  ui_map: benchmark-ui-map.yaml
+  context_evidence:
+    TC_COV_001:
+      ui_pages:
+      - https://benchmark.test/login
+      - https://benchmark.test/dashboard
+  resolution_responses:
+  - testcase_id: TC_COV_001
+    changes:
+    - step_seq: 2
+      from_action: perform.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: ui.click
+        args:
+          target: btn-login
+      reason: Explicit named Login click
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/login
+          test_id: btn-login
+    unresolved: []
+  ground_truth:
+    obligations:
+    - id: AC-HAPPY:then
+      allowed_steps:
+      - - action: ui.goto
+          args:
+            url: /login
+        - action: ui.click
+          args:
+            target: btn-login
+        - action: assert.url_matches
+          args:
+            pattern: /dashboard
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: SUCCESS
+    semantic: correct
+    accepted: 1
+    unresolved_generated: 0
+    passes: 1
+    stop_reason: COVERAGE_COMPLETE
+- id: G03
+  category: negative_error
+  requirements:
+  - id: FR-1
+    kind: functional
+    title: Refresh
+    api:
+      error_handling:
+      - condition: Refresh fails
+        behavior: Session cleared
+  flows: null
+  resolution_responses:
+  - testcase_id: TC_COV_001
+    changes: []
+    unresolved:
+    - code: UNMAPPED_ACTION
+      step_seq: 1
+      reason: Insufficient trusted evidence; preserve original meaning
+  ground_truth:
+    expect_abstention: true
+    obligations:
+    - id: FR-1:api.error_handling[0]
+      expect_abstention: true
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: INCOMPLETE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 1
+    passes: 1
+    stop_reason: REPEATED_STATE
+- id: G04
+  category: permission_role
+  requirements: []
+  flows:
+    scenario:
+    - id: SCEN-1
+      from_state: viewer
+      action: Open record
+      rule: Read only
+      result: Delete hidden
+  resolution_responses:
+  - testcase_id: TC_COV_001
+    changes: []
+    unresolved:
+    - code: UNMAPPED_ACTION
+      step_seq: 1
+      reason: Insufficient trusted evidence; preserve original meaning
+  ground_truth:
+    expect_abstention: true
+    obligations:
+    - id: SCEN-1:result
+      expect_abstention: true
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: INCOMPLETE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 1
+    passes: 1
+    stop_reason: REPEATED_STATE
+- id: G05
+  category: state_transition
+  requirements: []
+  flows:
+    transition:
+    - id: STATE-1
+      from_state: draft
+      to_state: active
+      trigger: Publish
+  resolution_responses:
+  - testcase_id: TC_COV_001
+    changes: []
+    unresolved:
+    - code: UNMAPPED_ACTION
+      step_seq: 1
+      reason: Insufficient trusted evidence; preserve original meaning
+  ground_truth:
+    expect_abstention: true
+    obligations:
+    - id: STATE-1:to_state
+      expect_abstention: true
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: INCOMPLETE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 1
+    passes: 1
+    stop_reason: REPEATED_STATE
+- id: G06
+  category: shared_obligations
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: Open /login → URL /login
+      steps:
+      - action: Open /login
+        expected: URL /login
+    - id: FLOW-2
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: Open /login → URL /login
+      steps:
+      - action: Open /login
+        expected: URL /login
+  ui_map: benchmark-ui-map.yaml
+  context_evidence:
+    TC_COV_001:
+      ui_pages:
+      - https://benchmark.test/login
+  ground_truth:
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      allowed_steps:
+      - - action: ui.goto
+          args:
+            url: /login
+        - action: assert.url_matches
+          args:
+            pattern: /login
+    - id: FLOW-2:steps[0].expected
+      allowed_steps:
+      - - action: ui.goto
+          args:
+            url: /login
+        - action: assert.url_matches
+          args:
+            pattern: /login
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: SUCCESS
+    semantic: correct
+    accepted: 1
+    unresolved_generated: 0
+    passes: 1
+    stop_reason: COVERAGE_COMPLETE
+- id: G07
+  category: deterministic_resolution
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: Open /login → URL /login
+      steps:
+      - action: Open /login
+        expected: URL /login
+  ui_map: benchmark-ui-map.yaml
+  context_evidence:
+    TC_COV_001:
+      ui_pages:
+      - https://benchmark.test/login
+  ground_truth:
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      allowed_steps:
+      - - action: ui.goto
+          args:
+            url: /login
+        - action: assert.url_matches
+          args:
+            pattern: /login
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: SUCCESS
+    semantic: correct
+    accepted: 1
+    unresolved_generated: 0
+    passes: 1
+    stop_reason: COVERAGE_COMPLETE
+- id: G08
+  category: llm_http_resolution
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: POST /api/login → HTTP 401
+      steps:
+      - action: POST /api/login
+        expected: HTTP 401
+  openapi: benchmark-openapi.yaml
+  context_evidence:
+    TC_COV_001:
+      api_operations:
+      - method: POST
+        path: /api/login
+  resolution_responses:
+  - testcase_id: TC_COV_001
+    changes:
+    - step_seq: 1
+      from_action: perform.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: http.request
+        args:
+          method: POST
+          path: /api/login
+      reason: Exact explicit source action/outcome, grounded in recorded evidence
+      evidence:
+      - source: openapi
+        ref:
+          method: POST
+          path: /api/login
+    - step_seq: 2
+      from_action: assert.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: assert.http_status
+        args:
+          expected: 401
+      reason: Exact explicit source action/outcome, grounded in recorded evidence
+      evidence:
+      - source: openapi
+        ref:
+          method: POST
+          path: /api/login
+    unresolved: []
+  ground_truth:
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      allowed_steps:
+      - - action: http.request
+          args:
+            method: POST
+            path: /api/login
+        - action: assert.http_status
+          args:
+            expected: 401
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: SUCCESS
+    semantic: correct
+    accepted: 1
+    unresolved_generated: 0
+    passes: 1
+    stop_reason: COVERAGE_COMPLETE
+- id: G09
+  category: exploration_next_cycle
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: Open /login → URL /login
+      steps:
+      - action: Open /login
+        expected: URL /login
+  base_url: https://benchmark.test
+  resolution_responses:
+  - testcase_id: TC_COV_001
+    changes: []
+    unresolved:
+    - code: UNMAPPED_ACTION
+      step_seq: 1
+      reason: Insufficient trusted evidence; preserve original meaning
+  - testcase_id: TC_COV_001
+    changes:
+    - step_seq: 1
+      from_action: perform.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: ui.goto
+        args:
+          url: /login
+      reason: Exact explicit source action/outcome, grounded in recorded evidence
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/login
+    - step_seq: 2
+      from_action: assert.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: assert.url_matches
+        args:
+          pattern: /login
+      reason: Exact explicit source action/outcome, grounded in recorded evidence
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/login
+    unresolved: []
+  exploration_responses:
+  - testcase_id: TC_COV_001
+    requests:
+    - target: /login
+      session: anonymous
+      purposes:
+      - gap_code: UNMAPPED_ACTION
+        step_seq: 1
+        intent: inspect_page
+        reason: Inspect source route /login
+  explorations:
+  - request:
+      target: /login
+      session: anonymous
+    result:
+      request:
+        target: https://benchmark.test/login
+        session: anonymous
+      final_url: https://benchmark.test/login
+      page:
+        url: https://benchmark.test/login
+        title: Login
+        text:
+        - Login
+        elements: []
+      forms: []
+      network: []
+      issues: []
+      truncated:
+      - text
+      source:
+        type: playwright_exploration
+        observed_at: '2026-10-05T10:00:00+07:00'
+  ground_truth:
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      allowed_steps:
+      - - action: ui.goto
+          args:
+            url: /login
+        - action: assert.url_matches
+          args:
+            pattern: /login
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: SUCCESS
+    semantic: correct
+    accepted: 1
+    unresolved_generated: 0
+    passes: 1
+    stop_reason: COVERAGE_COMPLETE
+- id: G10
+  category: insufficient_evidence
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: Open /login → URL /login
+      steps:
+      - action: Open /login
+        expected: URL /login
+  resolution_responses:
+  - testcase_id: TC_COV_001
+    changes: []
+    unresolved:
+    - code: UNMAPPED_ACTION
+      step_seq: 1
+      reason: Insufficient trusted evidence; preserve original meaning
+  ground_truth:
+    expect_abstention: true
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      expect_abstention: true
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: INCOMPLETE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 1
+    passes: 1
+    stop_reason: REPEATED_STATE
+- id: G11
+  category: ambiguous_business_outcome
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: Submit registration → Account ready
+      steps:
+      - action: Submit registration
+        expected: Account ready
+  resolution_responses:
+  - testcase_id: TC_COV_001
+    changes: []
+    unresolved:
+    - code: UNMAPPED_ACTION
+      step_seq: 1
+      reason: Insufficient trusted evidence; preserve original meaning
+  ground_truth:
+    expect_abstention: true
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      expect_abstention: true
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: INCOMPLETE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 1
+    passes: 1
+    stop_reason: REPEATED_STATE
+- id: G12
+  category: fabricated_locator
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: Click Login → Login visible
+      steps:
+      - action: Click Login
+        expected: Login visible
+  ui_map: benchmark-ui-map.yaml
+  context_evidence:
+    TC_COV_001:
+      ui_pages:
+      - https://benchmark.test/login
+  resolution_responses:
+  - testcase_id: TC_COV_001
+    changes:
+    - step_seq: 1
+      from_action: perform.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: ui.click
+        args:
+          target: btn-imaginary
+      reason: Exact explicit source action/outcome, grounded in recorded evidence
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/login
+          test_id: btn-login
+    unresolved: []
+  ground_truth:
+    expect_abstention: true
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      expect_abstention: true
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: INCOMPLETE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 1
+    passes: 1
+    stop_reason: REPEATED_STATE
+- id: G13
+  category: fabricated_endpoint
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: POST /api/login → HTTP 401
+      steps:
+      - action: POST /api/login
+        expected: HTTP 401
+  openapi: benchmark-openapi.yaml
+  context_evidence:
+    TC_COV_001:
+      api_operations:
+      - method: POST
+        path: /api/login
+  resolution_responses:
+  - testcase_id: TC_COV_001
+    changes:
+    - step_seq: 1
+      from_action: perform.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: http.request
+        args:
+          method: POST
+          path: /api/admin/login
+      reason: Exact explicit source action/outcome, grounded in recorded evidence
+      evidence:
+      - source: openapi
+        ref:
+          method: POST
+          path: /api/login
+    unresolved: []
+  ground_truth:
+    expect_abstention: true
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      expect_abstention: true
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: INCOMPLETE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 1
+    passes: 1
+    stop_reason: REPEATED_STATE
+- id: G14
+  category: assertion_safety
+  requirements:
+  - id: FR-ACCESS
+    kind: functional
+    statement: Normal user must not see Delete
+    acceptance:
+    - Delete not visible
+  flows: null
+  ui_map: benchmark-ui-map.yaml
+  context_evidence:
+    TC_COV_001:
+      ui_pages:
+      - https://benchmark.test/login
+  resolution_responses:
+  - testcase_id: TC_COV_001
+    changes:
+    - step_seq: 1
+      from_action: assert.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: assert.visible
+        args:
+          target: btn-delete
+      reason: Exact explicit source action/outcome, grounded in recorded evidence
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/login
+          test_id: btn-delete
+    unresolved: []
+  ground_truth:
+    expect_abstention: true
+    obligations:
+    - id: FR-ACCESS:acceptance[0]
+      expect_abstention: true
+      unsafe_steps:
+      - step_seq: 1
+        snapshot:
+          action: assert.visible
+          args:
+            target: btn-delete
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: INCOMPLETE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 1
+    passes: 1
+    stop_reason: REPEATED_STATE
+- id: G15
+  category: unassessable_requirement
+  requirements:
+  - id: NFR-1
+    kind: non_functional
+    statement: Fast and secure
+  flows: null
+  ground_truth:
+    expect_abstention: true
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: UNASSESSABLE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 0
+    passes: 0
+    stop_reason: NO_GENERATABLE_OBLIGATIONS
+- id: G16
+  category: partial_coverage
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: Open /login → URL /login
+      steps:
+      - action: Open /login
+        expected: URL /login
+      - action: Create account
+        expected: Account provisioned
+  ui_map: benchmark-ui-map.yaml
+  context_evidence:
+    TC_COV_001:
+      ui_pages:
+      - https://benchmark.test/login
+  resolution_responses:
+  - testcase_id: TC_COV_002
+    changes: []
+    unresolved:
+    - code: UNMAPPED_ACTION
+      step_seq: 1
+      reason: Insufficient trusted evidence; preserve original meaning
+  - testcase_id: TC_COV_003
+    changes: []
+    unresolved:
+    - code: UNMAPPED_ACTION
+      step_seq: 1
+      reason: Insufficient trusted evidence; preserve original meaning
+  ground_truth:
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      allowed_steps:
+      - - action: ui.goto
+          args:
+            url: /login
+        - action: assert.url_matches
+          args:
+            pattern: /login
+    - id: FLOW-1:steps[1].expected
+      expect_abstention: true
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: INCOMPLETE_COVERAGE
+    semantic: correct
+    accepted: 1
+    unresolved_generated: 1
+    passes: 2
+    stop_reason: REPEATED_STATE
+- id: G17
+  category: impossible_generated_setup
+  requirements:
+  - id: AC-1
+    kind: acceptance_criterion
+    title: New account
+    given: Account provisioned with viewer role
+    when: Click Login
+    then: Dashboard opens
+  flows: null
+  resolution_responses:
+  - testcase_id: TC_COV_001
+    changes: []
+    unresolved:
+    - code: UNMAPPED_ACTION
+      step_seq: 1
+      reason: Insufficient trusted evidence; preserve original meaning
+  ground_truth:
+    expect_abstention: true
+    obligations:
+    - id: AC-1:then
+      expect_abstention: true
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: INCOMPLETE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 1
+    passes: 1
+    stop_reason: REPEATED_STATE
+- id: G18
+  category: route_wrong_action
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: Open /login → URL /login
+      steps:
+      - action: Open /login
+        expected: URL /login
+  existing_cases:
+  - id: TC_EXISTING_001
+    module: EXISTING
+    title: Recorded existing route test
+    objective: Check explicit route metadata
+    traces_to:
+    - FLOW-1
+    provenance:
+      source_quote: Explicit route requirement
+      source_ref: benchmark.md:1
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /dashboard
+    - seq: 2
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /login
+  ground_truth:
+    expect_abstention: true
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      expect_abstention: true
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: UNASSESSABLE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 0
+    passes: 0
+    stop_reason: NO_GENERATABLE_OBLIGATIONS
+- id: G19
+  category: route_wrong_assertion
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: Open /login → URL /login
+      steps:
+      - action: Open /login
+        expected: URL /login
+  existing_cases:
+  - id: TC_EXISTING_001
+    module: EXISTING
+    title: Recorded existing route test
+    objective: Check explicit route metadata
+    traces_to:
+    - FLOW-1
+    provenance:
+      source_quote: Explicit route requirement
+      source_ref: benchmark.md:1
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /dashboard
+  ground_truth:
+    expect_abstention: true
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      expect_abstention: true
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: UNASSESSABLE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 0
+    passes: 0
+    stop_reason: NO_GENERATABLE_OBLIGATIONS
+- id: G20
+  category: route_broad_regex
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: Open /login → URL /login
+      steps:
+      - action: Open /login
+        expected: URL /login
+  existing_cases:
+  - id: TC_EXISTING_001
+    module: EXISTING
+    title: Recorded existing route test
+    objective: Check explicit route metadata
+    traces_to:
+    - FLOW-1
+    provenance:
+      source_quote: Explicit route requirement
+      source_ref: benchmark.md:1
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /log.*
+  ground_truth:
+    expect_abstention: true
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      expect_abstention: true
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: UNASSESSABLE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 0
+    passes: 0
+    stop_reason: NO_GENERATABLE_OBLIGATIONS
+- id: G21
+  category: route_exact_anchor
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: Open /login → URL /login
+      steps:
+      - action: Open /login
+        expected: URL /login
+  existing_cases:
+  - id: TC_EXISTING_001
+    module: EXISTING
+    title: Recorded existing route test
+    objective: Check explicit route metadata
+    traces_to:
+    - FLOW-1
+    provenance:
+      source_quote: Explicit route requirement
+      source_ref: benchmark.md:1
+    steps:
+    - seq: 1
+      kind: when
+      action: ui.goto
+      args:
+        url: /login
+    - seq: 2
+      kind: then
+      action: assert.url_matches
+      args:
+        pattern: /login$
+  ground_truth:
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      allowed_steps:
+      - - action: ui.goto
+          args:
+            url: /login
+        - action: assert.url_matches
+          args:
+            pattern: /login$
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: SUCCESS
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 0
+    passes: 0
+    stop_reason: COVERAGE_COMPLETE
+- id: G22
+  category: empty_source
+  requirements: []
+  flows: null
+  ground_truth:
+    expect_abstention: true
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: UNASSESSABLE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 0
+    passes: 0
+    stop_reason: NO_GENERATABLE_OBLIGATIONS
+- id: G23
+  category: llm_ui_resolution
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: Open /dashboard → URL /dashboard
+      steps:
+      - action: Open /dashboard
+        expected: URL /dashboard
+  context_evidence:
+    TC_COV_001:
+      ui_pages:
+      - https://benchmark.test/dashboard
+  resolution_responses:
+  - testcase_id: TC_COV_001
+    changes:
+    - step_seq: 1
+      from_action: perform.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: ui.goto
+        args:
+          url: /dashboard
+      reason: Exact explicit source action/outcome, grounded in recorded evidence
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/dashboard
+    - step_seq: 2
+      from_action: assert.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: assert.url_matches
+        args:
+          pattern: /dashboard
+      reason: Exact explicit source action/outcome, grounded in recorded evidence
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/dashboard
+    unresolved: []
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: SUCCESS
+    semantic: correct
+    accepted: 1
+    unresolved_generated: 0
+    passes: 1
+    stop_reason: COVERAGE_COMPLETE
+  ground_truth:
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      allowed_steps:
+      - - action: ui.goto
+          args:
+            url: /dashboard
+        - action: assert.url_matches
+          args:
+            pattern: /dashboard
+  context_ui_map: benchmark-ui-map.yaml
+- id: G24
+  category: malformed_model_response
+  requirements: []
+  flows:
+    flow:
+    - id: FLOW-1
+      source_file: benchmark.md
+      source_line: 1
+      source_quote: Open /login → URL /login
+      steps:
+      - action: Open /login
+        expected: URL /login
+  context_evidence:
+    TC_COV_001:
+      ui_pages:
+      - https://benchmark.test/login
+  resolution_responses:
+  - '{broken JSON'
+  ground_truth:
+    expect_abstention: true
+    obligations:
+    - id: FLOW-1:steps[0].expected
+      expect_abstention: true
+  references:
+  - tests/test_generation.py
+  - tests/test_coverage_loop.py
+  expected_replay:
+    status: INCOMPLETE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 1
+    passes: 1
+    stop_reason: REPEATED_STATE
+  context_ui_map: benchmark-ui-map.yaml
+- id: G25
+  category: negated_url_expectation
+  requirements:
+  - id: FR-URL
+    kind: functional
+    statement: URL not /login
+    acceptance:
+    - URL not /login
+  flows: null
+  ui_map: benchmark-ui-map.yaml
+  context_evidence:
+    TC_COV_001:
+      ui_pages:
+      - https://benchmark.test/login
+  resolution_responses:
+  - testcase_id: TC_COV_001
+    changes:
+    - step_seq: 1
+      from_action: assert.unmapped
+      gap_codes:
+      - UNMAPPED_ACTION
+      proposed:
+        action: assert.url_matches
+        args:
+          pattern: /login
+      reason: Current page is /login
+      evidence:
+      - source: ui-map
+        ref:
+          page: https://benchmark.test/login
+    unresolved: []
+  ground_truth:
+    expect_abstention: true
+    obligations:
+    - id: FR-URL:acceptance[0]
+      expect_abstention: true
+      unsafe_steps:
+      - step_seq: 1
+        snapshot:
+          action: assert.url_matches
+          args:
+            pattern: /login
+  references:
+  - tests/test_proposal_validation.py
+  expected_replay:
+    status: INCOMPLETE_COVERAGE
+    semantic: correct
+    accepted: 0
+    unresolved_generated: 1
+    passes: 1
+    stop_reason: REPEATED_STATE

@@ -92,6 +92,46 @@ Các phản hồi/quan sát trong benchmark là fixture được biên soạn t�
 Đây là benchmark an toàn/hồi quy của compiler, không phải số đo chất lượng một
 model thật hoặc kết quả chạy QC trên sản phẩm thật.
 
+## Benchmark generation offline — 25 scenario
+
+`evaluation/generation-benchmark.yaml` chạy `run_generation()` thật từ requirement/
+flow qua coverage loop và resolution loop. Bộ mẫu dùng lại UI/OpenAPI hư cấu ở
+trên, chỉ dùng completion và exploration recording được ghi trong YAML. Thiếu
+recording trả `REPLAY_MISS`, không gọi model hay trình duyệt để bù dữ liệu.
+
+```bash
+uv run python -m qctool.generation_evaluation \
+  samples/evaluation/generation-benchmark.yaml --out /tmp/generation-benchmark.json
+uv run python -m pytest tests/test_generation_benchmark.py -q
+```
+
+Báo cáo giữ toàn bộ lịch sử pass/cycle, proposal bị chặn và oracle theo obligation.
+Các category gồm happy path, error, role, state, intent dùng chung, deterministic/
+LLM repair, exploration, thiếu evidence, assertion mơ hồ, proposal bịa, nguồn
+không assess được và coverage một phần. Ground truth so sánh cả action và args;
+abstention mong đợi được tính đúng, không tính thành executable coverage. Thiếu
+oracle phải là `unknown`.
+
+Baseline có **6 requirement + 19 nguồn flow**, **25 obligation**. Executable
+obligation coverage **2 → 10**; suite thành công **2 → 8/25**. Có 20 logical
+candidate qua các pass, 7 accepted và 12 unresolved được giữ ở kết quả cuối.
+Ngữ nghĩa: **25 đúng, 0 sai, 0 unknown**; **0 repair sai/unsafe đã áp dụng**.
+Con số candidate tính cả lần thử lại; unresolved chỉ tính kết quả đang được giữ.
+
+Scenario `G07` map deterministic hai clause đầy đủ `Open /login` và `URL /login`
+nhờ một trang UIMap cùng origin xác nhận đúng route. Không cần LLM. Các scenario
+LLM-only dùng `context_ui_map` để chọn evidence vào context mà không cung cấp
+UIMap cho deterministic resolver; `ui_map` cung cấp cho cả hai. Benchmark còn
+chặn assertion dương khi expectation
+nêu chính xác `URL not /route`, và kiểm tra rule `Open /route → URL /route`
+không nhận route khác hoặc regex rộng.
+
+CLI trả `0` ở baseline mới: không có lỗi replay, repair sai/unsafe hoặc outcome
+sai theo oracle. Có một trong các lỗi này thì trả `1`; input/output không hợp lệ
+thì trả `2`.
+Mã `0` không đồng nghĩa coverage hoàn tất. Đây là benchmark compiler với fixture
+biên soạn, không phải chất lượng của model thật hay kết quả QC sản phẩm thật.
+
 ## Khi nào xoá
 
 Khi spec thật của portal có, `samples/openapi/task-manager-sample.yaml` vẫn **giữ lại** —

@@ -345,6 +345,7 @@ _NEGATIVE = re.compile(r"\b(?:must\s+not\s+see|should\s+not\s+see|not\s+visible|
                        r"not\s+shown|hidden|không\s+thấy|không\s+hiện|ẩn)\b", re.I)
 _POSITIVE = re.compile(r"\b(?:visible|shown|see|appears|hiện|thấy)\b", re.I)
 _ROUTE = re.compile(r"(?<!\w)(/[A-Za-z0-9_./?=&-]+)")
+_NEGATED_URL = re.compile(r"^\s*URL\s+not\s+(/[A-Za-z0-9_./?=&-]+)\s*$", re.I)
 _HTTP_CODE = re.compile(r"\b([1-5]\d\d)\b")
 
 
@@ -431,6 +432,9 @@ def _check_semantics(step: Step, change: ProposedChange,
         pattern = change.args.get("pattern")
         if not isinstance(pattern, str):
             return "INVALID_ARGUMENTS"
+        forbidden = {match.group(1) for text in texts if (match := _NEGATED_URL.fullmatch(text))}
+        if pattern.removesuffix("$") in forbidden:
+            return "SPECIFICATION_CONFLICT"
         routes = {route for text in texts for route in _ROUTE.findall(text)}
         pages = [page for source, page, _ in refs if source == "ui-map"]
         if not any(pattern in {route, route + "$"}

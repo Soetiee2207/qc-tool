@@ -9,13 +9,15 @@ from __future__ import annotations
 from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass
+import re
 from urllib.parse import urlsplit
 
 from .executability import ExecutionGap, ExecutabilityReport, analyze_executability
 from .generate.from_openapi import Endpoint
-from .generate.mapper import _target_of
-from .testcase import Step, TestCase
+from .generate.mapper import RE_OPEN_PATH, _target_of
+from .testcase import Step, TestCase, ValidationError
 from .ui.crawl import UIMap, _norm
+from .ui.explore import ExplorationRequest, validate_exploration_request
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,7 @@ class ResolutionChange:
     before: dict
     after: dict
     evidence: dict
+    from_action: str | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,8 @@ def resolve_deterministically(
     ``endpoints`` is the output of ``load_endpoints()``. The returned case is a
     deep copy, including when no repair is possible. ``after`` is always obtained
     from ``analyze_executability``; the resolver never declares success itself.
+    Complete literal Open/URL clauses may replace unmapped verbs, retaining
+    their source in the change audit. Manual promotion uses the applier's gate.
     """
     before = analyze_executability(case)
     repaired = deepcopy(case)
@@ -57,6 +62,16 @@ def resolve_deterministically(
         if gap.step_seq is None or by_seq[gap.step_seq] != 1:
             continue
         step = next(step for step in repaired.steps if step.seq == gap.step_seq)
+        if gap.code == "UNMAPPED_ACTION" and ui_map is not None:
+            mapped = _explicit_route(step, ui_map)
+            if mapped is not None:
+                action, args, evidence = mapped
+                changes.append(ResolutionChange(
+                    step.seq, action, deepcopy(step.args), deepcopy(args), evidence,
+                    from_action=step.action,
+                ))
+                step.action, step.args = action, args
+            continue
         repair: tuple[dict, dict] | None = None
         if gap.code == "MISSING_LOCATOR" and ui_map is not None:
             repair = _ui_locator(step, ui_map)
@@ -77,6 +92,14 @@ def resolve_deterministically(
             step.seq, step.action, before_args, deepcopy(step.args), evidence
         ))
 
+    # Match the applier's promotion boundary: manual because of unmapped steps,
+    # with every blocker now gone. Never promote setup/manual-only cases blindly.
+    if (changes and case.execution == "manual" and case.needs_mapping
+            and not repaired.needs_mapping and before.validation_error is None):
+        auto_candidate = deepcopy(repaired)
+        auto_candidate.execution = "auto"
+        if analyze_executability(auto_candidate).executable:
+            repaired = auto_candidate
     after = analyze_executability(repaired)
     remaining = Counter(after.gaps)
     resolved: list[ExecutionGap] = []
@@ -86,6 +109,56 @@ def resolve_deterministically(
         else:
             resolved.append(gap)
     return ResolutionResult(repaired, before, after, tuple(resolved), after.gaps, tuple(changes))
+
+
+# Whole source clauses only; exclude regex/query/template syntax and prose.
+# This deliberately supports fewer forms than the normal mapper's prose rules.
+_LITERAL_ROUTE = r"/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*/?"
+_OPEN_ROUTE = re.compile(r"Open\s+(" + _LITERAL_ROUTE + r")", re.I)
+_URL_ROUTE = re.compile(r"URL\s+(" + _LITERAL_ROUTE + r")", re.I)
+
+
+def _explicit_route(step: Step, ui_map: UIMap) -> tuple[str, dict, dict] | None:
+    try:
+        step.validate()
+    except ValidationError:
+        return None
+    if step.action == "perform.unmapped":
+        # An attached expectation cannot be silently discarded by a step repair.
+        if set(step.args) != {"description"}:
+            return None
+        text = step.args["description"]
+        grammar, action, argument = _OPEN_ROUTE, "ui.goto", "url"
+    elif step.action == "assert.unmapped":
+        text = step.args["expected"]
+        grammar, action, argument = _URL_ROUTE, "assert.url_matches", "pattern"
+    else:
+        return None
+    if not isinstance(text, str) or not (match := grammar.fullmatch(text.strip())):
+        return None
+    route = match.group(1)
+    if action == "ui.goto":
+        # Reuse the mapper's explicit navigation extraction after the strict gate.
+        route = RE_OPEN_PATH.fullmatch(text.strip()).group(1)
+    target, issues = validate_exploration_request(
+        ExplorationRequest(route), base_url=ui_map.base_url)
+    if issues:
+        return None
+    pages = []
+    for page in ui_map.pages:
+        resolved, page_issues = validate_exploration_request(
+            ExplorationRequest(page.url), base_url=ui_map.base_url)
+        if not page_issues and resolved == target:
+            pages.append(page)
+    if len(pages) != 1:
+        return None
+    args = {argument: route}
+    Step(step.seq, step.kind, action, args, step.note).validate()
+    return action, args, {
+        "source": "ui-map", "page": pages[0].url,
+        "source_text": text, "from_action": step.action,
+        "match": "complete literal route clause and unique same-origin page",
+    }
 
 
 def _ui_locator(step: Step, ui_map: UIMap) -> tuple[dict, dict] | None:

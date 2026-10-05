@@ -1,7 +1,10 @@
 """Deterministic repairs require unique, recorded evidence."""
 
 from dataclasses import replace
+from copy import deepcopy
 from pathlib import Path
+
+import pytest
 
 from qctool.executability import analyze_executability
 from qctool.generate.loader import load_endpoints
@@ -159,3 +162,85 @@ def test_multiple_openapi_servers_do_not_create_wrong_host():
     result = resolve_deterministically(case, endpoints=[ambiguous])
     assert result.changes == ()
     assert result.case.steps[0].args == {"path": "/health"}
+
+
+def _logical_route(expected="URL /login", **fields):
+    return _case(_step(1, "perform.unmapped", {"description": "Open /login"}),
+                 _step(2, "assert.unmapped", {"expected": expected}),
+                 execution="manual", **fields)
+
+
+def test_explicit_unmapped_routes_resolve_with_audit_and_safe_promotion():
+    case, ui_map = _logical_route(), _map()
+    snapshot = deepcopy((case, ui_map))
+    result = resolve_deterministically(case, ui_map=ui_map)
+    assert [(s.action, s.args) for s in result.case.steps] == [
+        ("ui.goto", {"url": "/login"}), ("assert.url_matches", {"pattern": "/login"})]
+    assert result.case.execution == "auto"
+    assert result.after.executable
+    result.case.validate()
+    assert not result.unresolved_gaps
+    assert [c.from_action for c in result.changes] == ["perform.unmapped", "assert.unmapped"]
+    assert result.changes[1].before == {"expected": "URL /login"}
+    assert result.changes[1].evidence["source_text"] == "URL /login"
+    assert all(c.evidence["page"] == "https://portal.test/login" for c in result.changes)
+    assert (case, ui_map) == snapshot
+
+
+@pytest.mark.parametrize("expected", [
+    "URL not /login", "URL NOT /login", "Not URL /login", "URL /login$",
+    "URL /log.*", "URL /login or /dashboard", "URL /login; Delete hidden",
+    "URL /dashboard", "URL /login/settings", "URL //foreign.test/login",
+    "URL https://foreign.test/login", "URL /login?token=secret", "URL /login#secret",
+    "URL /../login", "URL /login.*", "Dashboard opens", "Delete must not be visible",
+])
+def test_unsafe_or_ungrounded_expectations_remain_unmapped(expected):
+    result = resolve_deterministically(_logical_route(expected), ui_map=_map())
+    assert result.case.steps[0].action == "ui.goto"
+    assert result.case.steps[1].action == "assert.unmapped"
+    assert result.case.steps[1].args == {"expected": expected}
+    assert result.case.execution == "manual"
+    assert not result.after.executable
+
+
+@pytest.mark.parametrize("description", [
+    "Do not Open /login", "Open /login and click Delete", "Open /log.*",
+    "Open /dashboard", "Open //foreign.test/login", "Open https://portal.test/login",
+    "Click btn-fabricated", "POST /api/fabricated", "Open /login?secret=value",
+])
+def test_unsafe_or_ungrounded_actions_remain_unmapped(description):
+    case = _logical_route()
+    case.steps[0].args = {"description": description}
+    result = resolve_deterministically(case, ui_map=_map())
+    assert result.case.steps[0].action == "perform.unmapped"
+    assert result.case.steps[0].args == case.steps[0].args
+    assert not result.after.executable
+
+
+@pytest.mark.parametrize("pages", [[],
+    [PageMap("https://foreign.test/login", "Login")],
+    [PageMap("https://portal.test/login", "One"), PageMap("https://portal.test/login", "Two")],
+    [PageMap("https://portal.test/login?token=secret", "Login")],
+])
+def test_route_requires_unique_exact_same_origin_page(pages):
+    result = resolve_deterministically(_logical_route(), ui_map=UIMap("https://portal.test", "", pages))
+    assert not result.changes
+    assert result.case.execution == "manual"
+
+
+def test_no_evidence_or_remaining_setup_does_not_promote():
+    assert not resolve_deterministically(_logical_route()).changes
+    result = resolve_deterministically(_logical_route(requires="Provision account"), ui_map=_map())
+    assert len(result.changes) == 2
+    assert result.case.execution == "manual"
+    assert {g.code for g in result.after.gaps} == {"MANUAL_EXECUTION", "MISSING_PRECONDITION"}
+
+
+def test_route_mapping_does_not_discard_attached_expectation_or_fix_concrete_regex():
+    case = _logical_route()
+    case.steps[0].args["expectation"] = "Delete must stay hidden"
+    case.steps[1].action = "assert.url_matches"
+    case.steps[1].args = {"pattern": "/log.*"}
+    result = resolve_deterministically(case, ui_map=_map())
+    assert not result.changes
+    assert result.case == case

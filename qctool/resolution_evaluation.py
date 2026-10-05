@@ -148,7 +148,7 @@ def _applied_repairs(result, labels):
             for change in cycle.deterministic.changes:
                 after = {"action": change.action, "args": change.after}
                 repairs.append({"cycle": index, "source": "deterministic", "step_seq": change.step_seq,
-                                "before": {"action": change.action, "args": change.before},
+                                "before": {"action": change.from_action or change.action, "args": change.before},
                                 "after": after, **_assessment(after, by_seq.get(change.step_seq))})
         if cycle.application:
             for applied in cycle.application.applied_changes:

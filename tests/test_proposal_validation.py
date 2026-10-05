@@ -96,6 +96,18 @@ def test_valid_ui_proposal_is_grounded_and_makes_progress():
     assert case.steps[1].action == "perform.unmapped"
 
 
+def test_explicit_negated_url_cannot_become_positive_url_assertion():
+    case = _case(_step(1, "ui.goto", {"url": "/login"}),
+                 _step(2, "assert.unmapped", {"expected": "URL not /login"}))
+    for pattern in ("/login", "/login$"):
+        change = _change(seq=2, from_action="assert.unmapped", action="assert.url_matches",
+                         args={"pattern": pattern}, evidence=(EvidenceReference(
+                             "ui-map", {"page": "https://portal.test/login"}),))
+        result = validate_resolution_proposal(_proposal(change), _context(case), case)
+        assert not result.valid_changes
+        assert "SPECIFICATION_CONFLICT" in _codes(result)
+
+
 def test_fabricated_locator_is_rejected():
     case = _login_case()
     change = _change(args={"target": "btn-does-not-exist"})
