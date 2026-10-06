@@ -16,6 +16,16 @@ from .resolution_context import ResolutionContext
 class LLMResponseError(ValueError):
     """The adapter returned malformed or mismatched structured output."""
 
+    def __init__(self, message: str, *, category: str = "SCHEMA_ERROR", path: str = "$", position: int | None = None):
+        self.category = category
+        self.path = path
+        self.position = position
+        super().__init__(message)
+
+    @property
+    def diagnostics(self) -> dict:
+        return {"category": self.category, "path": self.path, "position": self.position}
+
 
 class ResolutionLLM(Protocol):
     """An injectable completion source; no provider SDK is required."""
@@ -231,26 +241,26 @@ def propose_resolution(context: ResolutionContext, adapter: ResolutionLLM) -> Re
     """Ask an injected adapter for a proposal; never receive or mutate a TestCase."""
     proposal = parse_resolution_proposal(adapter.complete(build_resolution_prompt(context)))
     if proposal.testcase_id != context.testcase["id"]:
-        raise LLMResponseError("testcase_id does not match the supplied context")
+        raise LLMResponseError("testcase_id does not match the supplied context", category="TESTCASE_MISMATCH", path="testcase_id")
     return proposal
 
 
 def parse_resolution_proposal(response: str) -> ResolutionProposal:
     """Parse exact JSON shape; never interpret free-form model prose."""
     if not isinstance(response, str):
-        raise LLMResponseError("Model response must be a JSON string")
+        raise LLMResponseError("Model response must be a JSON string", category="STRING_REQUIRED")
     try:
         raw = json.loads(response, object_pairs_hook=_unique_keys,
                          parse_constant=lambda value: _reject_constant(value))
     except (json.JSONDecodeError, ValueError) as exc:
-        raise LLMResponseError(f"Invalid JSON response: {exc}") from exc
+        raise LLMResponseError("Invalid JSON response; content omitted", category="JSON_SYNTAX" if isinstance(exc, json.JSONDecodeError) else "JSON_STRUCTURE", position=getattr(exc, "pos", None)) from None
 
     _fields(raw, {"testcase_id", "changes", "unresolved"}, "proposal")
     testcase_id = _nonempty(raw["testcase_id"], "testcase_id")
     changes_raw = _list(raw["changes"], "changes")
     unresolved_raw = _list(raw["unresolved"], "unresolved")
     if not changes_raw and not unresolved_raw:
-        raise LLMResponseError("Proposal must contain a change or unresolved gap")
+        raise LLMResponseError("Proposal must contain a change or unresolved gap", category="EMPTY_PROPOSAL")
 
     changes: list[ProposedChange] = []
     seen_steps: set[int] = set()
@@ -260,7 +270,7 @@ def parse_resolution_proposal(response: str) -> ResolutionProposal:
                 where)
         seq = _positive_int(item["step_seq"], f"{where}.step_seq")
         if seq in seen_steps:
-            raise LLMResponseError(f"{where}.step_seq duplicates an earlier change")
+            raise LLMResponseError(f"{where}.step_seq duplicates an earlier change", category="DUPLICATE_STEP", path=f"{where}.step_seq")
         seen_steps.add(seq)
         proposed = item["proposed"]
         expansion: tuple[AtomicProposal, ...] = ()
@@ -268,30 +278,30 @@ def parse_resolution_proposal(response: str) -> ResolutionProposal:
             _fields(proposed, {"steps"}, f"{where}.proposed")
             atoms = _list(proposed["steps"], f"{where}.proposed.steps")
             if not 2 <= len(atoms) <= 8:
-                raise LLMResponseError("Expansion must contain 2–8 atomic steps")
+                raise LLMResponseError("Expansion must contain 2–8 atomic steps", category="ARRAY_LENGTH", path=f"{where}.proposed.steps")
             parsed_atoms = []
             for i, atom in enumerate(atoms):
                 label = f"{where}.proposed.steps[{i}]"
                 _fields(atom, {"action", "args", "evidence"}, label)
                 _arguments(atom["args"], label)
                 parsed_atoms.append(AtomicProposal(
-                    _nonempty(atom["action"], label), atom["args"],
+                    _nonempty(atom["action"], f"{label}.action"), atom["args"],
                     _parse_references(atom["evidence"], label)))
             expansion = tuple(parsed_atoms)
         else:
             _fields(proposed, {"action", "args"}, f"{where}.proposed")
-            _arguments(proposed["args"], where)
+            _arguments(proposed["args"], f"{where}.proposed")
         codes = _list(item["gap_codes"], f"{where}.gap_codes")
         evidence_raw = _list(item["evidence"], f"{where}.evidence")
         if not codes or not evidence_raw:
-            raise LLMResponseError(f"{where} needs gap_codes and evidence")
+            raise LLMResponseError(f"{where} needs gap_codes and evidence", category="EMPTY_ARRAY", path=where)
         evidence: list[EvidenceReference] = []
         for position, ref in enumerate(evidence_raw):
             label = f"{where}.evidence[{position}]"
             _fields(ref, {"source", "ref"}, label)
             source = _nonempty(ref["source"], f"{label}.source")
             if source not in {"requirement", "openapi", "ui-map", "testcase-step"}:
-                raise LLMResponseError(f"{label}.source is unknown")
+                raise LLMResponseError(f"{label}.source is unknown", category="EVIDENCE_SOURCE", path=f"{label}.source")
             fields = ref["ref"]
             _evidence_fields(source, fields, f"{label}.ref")
             evidence.append(EvidenceReference(source, fields))
@@ -319,20 +329,21 @@ def parse_resolution_proposal(response: str) -> ResolutionProposal:
 
 def _arguments(args: object, where: str) -> None:
     if not isinstance(args, dict) or not all(isinstance(key, str) for key in args):
-        raise LLMResponseError(f"{where}.args must be an object")
+        raise LLMResponseError(f"{where}.args must be an object", category="OBJECT_REQUIRED", path=f"{where}.args")
 
 
 def _parse_references(raw: object, where: str) -> tuple[EvidenceReference, ...]:
     items = _list(raw, f"{where}.evidence")
     if not items:
-        raise LLMResponseError(f"{where} needs evidence")
+        raise LLMResponseError(f"{where} needs evidence", category="EMPTY_ARRAY", path=f"{where}.evidence")
     result = []
-    for item in items:
-        _fields(item, {"source", "ref"}, where)
-        source = _nonempty(item["source"], f"{where}.source")
+    for index, item in enumerate(items):
+        label = f"{where}.evidence[{index}]"
+        _fields(item, {"source", "ref"}, label)
+        source = _nonempty(item["source"], f"{label}.source")
         if source not in {"requirement", "openapi", "ui-map", "testcase-step"}:
-            raise LLMResponseError(f"{where}.source is unknown")
-        _evidence_fields(source, item["ref"], where)
+            raise LLMResponseError(f"{label}.source is unknown", category="EVIDENCE_SOURCE", path=f"{label}.source")
+        _evidence_fields(source, item["ref"], f"{label}.ref")
         result.append(EvidenceReference(source, item["ref"]))
     return tuple(result)
 
@@ -340,7 +351,7 @@ def _parse_references(raw: object, where: str) -> tuple[EvidenceReference, ...]:
 def _evidence_fields(source: str, fields: object, where: str) -> None:
     """Check reference structure, never whether the referenced evidence is trusted."""
     if not isinstance(fields, dict) or not fields:
-        raise LLMResponseError(f"{where} must be a nonempty object")
+        raise LLMResponseError(f"{where} must be a nonempty object", category="OBJECT_REQUIRED", path=where)
     keys = set(fields)
     if source == "requirement":
         _fields(fields, {"id"}, where)
@@ -348,13 +359,13 @@ def _evidence_fields(source: str, fields: object, where: str) -> None:
         if not keys <= {"operation_id", "method", "path"} or not (
             "operation_id" in keys or {"method", "path"} <= keys
         ):
-            raise LLMResponseError(f"{where} requires operation_id or method and path; no extra fields")
+            raise LLMResponseError(f"{where} requires operation_id or method and path; no extra fields", category="EVIDENCE_SHAPE", path=where)
     elif source == "ui-map":
         if "page" not in keys or not keys <= {"page", "test_id", "role", "name"}:
-            raise LLMResponseError(f"{where} requires page; optional test_id, role, name only")
+            raise LLMResponseError(f"{where} requires page; optional test_id, role, name only", category="EVIDENCE_SHAPE", path=where)
     elif source == "testcase-step":
         if "step_seq" not in keys or not keys <= {"step_seq", "action"}:
-            raise LLMResponseError(f"{where} requires step_seq; optional action only")
+            raise LLMResponseError(f"{where} requires step_seq; optional action only", category="EVIDENCE_SHAPE", path=where)
     for key, value in fields.items():
         if source == "testcase-step" and key == "step_seq":
             _positive_int(value, f"{where}.step_seq")
@@ -366,7 +377,7 @@ def _unique_keys(pairs: list[tuple[str, object]]) -> dict:
     out: dict = {}
     for key, value in pairs:
         if key in out:
-            raise ValueError(f"Duplicate JSON key: {key}")
+            raise ValueError("Duplicate JSON key; identifier omitted")
         out[key] = value
     return out
 
@@ -377,22 +388,22 @@ def _reject_constant(value: str) -> None:
 
 def _fields(value: object, expected: set[str], where: str) -> None:
     if not isinstance(value, dict) or set(value) != expected:
-        raise LLMResponseError(f"{where} must have exactly {sorted(expected)}")
+        raise LLMResponseError(f"{where} must have exactly {sorted(expected)}", category="FIELD_SET", path=where)
 
 
 def _list(value: object, where: str) -> list:
     if not isinstance(value, list):
-        raise LLMResponseError(f"{where} must be an array")
+        raise LLMResponseError(f"{where} must be an array", category="ARRAY_REQUIRED", path=where)
     return value
 
 
 def _nonempty(value: object, where: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise LLMResponseError(f"{where} must be a nonempty string")
+        raise LLMResponseError(f"{where} must be a nonempty string", category="NONEMPTY_STRING_REQUIRED", path=where)
     return value
 
 
 def _positive_int(value: object, where: str) -> int:
     if type(value) is not int or value < 1:
-        raise LLMResponseError(f"{where} must be a positive integer")
+        raise LLMResponseError(f"{where} must be a positive integer", category="POSITIVE_INTEGER_REQUIRED", path=where)
     return value

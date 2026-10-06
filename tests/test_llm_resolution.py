@@ -243,3 +243,23 @@ def test_structurally_correct_fabricated_reference_still_requires_validator():
     result = validate_resolution_proposal(proposal, _context(_case()), _case())
     assert not result.valid_changes
     assert any(issue.code == "FABRICATED_EVIDENCE" for issue in result.issues)
+
+
+def test_expansion_evidence_error_has_exact_safe_path():
+    raw = {"testcase_id": "TC_LOGIN_001", "changes": [{
+        "step_seq": 2, "from_action": "perform.unmapped", "gap_codes": ["UNMAPPED_ACTION"],
+        "reason": "safe", "evidence": [{"source": "testcase-step", "ref": {"step_seq": 2}}],
+        "proposed": {"steps": [
+            {"action": "ui.click", "args": {}, "evidence": [{"source": "ui-map", "ref": {"url": "/login"}}]},
+            {"action": "ui.click", "args": {}, "evidence": []}]}}], "unresolved": []}
+    with pytest.raises(LLMResponseError) as caught:
+        parse_resolution_proposal(json.dumps(raw))
+    assert caught.value.category == "EVIDENCE_SHAPE"
+    assert caught.value.path == "changes[0].proposed.steps[0].evidence[0].ref"
+
+
+def test_duplicate_secret_json_key_not_in_error():
+    with pytest.raises(LLMResponseError) as caught:
+        parse_resolution_proposal('{"private-secret":1,"private-secret":2}')
+    assert caught.value.category == "JSON_STRUCTURE"
+    assert "private-secret" not in str(caught.value)

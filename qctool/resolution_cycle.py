@@ -15,7 +15,7 @@ from .exploration_plan import ExplorationPlan, ExplorationPlanValidationResult, 
 from .generate.from_openapi import Endpoint
 from .llm_exploration import ExplorationLLM, propose_exploration
 from .llm_resolution import LLMResponseError, ResolutionLLM, ResolutionProposal, propose_resolution
-from .llm_provider import LLMProviderError
+from .llm_provider import LLMProviderError, capture_provider_attempts
 from .proposal_validation import ProposalValidationResult, validate_resolution_proposal
 from .resolution_context import ResolutionContext, build_resolution_context
 from .resolve import ResolutionResult, resolve_deterministically
@@ -29,12 +29,14 @@ class ResolutionCycleIssue:
     stage: str
     code: str
     message: str
+    diagnostics: dict | None = None
 
 
 @dataclass(frozen=True)
 class ResolutionCycleStage:
     stage: str
     status: str
+    provider_attempts: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -117,7 +119,8 @@ def run_resolution_cycle(
 
     def attempt(stage, operation):
         try:
-            value = deepcopy(operation())
+            with capture_provider_attempts() as provider_attempts:
+                value = deepcopy(operation())
         except Exception as exc:
             code = "LLM_RESPONSE_ERROR" if isinstance(exc, LLMResponseError) else "STAGE_FAILED"
             message = f"{stage} failed; earlier progress retained."
@@ -129,10 +132,13 @@ def run_resolution_cycle(
                     "INVALID_RESPONSE", "EMPTY_RESPONSE", "INVALID_COMPLETION",
                 } else "LLM_PROVIDER_ERROR"
                 message = f"{stage}: {exc.safe_message} Earlier progress retained."
-            issues.append(ResolutionCycleIssue(stage, code, message))
-            audit.append(ResolutionCycleStage(stage, "FAILED"))
+            diagnostics = exc.diagnostics if isinstance(exc, LLMResponseError) else None
+            if diagnostics is not None and provider_attempts:
+                provider_attempts[-1]["parser_failure"] = diagnostics
+            issues.append(ResolutionCycleIssue(stage, code, message, diagnostics))
+            audit.append(ResolutionCycleStage(stage, "FAILED", tuple(provider_attempts)))
             return False, None
-        audit.append(ResolutionCycleStage(stage, getattr(value, "status", "COMPLETED")))
+        audit.append(ResolutionCycleStage(stage, getattr(value, "status", "COMPLETED"), tuple(provider_attempts)))
         for issue in getattr(value, "issues", ()):
             issues.append(ResolutionCycleIssue(stage, issue.code, issue.message))
         return True, value

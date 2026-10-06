@@ -34,6 +34,7 @@ def client():
 
 def http(monkeypatch, payload=None, raw=None, failure=None):
     response = MagicMock()
+    response.status = 200
     response.__enter__.return_value = response
     response.read.return_value = raw if raw is not None else json.dumps(payload).encode()
     opener = Mock()
@@ -73,7 +74,11 @@ def test_metadata_hook_exposes_only_token_counts(monkeypatch):
                           "secret": KEY, "details": {"private": KEY}}, headers={"Authorization": KEY})
     http(monkeypatch, payload)
     assert replace(client(), on_response_metadata=records.append).complete("JSON") == "{}"
-    assert records == [{"usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}}]
+    assert records[0]["usage"] == {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
+    assert records[0]["http_status"] == 200
+    assert records[0]["finish_reason"] == "stop"
+    assert records[0]["response_content_length"] == 2
+    assert KEY not in json.dumps(records)
 
 
 @pytest.mark.parametrize("failure,code", [
@@ -82,10 +87,14 @@ def test_metadata_hook_exposes_only_token_counts(monkeypatch):
     (TimeoutError(KEY), "TIMEOUT"), (URLError(TimeoutError(KEY)), "TIMEOUT"),
     (URLError(KEY), "NETWORK_ERROR"), (OSError(KEY), "NETWORK_ERROR"),
 ])
-def test_failure_is_controlled_secret_free_and_not_retried(monkeypatch, failure, code):
+def test_failure_is_controlled_secret_free_and_bounded(monkeypatch, failure, code):
     opener, _ = http(monkeypatch, failure=failure)
-    with pytest.raises(provider.LLMProviderError) as caught:
-        client().complete("JSON")
+    with provider.capture_provider_attempts() as records:
+        with pytest.raises(provider.LLMProviderError) as caught:
+            client().complete("JSON")
+    assert len(records) == opener.open.call_count
+    assert KEY not in json.dumps(records)
+    assert records[-1]["retry_scheduled"] is False
     assert caught.value.code == code
     assert KEY not in caught.value.safe_message
     if isinstance(failure, HTTPError):
@@ -94,7 +103,7 @@ def test_failure_is_controlled_secret_free_and_not_retried(monkeypatch, failure,
     assert KEY not in str(caught.value)
     assert KEY not in "".join(traceback.format_exception(caught.value))
     assert KEY not in repr(client())
-    assert opener.open.call_count == 1
+    assert opener.open.call_count == (2 if code == "TIMEOUT" or getattr(failure, "code", None) == 429 else 1)
 
 
 @pytest.mark.parametrize("payload,code", [
@@ -235,3 +244,60 @@ def test_offline_replay_ignores_enabled_provider_environment(monkeypatch):
     report = evaluate_generation(load_generation_suite(path))
     assert report.summary["replay_errors"] == 0
     assert report.summary["semantic_scenarios"] == {"correct": 25, "incorrect": 0, "unknown": 0}
+
+
+@pytest.mark.parametrize("failure", [TimeoutError(KEY),
+    HTTPError("https://provider.test", 429, KEY, {}, io.BytesIO()),
+    HTTPError("https://provider.test", 503, KEY, {}, io.BytesIO())])
+def test_single_transient_retry_then_success(monkeypatch, failure):
+    opener, _ = http(monkeypatch, envelope())
+    response = opener.open.return_value
+    opener.open.side_effect = [failure, response]
+    with provider.capture_provider_attempts() as records:
+        assert client().complete("JSON") == "{}"
+    assert len(records) == opener.open.call_count == 2
+    assert records[0]["retry_scheduled"] is True
+    assert records[1]["retry_scheduled"] is False
+    assert records[1]["http_status"] == 200
+    assert KEY not in json.dumps(records)
+
+
+def test_failed_incomplete_completion_preserves_safe_metadata_without_retry(monkeypatch):
+    payload = envelope(KEY, finish_reason="length")
+    payload["usage"] = {"completion_tokens": 2048, "secret": KEY}
+    opener, _ = http(monkeypatch, payload)
+    with provider.capture_provider_attempts() as records:
+        with pytest.raises(provider.LLMProviderError):
+            client().complete("JSON")
+    assert opener.open.call_count == 1
+    assert records[0]["finish_reason"] == "length"
+    assert records[0]["response_content_length"] == len(KEY)
+    assert records[0]["usage"] == {"completion_tokens": 2048}
+    assert records[0]["parser_failure"]["path"] == "choices[0].finish_reason"
+    assert KEY not in json.dumps(records)
+
+
+def test_schema_parser_path_persisted_in_cycle(monkeypatch):
+    from tests.test_resolution_cycle import _inputs
+    from qctool.resolution_cycle import run_resolution_cycle
+    case, context, _ = _inputs()
+    completion = {"testcase_id": case.id, "changes": [{"step_seq": 2}], "unresolved": []}
+    opener, _ = http(monkeypatch, envelope(json.dumps(completion)))
+    result = run_resolution_cycle(case, context, resolution_llm=client())
+    issue = next(i for i in result.issues if i.stage == "resolution_llm")
+    assert issue.diagnostics["category"] == "FIELD_SET"
+    assert issue.diagnostics["path"] == "changes[0]"
+    stage = next(i for i in result.audit if i.stage == "resolution_llm")
+    assert stage.provider_attempts[0]["http_status"] == 200
+    assert stage.provider_attempts[0]["parser_failure"] == issue.diagnostics
+    assert opener.open.call_count == 1
+
+
+def test_invalid_completion_json_records_position_without_content_or_retry(monkeypatch):
+    opener, _ = http(monkeypatch, envelope('{"private":' + KEY))
+    with provider.capture_provider_attempts() as records:
+        with pytest.raises(provider.LLMProviderError):
+            client().complete("JSON")
+    assert records[0]["parser_failure"] == {"category": "JSON_SYNTAX", "path": "$", "position": 12}
+    assert opener.open.call_count == 1
+    assert KEY not in json.dumps(records)
