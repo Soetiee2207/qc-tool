@@ -1,4 +1,4 @@
-"""Untrusted exploration plans and deterministic approval of observation requests.
+"""Untrusted exploration plans and deterministic approval of bounded observations.
 
 Validation never opens a browser, reads authentication files, or chooses targets.
 The caller executes approved ExplorationRequest objects separately, if desired.
@@ -15,7 +15,8 @@ from .generate.mapper import RE_OPEN_PATH
 from .proposal_validation import _context_matches_case
 from .resolution_context import ResolutionContext
 from .testcase import TestCase
-from .ui.explore import ExplorationRequest, SESSION_MODES, _origin, validate_exploration_request
+from .ui.explore import (ExplorationAction, ExplorationRequest, MAX_EXPLORATION_ACTIONS,
+                         SESSION_MODES, _origin, validate_exploration_request)
 
 
 MAX_EXPLORATION_REQUESTS = 3
@@ -35,10 +36,14 @@ class PlannedExploration:
     target: str
     purposes: tuple[ExplorationPurpose, ...]
     session: str = "anonymous"
+    actions: tuple[ExplorationAction, ...] = ()
 
     def to_dict(self) -> dict:
-        return {"target": self.target, "session": self.session,
-                "purposes": [asdict(purpose) for purpose in self.purposes]}
+        result = {"target": self.target, "session": self.session,
+                  "purposes": [asdict(purpose) for purpose in self.purposes]}
+        if self.actions:
+            result["actions"] = [asdict(action) for action in self.actions]
+        return result
 
 
 @dataclass(frozen=True)
@@ -165,14 +170,98 @@ def _grounded_targets(case: TestCase, context: ResolutionContext, base_url: str)
     return targets
 
 
+def _click_grounding(item, target, context, case, base_url):
+    """V1: only an explicitly required empty-login submit, never a login with data.
+
+    Names alone do not select controls. A unique stable test ID on the exact
+    page must match the entire source click clause. Account provisioning and
+    general-purpose/destructive controls have no approval rule here.
+    """
+    bindings = []
+    if item.session != "anonymous" or urlsplit(target).path != "/login":
+        raise ValueError("Only anonymous empty-login inspection is supported")
+    requirements = context.specification.get("requirements", [])
+    empty = "cả hai ô email và mật khẩu trống"
+    requirements = [req for req in requirements
+                    if empty in [clause.strip() for clause in req.get("given", "").split(";")]
+                    and "không gửi POST /api/auth/login" in [
+                        clause.strip() for clause in req.get("then", "").split(";")]]
+    if not requirements:
+        raise ValueError("No exact source empty-credential precondition")
+    pages = [p for p in context.observations.get("ui_pages", [])
+             if _normalized_target(p.get("url", ""), base_url) == target]
+    # Deduplicate identical snapshots, but conflicting metadata stays ambiguous.
+    elements = []
+    for page in pages:
+        ids = [e.get("test_id") for e in page.get("elements", []) if e.get("test_id")]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Duplicate stable IDs on the page")
+        for element in page.get("elements", []):
+            if element not in elements:
+                elements.append(element)
+    for index, action in enumerate(item.actions):
+        if not isinstance(action, ExplorationAction) or action.action != "ui.click":
+            raise ValueError("Only ui.click is supported")
+        if type(action.step_seq) is not int or not isinstance(action.target, str):
+            raise ValueError("Invalid click identity")
+        if not any(p.step_seq == action.step_seq and p.gap_code == "UNMAPPED_ACTION" for p in item.purposes):
+            raise ValueError("Click must reference its current unmapped source step")
+        steps = [s for s in case.steps if s.seq == action.step_seq and s.action in case.UNMAPPED_ACTIONS]
+        matches = [e for e in elements if e.get("test_id") == action.target]
+        if len(matches) != 1:
+            raise ValueError("Stable target absent, ambiguous or on another page")
+        element = matches[0]
+        if element.get("role") != "button" or element.get("name") not in {"Đăng nhập", "Login", "Sign in"}:
+            raise ValueError("Control is not an allowed empty-login submit")
+        clause = f"Bấm {element['name']}"
+        source_requirements = [req for req in requirements if req.get("when") == clause]
+        justified = len(steps) == 1 and (
+            steps[0].action == "perform.unmapped" and steps[0].args.get("description") == clause
+            or steps[0].action == "assert.unmapped" and
+            steps[0].args.get("expected") == "không gửi POST /api/auth/login"
+        )
+        if not justified or not source_requirements:
+            raise ValueError("Full source clause does not justify this submit")
+        fields = []
+        for typ in ("email", "password"):
+            candidates = [e for e in elements
+                          if (e.get("input_type") == "password" if typ == "password" else
+                              e.get("input_type") in {"text", "email"} and e.get("name") in {
+                                  "Email", "Email hoặc Số điện thoại", "Email address"})
+                          and e.get("test_id") and e.get("role") in {"input", "textbox"}]
+            if len(candidates) != 1:
+                raise ValueError("Exact credential controls are missing or ambiguous")
+            fields.append(candidates[0]["test_id"])
+        operations = [op for op in context.interface_contract.get("api_operations", [])
+                      if op.get("method") == "POST" and op.get("path") == "/api/auth/login"]
+        selectors = []
+        for operation in operations:
+            for server in operation.get("servers", []):
+                from .response_capture import origin_of, validate_capture
+                selector = {"method": "POST", "path": operation["path"],
+                            "origin": origin_of(server), "timeout_ms": 2000}
+                validate_capture(selector)
+                if selector not in selectors:
+                    selectors.append(selector)
+        if len(selectors) != 1:
+            raise ValueError("Exact source request observation/contract is missing or ambiguous")
+        bindings.append({"source": "validated_click", "action_index": index,
+                         "target": action.target, "step_seq": action.step_seq,
+                         "name": element["name"],
+                         "page": target, "empty_inputs": fields, "capture_requests": selectors[0],
+                         "source_clause": clause,
+                         "requirement_ids": [req["id"] for req in source_requirements]})
+    return bindings
+
+
 def validate_exploration_plan(
     plan: ExplorationPlan, context: ResolutionContext, case: TestCase, base_url: str,
 ) -> ExplorationPlanValidationResult:
-    """Approve only grounded navigate-and-inspect requests for supplied current gaps.
+    """Approve grounded inspection and the narrow empty-login click rule.
 
     Exact URL identity retains query/fragment and path case; no semantic matching
-    or API endpoint inference occurs. Duplicate target/session pairs merge before
-    the three-request budget is enforced in plan order.
+    or API endpoint inference occurs. Identical target/session/action sequences
+    merge before the request and total-click budgets are enforced in plan order.
     """
     report = analyze_executability(case)
     global_issues: list[ExplorationPlanIssue] = []
@@ -193,7 +282,7 @@ def validate_exploration_plan(
 
     gaps = {(gap.code, gap.step_seq) for gap in context.gaps}
     targets = _grounded_targets(case, context, base_url)
-    valid: dict[tuple[str, str], ValidatedExplorationRequest] = {}
+    valid: dict[tuple, ValidatedExplorationRequest] = {}
     rejected: list[RejectedExploration] = []
     issues: list[ExplorationPlanIssue] = []
     for index, item in enumerate(plan.requests):
@@ -204,6 +293,10 @@ def validate_exploration_plan(
 
         if not isinstance(item.session, str) or item.session not in SESSION_MODES:
             fail("UNSUPPORTED_SESSION", "Only existing anonymous/authenticated sessions are allowed.")
+        if not isinstance(item.actions, tuple) or any(not isinstance(a, ExplorationAction) for a in item.actions):
+            fail("INVALID_ACTION", "Actions must be structured ordered click requests.")
+        elif len(item.actions) > MAX_EXPLORATION_ACTIONS:
+            fail("ACTION_BUDGET_EXCEEDED", "At most two actions are allowed per plan.")
         if (not isinstance(item.target, str) or not item.target
                 or "\\" in item.target or any(char.isspace() for char in item.target)):
             fail("INVALID_TARGET", "Target must be an unambiguous URL or application path.")
@@ -236,10 +329,18 @@ def validate_exploration_plan(
                 if target not in targets:
                     fail("TARGET_NOT_GROUNDED", "No exact testcase route, selected UI page/link, or application entry grounds this target.")
 
+        action_grounding = []
+        if not failures and item.actions:
+            try:
+                action_grounding = _click_grounding(item, target, context, case, base_url)
+            except (ValueError, TypeError, KeyError):
+                fail("UNSAFE_OR_UNGROUNDED_ACTION", "Click is not a unique page-bound source-justified empty-login action.")
         if not failures:
-            key = target, item.session
+            key = target, item.session, item.actions
             if key not in valid and len(valid) >= MAX_EXPLORATION_REQUESTS:
                 fail("REQUEST_BUDGET_EXCEEDED", "Only the first three unique valid target/session pairs are approved.")
+            if key not in valid and sum(len(v.request.actions) for v in valid.values()) + len(item.actions) > MAX_EXPLORATION_ACTIONS:
+                fail("ACTION_BUDGET_EXCEEDED", "At most two total clicks are approved per plan.")
 
         if failures:
             rejected.append(RejectedExploration(index, deepcopy(item), tuple(failures)))
@@ -252,9 +353,10 @@ def validate_exploration_plan(
             target, session=item.session, collect_text=True,
             collect_network=any(purpose.intent == "observe_network" for purpose in purposes),
             reason="; ".join(dict.fromkeys(purpose.reason for purpose in purposes)),
+            actions=tuple(deepcopy(item.actions)),
         )
         valid[key] = ValidatedExplorationRequest(
-            request, case.id, purposes, tuple(deepcopy(targets[target])),
+            request, case.id, purposes, tuple(deepcopy(targets[target] + action_grounding)),
             (previous.plan_indices if previous else ()) + (index,),
         )
 

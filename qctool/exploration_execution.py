@@ -68,6 +68,8 @@ def _enrich(observations: dict, result: ExplorationResult,
         "forms": payload["forms"], "network": payload["network"],
         "issues": payload["issues"], "truncated": payload["truncated"],
     }
+    if payload.get("action_observations"):
+        provenance["action_observations"] = payload["action_observations"]
     pages = observations.setdefault("ui_pages", [])
     # Deduplicate matching page snapshots, not merely URLs. Session-specific or
     # changed states remain separate; old observations are never contradicted away.
@@ -125,7 +127,7 @@ def execute_validated_exploration(
             continue
         try:
             result = deepcopy(explore_page(
-                deepcopy(approved.request), base_url=base_url,
+                deepcopy(approved if approved.request.actions else approved.request), base_url=base_url,
                 storage_state=storage_state if approved.requires_auth_state else None,
                 timeout_ms=timeout_ms, render_wait_ms=render_wait_ms,
             ))

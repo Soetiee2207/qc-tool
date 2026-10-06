@@ -21,7 +21,7 @@ from .llm_resolution import (
     _reject_constant, _unique_keys,
 )
 from .resolution_context import ResolutionContext
-from .ui.explore import SESSION_MODES
+from .ui.explore import ExplorationAction, SESSION_MODES
 
 
 class ExplorationLLM(Protocol):
@@ -127,7 +127,17 @@ def parse_exploration_plan(response: str) -> ExplorationPlan:
     requests = []
     for index, item in enumerate(_list(raw["requests"], "requests")):
         where = f"requests[{index}]"
-        _fields(item, {"target", "session", "purposes"}, where)
+        _fields(item, {"target", "session", "purposes"} |
+                ({"actions"} if isinstance(item, dict) and "actions" in item else set()), where)
+        actions = []
+        for position, action in enumerate(_list(item.get("actions", []), f"{where}.actions")):
+            label = f"{where}.actions[{position}]"
+            _fields(action, {"action", "target", "step_seq"}, label)
+            actions.append(ExplorationAction(
+                target=_nonempty(action["target"], f"{label}.target"),
+                step_seq=_positive_int(action["step_seq"], f"{label}.step_seq"),
+                action=_nonempty(action["action"], f"{label}.action"),
+            ))
         purposes_raw = _list(item["purposes"], f"{where}.purposes")
         if not purposes_raw:
             raise LLMResponseError(f"{where}.purposes must not be empty")
@@ -146,5 +156,6 @@ def parse_exploration_plan(response: str) -> ExplorationPlan:
             target=_nonempty(item["target"], f"{where}.target"),
             session=_nonempty(item["session"], f"{where}.session"),
             purposes=tuple(purposes),
+            actions=tuple(actions),
         ))
     return ExplorationPlan(testcase_id, tuple(requests))
