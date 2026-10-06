@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import json
 from typing import Iterable
 
 from .coverage import CoverageObligation, CoverageReport, CoverageStatus, _matches, _text
@@ -79,6 +80,12 @@ def _candidate(obligation: CoverageObligation, testcase_id: str, module: str) ->
             steps.append(Step(len(steps) + 1, kind, "perform.unmapped", {"description": text}))
     steps.append(Step(len(steps) + 1, StepKind.THEN, "assert.unmapped",
                       {"expected": obligation.expected}))
+    for step in steps:
+        step.note = "[source-clause] " + json.dumps({
+            "obligation_id": obligation.id, "source": asdict(obligation.source),
+            "field": step.kind.value,
+            "text": step.args.get("description", step.args.get("expected")),
+        }, ensure_ascii=False, sort_keys=True)
     case_type, technique = CaseType.STATE, Technique.ACCEPTANCE_CRITERION
     if obligation.kind == "happy_path":
         case_type = CaseType.POSITIVE

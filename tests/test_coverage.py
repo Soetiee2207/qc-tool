@@ -112,7 +112,8 @@ def test_unknown_or_incomplete_source(req):
 def test_trace_alone_cannot_prove_mapped_assertion_semantics():
     case = cases_for([ac()])[0]
     case.steps[-1] = Step(3, StepKind.THEN, "assert.visible", {"target": "dashboard"})
-    case.steps[0].args.pop("expectation", None)
+    for step in case.steps:
+        step.args.pop("expectation", None)
     report = analyze_coverage([ac()], [case])
     assert report.requirements[0].status == Status.UNASSESSABLE
     assert not report.missing_obligations

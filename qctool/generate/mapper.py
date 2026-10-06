@@ -15,6 +15,7 @@ Mapper chạy **deterministic** — không LLM. Cùng input cho cùng output.
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -303,22 +304,42 @@ def _map_steps(steps: list[Step], ui_map: UIMap, root: str,
 
         text = (step.args.get("description") or step.args.get("expected") or "").strip()
 
-        if step.action == "perform.unmapped":
-            mapped = _map_action(text, ui_map, root, api_paths)
-            mapped = _drop_unverified_http(mapped, api_paths, stats, case_id, text)
-        else:
-            mapped = _map_expectation(text, ui_map, root, api_paths)
-            mapped = _drop_unverified_http(mapped, api_paths, stats, case_id, text)
-
-        if mapped is None:
-            seq += 1
-            out.append(Step(seq, step.kind, step.action, step.args,
-                            f"chưa map được: {text[:60]}"))
-            stats.reasons.append(f"{case_id}: không map được «{text[:50]}»")
-        else:
-            for action, args in mapped:
+        # Map explicit sibling clauses independently. A partial mapping must
+        # never stand in for the original compound action/expected outcome.
+        for index, clause in enumerate(_split_conditions(text), 1):
+            note = (step.note + "\n[mapper-clause] " + json.dumps({
+                "testcase_id": case_id, "source_step_seq": step.seq,
+                "source_action": step.action, "source_text": text,
+                "clause_index": index, "text": clause,
+            }, ensure_ascii=False, sort_keys=True)).strip()
+            if step.kind == StepKind.GIVEN:
+                # A route inside a precondition does not prove its state/data.
+                # Keep the clause for deterministic resolution/validation.
+                mapped = None
+            elif "," in clause and not (
+                step.action == "assert.unmapped"
+                and (fields := RE_RESPONSE_FIELDS.fullmatch(clause))
+                and re.fullmatch(r"[\w.]+(?:\s*,\s*[\w.]+)*", fields.group(1))
+            ):
+                # Commas may separate actions or merely belong to prose. Do
+                # not let a prefix/route match consume a compound sentence.
+                # Keep it whole; the existing response-field list is explicit.
+                mapped = None
+            elif step.action == "perform.unmapped":
+                mapped = _map_action(clause, ui_map, root, api_paths)
+            else:
+                mapped = _map_expectation(clause, ui_map, root, api_paths)
+            mapped = _drop_unverified_http(mapped, api_paths, stats, case_id, clause)
+            if not mapped:
                 seq += 1
-                out.append(Step(seq, step.kind, action, args))
+                args = {**step.args}
+                args["description" if step.action == "perform.unmapped" else "expected"] = clause
+                out.append(Step(seq, step.kind, step.action, args, note))
+                stats.reasons.append(f"{case_id}: không map được «{clause[:50]}»")
+            else:
+                for action, args in mapped:
+                    seq += 1
+                    out.append(Step(seq, step.kind, action, args, note))
     return out
 
 
@@ -844,8 +865,10 @@ def _map_expectation(text: str, ui_map: UIMap, root: str,
     # là bỏ sót đúng nửa phần quan trọng (thứ bị ẩn).
     if len(parts := _split_conditions(text)) > 1:
         for part in parts:
-            if sub := _map_expectation(part, ui_map, root, api_paths):
-                actions.extend(sub)
+            sub = _map_expectation(part, ui_map, root, api_paths)
+            if not sub:
+                return None
+            actions.extend(sub)
         return actions or None
 
     # Kỳ vọng về hành vi/UX (vô hiệu hoá, lỗi JS, request lỗi, accessibility).

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass, field
 
 from ..testcase import (
@@ -78,9 +79,13 @@ def generate_from_acceptance(requirements: list[dict], alloc: IdAllocator,
             title=_title_from(when, then),
             objective=f"Kiểm chứng {req['id']}" + (f" của {us}" if us else ""),
             steps=[
-                Step(1, StepKind.WHEN, "perform.unmapped",
-                     {"description": when.strip(), "expectation": then.strip()}),
-                Step(2, StepKind.THEN, "assert.unmapped", {"expected": then.strip()}),
+                Step(1, StepKind.GIVEN, "perform.unmapped", {"description": given.strip()},
+                     _source_note(req, "given", given)),
+                Step(2, StepKind.WHEN, "perform.unmapped",
+                     {"description": when.strip(), "expectation": then.strip()},
+                     _source_note(req, "when", when)),
+                Step(3, StepKind.THEN, "assert.unmapped", {"expected": then.strip()},
+                     _source_note(req, "then", then)),
             ],
             priority=priority,
             case_type=case_type,
@@ -100,6 +105,13 @@ def generate_from_acceptance(requirements: list[dict], alloc: IdAllocator,
         ))
 
     return result
+
+
+def _source_note(req: dict, field: str, text: str) -> str:
+    return "[source-clause] " + json.dumps({
+        "requirement_id": req["id"], "field": field,
+        "source": req.get("source", {}), "text": text.strip(),
+    }, ensure_ascii=False, sort_keys=True)
 
 
 def _clean(text: str) -> str:
