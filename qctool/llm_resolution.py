@@ -148,6 +148,16 @@ def _evidence_catalog(data: dict) -> list[dict]:
                        if element.get(key)}
             if locator:
                 add("ui-map", {"page": page["url"], **locator})
+    for state in data['observations'].get('page_states', []):
+        if not state.get('valid') or not state.get('state_id'):
+            continue
+        page = state['page']
+        ref = {'page': page['url'], 'state_id': state['state_id']}
+        add('ui-map', ref)
+        for element in page.get('elements', []):
+            locator = {k: element[k] for k in ('test_id', 'role', 'name') if element.get(k)}
+            if locator:
+                add('ui-map', {**ref, **locator})
     for step in data["testcase"].get("steps", []):
         add("testcase-step", {"step_seq": step["seq"], "action": step["action"]})
     return references
@@ -157,7 +167,7 @@ _EVIDENCE_SCHEMA = {
     "requirement": {"required": ["id"], "optional": [], "types": {"id": "nonempty string"}},
     "openapi": {"required": "operation_id OR both method and path",
                 "optional": ["operation_id", "method", "path"], "types": "nonempty strings"},
-    "ui-map": {"required": ["page"], "optional": ["test_id", "role", "name"],
+    "ui-map": {"required": ["page"], "optional": ["test_id", "role", "name", "state_id"],
                "types": "nonempty strings; page is the exact context page URL"},
     "testcase-step": {"required": ["step_seq"], "optional": ["action"],
                       "types": {"step_seq": "positive integer", "action": "nonempty string"}},
@@ -466,8 +476,8 @@ def _evidence_fields(source: str, fields: object, where: str) -> None:
         ):
             raise LLMResponseError(f"{where} requires operation_id or method and path; no extra fields", category="EVIDENCE_SHAPE", path=where)
     elif source == "ui-map":
-        if "page" not in keys or not keys <= {"page", "test_id", "role", "name"}:
-            raise LLMResponseError(f"{where} requires page; optional test_id, role, name only", category="EVIDENCE_SHAPE", path=where)
+        if "page" not in keys or not keys <= {"page", "test_id", "role", "name", "state_id"}:
+            raise LLMResponseError(f"{where} requires page; optional test_id, role, name, state_id only", category="EVIDENCE_SHAPE", path=where)
     elif source == "testcase-step":
         if "step_seq" not in keys or not keys <= {"step_seq", "action"}:
             raise LLMResponseError(f"{where} requires step_seq; optional action only", category="EVIDENCE_SHAPE", path=where)

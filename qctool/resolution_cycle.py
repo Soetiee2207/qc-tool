@@ -83,7 +83,7 @@ def _refresh_context(
             # Re-adding the pre-action map would duplicate stable locators.
             explored = field == "observations" and any(
                 old.get("url") == record.get("url") and any(
-                    source.get("action_observations") for source in old.get("explorations", []))
+                    source.get("action_observations") or source.get('state_id') for source in old.get("explorations", []))
                 for old in records)
             same_content = field == "observations" and any(
                 {k: v for k, v in old.items() if k != "elements"} ==

@@ -1,10 +1,10 @@
-"""Exact source proofs for bounded V2 UI exploration; no browser/model calls."""
+"""Exact source proofs for bounded stateful UI exploration; no browser/model calls."""
 from collections import Counter
 from dataclasses import asdict
 import hashlib
 import json
 import re
-from urllib.parse import urlsplit
+from urllib.parse import urljoin
 
 from .step_expansion import expected_expansion
 from .test_fixtures import REGISTRY, is_alias
@@ -48,17 +48,22 @@ def _meanings(step, data):
 
 def ground_actions(item, target, context, case, base_url, store):
     from .exploration_plan import _normalized_target
-    pages = [p for p in context.observations.get('ui_pages', [])
-             if _normalized_target(p.get('url', ''), base_url) == target
-             and p.get('session') in (None, item.session)]
-    if len(pages) != 1:
-        raise ValueError('Ambiguous current page')
-    page = pages[0]
-    elements = page.get('elements', [])
-    ids = Counter(e.get('test_id') for e in elements if e.get('test_id'))
     positions, bindings = {}, []
     last_step = 0
+    current_page = target
     for index, action in enumerate(item.actions):
+        if store and any(store.redact(value) != value for value in (action.page, action.expected_url) if value is not None):
+            raise ValueError('Secret-bearing page reference')
+        if action.page is not None and _normalized_target(action.page, base_url) != current_page:
+            raise ValueError('Action belongs to a different workflow state')
+        pages = [p for p in context.observations.get('ui_pages', [])
+                 if _normalized_target(p.get('url', ''), base_url) == current_page
+                 and p.get('session') in (None, item.session)]
+        if len(pages) != 1:
+            raise ValueError('Ambiguous or unobserved current page')
+        page = pages[0]
+        elements = page.get('elements', [])
+        ids = Counter(e.get('test_id') for e in elements if e.get('test_id'))
         if (action.action not in ALLOWED_ACTIONS or type(action.step_seq) is not int
                 or action.step_seq < last_step or not isinstance(action.target, str)):
             raise ValueError('Unsupported or unordered action')
@@ -91,9 +96,9 @@ def ground_actions(item, target, context, case, base_url, store):
             raise ValueError('Source/control mismatch')
         args = {'target': action.target}
         binding = {'source': 'validated_action', 'action_index': index, 'action': action.action,
-                   'target': action.target, 'step_seq': step.seq, 'page': target,
+                   'target': action.target, 'step_seq': step.seq, 'page': current_page,
                    'name': element['name'], 'role': element['role'],
-                   'tag': element.get('tag') or {'input': 'input', 'textbox': 'input', 'combobox': 'select', 'button': 'button'}.get(element['role']),
+                   'tag': element.get('tag') or {'input': 'input', 'textbox': 'input', 'combobox': 'select', 'button': 'button', 'link': 'a'}.get(element['role']),
                    'input_type': element.get('input_type') or ('text' if element.get('role') in {'input', 'textbox'} and element.get('tag') != 'textarea' else None), 'source_clause': meaning['source_clause'],
                    'requirement_ids': [r['id'] for r in requirements]}
         if action.action in {'ui.fill', 'ui.select'}:
@@ -123,8 +128,10 @@ def ground_actions(item, target, context, case, base_url, store):
                     raise ValueError('Unknown option')
                 binding['option_source'] = 'ui-map' if options else 'requirement'
         else:
-            if action.value is not None or binding['tag'] != 'button' or _norm(element['name']) not in SAFE_BUTTONS:
+            if action.value is not None or binding['tag'] not in {'button', 'a'} or _norm(element['name']) not in SAFE_BUTTONS:
                 raise ValueError('Unsupported click')
+            if binding['tag'] == 'a' and not action.expected_url:
+                raise ValueError('Navigation link needs an approved destination')
             if _norm(element['name']) in {'login', 'sign in', 'dang nhap', 'đăng nhập'}:
                 from .response_capture import origin_of
                 operations = [op for op in context.interface_contract.get('api_operations', [])
@@ -133,6 +140,26 @@ def ground_actions(item, target, context, case, base_url, store):
                 if len(operations) != 1 or len(origins) != 1:
                     raise ValueError('Ambiguous login contract')
                 binding['capture_requests'] = {'method': 'POST', 'path': '/api/auth/login', 'origin': origins.pop(), 'timeout_ms': 2000}
+        destination = current_page
+        if action.expected_url is not None:
+            destination = _normalized_target(action.expected_url, base_url)
+            if destination is None or forbidden(destination):
+                raise ValueError('Unsafe transition')
+            href = element.get('href')
+            if binding['tag'] == 'a' and (not href or _normalized_target(urljoin(current_page, href), base_url) != destination):
+                raise ValueError('Link destination differs from the approved transition')
+            explicit = any(
+                _normalized_target(token.strip('`\"\''), base_url) == destination
+                for requirement in requirements for field in ('given', 'when', 'then')
+                for token in re.findall(r'https?://[^\s;]+|(?<!\w)/[^\s;]*', requirement.get(field, ''))
+            )
+            if not (href and _normalized_target(urljoin(current_page, href), base_url) == destination or explicit):
+                raise ValueError('Destination is not tied to source or clicked href')
+            binding['transition'] = {'from': current_page, 'to': destination,
+                                     'source': 'ui_href' if href and _normalized_target(urljoin(current_page, href), base_url) == destination else 'requirement_route'}
+            binding['href'] = href
+        binding['expected_url'] = destination
+        current_page = destination
         if action.action not in ACTION_SPECS:
             raise ValueError('Unknown action')
         Step(step.seq, step.kind, action.action, args).validate()

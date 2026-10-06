@@ -214,7 +214,7 @@ def test_real_ordered_sequence_and_redaction(local_app, mode):
 
 
 @pytest.mark.playwright
-@pytest.mark.parametrize('suffix,code', [('?stale','ACTION_PRECONDITION_FAILED'),('?redirect','ACTION_PAGE_CHANGED'),('?unsafe','UNSAFE_NETWORK_REQUEST')])
+@pytest.mark.parametrize('suffix,code', [('?stale','ACTION_PRECONDITION_FAILED'),('?redirect','UNEXPECTED_TRANSITION'),('?unsafe','UNSAFE_NETWORK_REQUEST')])
 def test_later_action_stops_after_invalidated_grounding(local_app,suffix,code):
     base,counts=local_app
     case,context,ui,store,plan=inputs(base,suffix=suffix)

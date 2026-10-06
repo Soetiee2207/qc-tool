@@ -67,7 +67,7 @@ def build_exploration_prompt(
     return "\n\n".join([
         "Propose an UNTRUSTED exploration plan as JSON. Do not execute or repair anything.",
         "Rules: Plan only observation for the listed unresolved gaps. Allowed intents "
-        "are inspect_page and observe_network: navigate once and inspect. "
+        "are inspect_page and observe_network: navigate to the entry page, then inspect approved states. "
         "Only bounded approved ui.fill, ui.select and ui.click are permitted. At most "
         "five ordered actions per request. Every target must be an exact unique stable "
         "test_id on the requested current page, justified in source-clause order by "
@@ -78,11 +78,12 @@ def build_exploration_prompt(
         "Select only a native select and an exact observed option value or explicit "
         "source option; the explorer verifies it again. No upload, account creation, "
         "destructive/admin/payment action or arbitrary JavaScript. Only source-required "
-        "Login, Validate, Check, Search, Filter or Preview button clicks have a V2 "
+        "Login, Validate, Check, Search, Filter or Preview button clicks (and grounded "
+        "safe links with approved destinations) have an "
         "approval rule. Unknown controls stay unresolved. The V1 empty-login rule "
         "remains supported. Each action.step_seq names the unresolved source gap, "
         "not an already executable click. Every action requires deterministic approval; "
-        "stop if previous actions change page or invalidate grounding. Omit actions "
+        "stop if previous actions change page unexpectedly or invalidate grounding. Omit actions "
         "when insufficient evidence. Use only explicit routes from testcase ui.goto/notes, selected UI "
         "page URLs, or hrefs in the supplied UI evidence. Do not guess routes or invent "
         "elements. Targets must be safe application paths or same-origin HTTP(S) URLs; "
@@ -113,12 +114,20 @@ def build_exploration_prompt(
         "actions is OPTIONAL and belongs INSIDE its request at requests[i].actions; "
         "omit it for page-only inspection. Every request has exactly target, session, "
         "purposes and optionally actions. Each action has exactly action, target, "
-        "step_seq; ui.fill and ui.select also require value. Never put value on ui.click. Do not add any other fields. requests may be [] when unresolved. Each request needs a "
+        "step_seq; ui.fill and ui.select also require value. Optional page and expected_url "
+        "are the only state fields. Never put value on ui.click. Do not add any other fields. requests may be [] when unresolved. Each request needs a "
         "nonempty purposes array. step_seq is an integer or null, not placeholder text. "
         "Angle-bracket strings indicate placeholders, not evidence.",
         "Inside requests[i].actions, fill/select shape is exactly "
         '{"action":"ui.fill|ui.select","target":"<grounded test_id>","step_seq":1,"value":"<public literal or available fixture alias>"}. '
         "Replace step_seq with the real source gap; no extra fields.",
+        "V3 optional action fields: page (expected current URL), expected_url "
+        "(exact destination after this approved action). A navigation action requires expected_url "
+        "grounded in the clicked link's observed href or an explicit source route. Subsequent actions "
+        "must use exact controls already observed on that destination page. No guessed "
+        "redirects, foreign pages or ui.goto actions. Omit a workflow when destination "
+        "controls or transition evidence are insufficient. These optional fields are "
+        "the only additions to the action schema above.",
         section("OUTPUT JSON SHAPE", _OUTPUT_SHAPE),
     ])
 
@@ -159,7 +168,10 @@ def parse_exploration_plan(response: str) -> ExplorationPlan:
         for position, action in enumerate(_list(item.get("actions", []), f"{where}.actions")):
             label = f"{where}.actions[{position}]"
             verb = _nonempty(action.get("action"), f"{label}.action") if isinstance(action, dict) else None
-            _fields(action, {"action", "target", "step_seq"} | ({"value"} if verb in {"ui.fill", "ui.select"} else set()), label)
+            state_fields = {key for key in ('page', 'expected_url') if isinstance(action, dict) and key in action}
+            _fields(action, {"action", "target", "step_seq"} | ({"value"} if verb in {"ui.fill", "ui.select"} else set()) | state_fields, label)
+            for key in state_fields:
+                _nonempty(action[key], f'{label}.{key}')
             if verb in {"ui.fill", "ui.select"} and not isinstance(action["value"], str):
                 raise LLMResponseError(f"{label}.value must be a string")
             actions.append(ExplorationAction(
@@ -167,6 +179,7 @@ def parse_exploration_plan(response: str) -> ExplorationPlan:
                 step_seq=_positive_int(action["step_seq"], f"{label}.step_seq"),
                 action=verb,
                 value=action.get("value"),
+                page=action.get('page'), expected_url=action.get('expected_url'),
             ))
         purposes_raw = _list(item["purposes"], f"{where}.purposes")
         if not purposes_raw:

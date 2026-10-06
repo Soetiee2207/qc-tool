@@ -55,6 +55,37 @@ def _element_identity(element: dict) -> dict:
 def _enrich(observations: dict, result: ExplorationResult,
             approved: ValidatedExplorationRequest) -> None:
     payload = result.to_dict()  # Preserve the explorer's already redacted output.
+    if payload.get('states'):
+        history = observations.setdefault('page_states', [])
+        for state in payload['states']:
+            entry = {**deepcopy(state), 'session': approved.request.session,
+                     'testcase_id': approved.testcase_id,
+                     'purposes': [asdict(p) for p in approved.purposes],
+                     'request': payload['request']}
+            if not any(s['state_id'] == entry['state_id'] for s in history):
+                history.append(entry)
+            if not state['valid']:
+                continue
+            snapshot = state['page']
+            pages = observations.setdefault('ui_pages', [])
+            matching = [p for p in pages if p.get('url') == snapshot['url']
+                        and p.get('session') in (None, approved.request.session)]
+            if len(matching) > 1:
+                continue  # Preserve ambiguous old evidence; never arbitrarily promote.
+            page = matching[0] if matching else {}
+            if not matching:
+                pages.append(page)
+            old = deepcopy({k: v for k, v in page.items() if k != 'explorations'})
+            audit = page.setdefault('explorations', [])
+            audit.append({'source': state['source'], 'state_id': state['state_id'],
+                          'previous_snapshot': old, 'request': payload['request'],
+                          'action_observations': [a for a in payload.get('action_observations', [])
+                                                  if a.get('state_id') == state['state_id']],
+                          'network': state['network'], 'truncated': payload['truncated']})
+            page.update(deepcopy(snapshot))
+            page.update(session=approved.request.session, state_id=state['state_id'], evidence=state['source'])
+            observations['current_state_id'] = state['state_id']
+        return
     page = payload["page"]
     if not page or not (page["title"] or page["elements"] or page["text"]
                         or payload["forms"] or payload["network"]):
@@ -152,8 +183,9 @@ def execute_validated_exploration(
             # Stage enrichment independently so malformed results cannot leave
             # half-written observations or discard prior successful evidence.
             observations = deepcopy(enriched.observations)
-            if result.explored:
+            if result.explored or result.states:
                 _enrich(observations, result, approved)
+                enriched = replace(enriched, observations=observations)
             results.append(result)
             issues.extend(ExplorationExecutionIssue(issue.code, issue.message, index)
                           for issue in result.issues)

@@ -35,6 +35,8 @@ class ExplorationAction:
     step_seq: int
     action: str = "ui.click"
     value: str | None = field(default=None, repr=False)
+    page: str | None = None
+    expected_url: str | None = None
 
     def to_dict(self):
         from ..test_fixtures import is_alias
@@ -43,6 +45,9 @@ class ExplorationAction:
             # Untrusted literal values can be arbitrary secrets. Approved source
             # literals have a separate proof; aliases never contain runtime values.
             result["value"] = self.value if is_alias(self.value) else "[REDACTED_LITERAL]"
+        for key in ('page', 'expected_url'):
+            if getattr(self, key) is not None:
+                result[key] = _safe_url(getattr(self, key))
         return result
 
 
@@ -135,6 +140,7 @@ class ExplorationResult:
     redirect_url: str | None = None
     truncated: tuple[str, ...] = ()
     action_observations: tuple[dict, ...] = ()
+    states: tuple[dict, ...] = ()
 
     @property
     def explored(self) -> bool:
@@ -160,6 +166,8 @@ class ExplorationResult:
         }
         if self.action_observations:
             payload["action_observations"] = list(self.action_observations)
+        if self.states:
+            payload['states'] = list(self.states)
         return json.loads(json.dumps(payload, ensure_ascii=False))
 
 
@@ -256,13 +264,14 @@ def explore_page(
     from ..exploration_plan import ValidatedExplorationRequest
     approved = request if isinstance(request, ValidatedExplorationRequest) else None
     request = approved.request if approved is not None else request
-    final_url = redirect_url = None
+    final_url = redirect_url = unexpected_url = None
     page_map = None
     forms: tuple[dict, ...] = ()
     network: list[dict] = []
     issues: list[ExplorationIssue] = []
     truncated: set[str] = set()
     action_observations: list[dict] = []
+    states: list[dict] = []
     active_action_index = None
     def redact(value):
         return _redact(fixture_store.redact(value) if fixture_store else value)
@@ -273,7 +282,7 @@ def explore_page(
         safe_request = replace(request, target=safe_url(request.target), reason=redact(request.reason))
         return ExplorationResult(safe_request, final_url, page_map, forms, tuple(network),
                                  tuple(issues), observed_at, redirect_url, tuple(sorted(truncated)),
-                                 tuple(action_observations))
+                                 tuple(action_observations), tuple(states))
 
     if request.actions and approved is None:
         issues.append(ExplorationIssue("ACTION_NOT_VALIDATED", "Interactions require an approved exploration wrapper."))
@@ -281,6 +290,13 @@ def explore_page(
     if len(request.actions) > MAX_EXPLORATION_ACTIONS:
         issues.append(ExplorationIssue("ACTION_BUDGET_EXCEEDED", "Too many exploration actions."))
         return result()
+    v2 = approved is not None and any(g.get('source') == 'validated_action' for g in approved.grounding)
+    bindings = [g for g in approved.grounding if g.get('source') == 'validated_action'] if v2 else []
+    if v2:
+        from ..exploration_actions import action_fingerprint, forbidden
+        if not approved.action_fingerprint or approved.action_fingerprint != action_fingerprint(request, bindings):
+            issues.append(ExplorationIssue('ACTION_NOT_VALIDATED', 'Approved sequence was altered.'))
+            return result()
 
     target, request_issues = validate_exploration_request(
         request, base_url=base_url, timeout_ms=timeout_ms, render_wait_ms=render_wait_ms,
@@ -307,12 +323,16 @@ def explore_page(
         main_frame_id = cdp.send("Page.getFrameTree")["frameTree"]["frame"]["id"]
 
         def guard(event):
-            nonlocal redirect_url
+            nonlocal redirect_url, unexpected_url
             outgoing = event["request"]["url"]
             if _origin(outgoing) != _origin(base_url):
                 if event["frameId"] == main_frame_id:
                     redirect_url = safe_url(outgoing)
                 cdp.send("Fetch.failRequest", {"requestId": event["requestId"], "errorReason": "Aborted"})
+            elif (v2 and event['frameId'] == main_frame_id
+                  and outgoing != (target if active_action_index is None else bindings[active_action_index]['expected_url'])):
+                unexpected_url = safe_url(outgoing)
+                cdp.send('Fetch.failRequest', {'requestId': event['requestId'], 'errorReason': 'Aborted'})
             else:
                 cdp.send("Fetch.continueRequest", {"requestId": event["requestId"]})
 
@@ -351,21 +371,20 @@ def explore_page(
         phase = "inspection"
         if render_wait_ms:
             _wait_for_render(page, max_wait_ms=render_wait_ms)
-        v2 = approved is not None and any(g.get("source") == "validated_action" for g in approved.grounding)
         if v2:
-            from ..exploration_actions import action_fingerprint, forbidden
-            bindings = [g for g in approved.grounding if g.get("source") == "validated_action"]
-            if not approved.action_fingerprint or approved.action_fingerprint != action_fingerprint(request, bindings):
-                issues.append(ExplorationIssue("ACTION_NOT_VALIDATED", "Approved sequence was altered."))
+            if unexpected_url or page.url != target:
+                states.append({'state_id': observed_at + ':0', 'valid': False, 'triggering_action': None,
+                               'source_clause': None, 'page': {'url': unexpected_url or safe_url(page.url)}, 'network': [],
+                               'source': {'type': 'playwright_exploration', 'observed_at': observed_at}})
+                issues.append(ExplorationIssue('UNEXPECTED_TRANSITION', 'Entry page did not match the approved target.'))
                 return result()
-            # Bind actual DOM nodes before any event-producing interaction.
+            # Bind DOM nodes per state; handles never cross an approved navigation.
             nodes = {}
-            for action in request.actions:
-                locator = page.get_by_test_id(action.target)
-                if locator.count() != 1:
-                    issues.append(ExplorationIssue("ACTION_PRECONDITION_FAILED", "Stable control is missing or ambiguous."))
-                    return result()
-                nodes[action.target] = locator.element_handle()
+            node_page = None
+            initial_page, _ = _inspect(page, request.collect_text, truncated, redact=redact, safe_url=safe_url)
+            states.append({'state_id': observed_at + ':0', 'valid': True, 'page': initial_page.to_dict(),
+                           'triggering_action': None, 'source_clause': None, 'network': list(network),
+                           'source': {'type': 'playwright_exploration', 'observed_at': observed_at}})
             unsafe_network = False
             def safe_request(route):
                 nonlocal unsafe_network
@@ -384,9 +403,20 @@ def explore_page(
             if v2:
                 phase = "action"
                 binding = next((g for g in bindings if g["action_index"] == index), None)
-                if binding is None or binding["page"] != target or page.url != target or redirect_url:
+                if binding is None or page.url != binding['page'] or redirect_url or unexpected_url:
                     issues.append(ExplorationIssue("ACTION_PAGE_CHANGED", "Approved current page changed."))
                     return result()
+                if node_page != binding['page']:
+                    nodes = {}
+                    for upcoming in bindings[index:]:
+                        if upcoming['page'] != binding['page']:
+                            break
+                        control = page.get_by_test_id(upcoming['target'])
+                        if control.count() != 1:
+                            issues.append(ExplorationIssue('ACTION_PRECONDITION_FAILED', 'New state lacks a unique approved control.'))
+                            return result()
+                        nodes[upcoming['target']] = control.element_handle()
+                    node_page = binding['page']
                 locator = page.get_by_test_id(action.target)
                 tag = locator.evaluate("e => e.tagName.toLowerCase()") if locator.count() == 1 else None
                 role = (locator.get_attribute("role") or INTERACTIVE.get(tag, tag)) if tag else None
@@ -394,10 +424,12 @@ def explore_page(
                         or not locator.evaluate("(e, original) => e === original && e.isConnected", nodes[action.target])
                         or tag != binding['tag'] or role != binding['role']
                         or _name(locator, tag, redact) != binding['name']
-                        or tag == 'input' and (locator.get_attribute('type') or 'text') != binding['input_type']):
+                        or tag == 'input' and (locator.get_attribute('type') or 'text') != binding['input_type']
+                        or tag == 'a' and locator.get_attribute('href') != binding.get('href')):
                     issues.append(ExplorationIssue("ACTION_PRECONDITION_FAILED", "Approved control state or DOM identity changed."))
                     return result()
                 active_action_index = index
+                network_start = len(network)
                 observation = None
                 if action.action == 'ui.fill':
                     if not locator.is_editable():
@@ -437,18 +469,36 @@ def explore_page(
                     issues.append(ExplorationIssue('UNSAFE_NETWORK_REQUEST', 'Unapproved write or foreign request was blocked; remaining actions stopped.'))
                     return result()
                 if redirect_url or _origin(page.url) != _origin(base_url):
+                    states.append({'state_id': observed_at + ':' + str(len(states)), 'valid': False,
+                                   'triggering_action': index, 'source_clause': binding['source_clause'],
+                                   'page': {'url': redirect_url or safe_url(page.url)}, 'network': list(network[network_start:]),
+                                   'source': {'type': 'playwright_exploration', 'observed_at': datetime.now(timezone(timedelta(hours=7))).isoformat()}})
                     issues.append(ExplorationIssue('CROSS_ORIGIN_REDIRECT', 'External navigation stopped.'))
                     return result()
+                valid_transition = not unexpected_url and page.url == binding['expected_url']
                 final_url = safe_url(page.url)
-                post_page, _ = _inspect(page, request.collect_text, truncated, redact=redact, safe_url=safe_url)
+                post_page, _ = _inspect(page, request.collect_text, truncated, redact=redact, safe_url=safe_url) if valid_transition else (None, ())
+                state_id = observed_at + ':' + str(len(states))
                 record = {'action_index': index, 'action': action.action, 'target': action.target,
                           'source_step_seq': action.step_seq, 'source_clause': binding['source_clause'],
                           'value_ref': action.value if binding.get('fixture_metadata') else None,
-                          'final_url': final_url, 'page': post_page.to_dict(),
+                          'state_id': state_id, 'from_state_id': states[-1]['state_id'],
+                          'final_url': unexpected_url or final_url, 'page': post_page.to_dict() if post_page else {'url': unexpected_url or final_url},
+                          'valid_transition': valid_transition, 'network': list(network[network_start:]),
                           'source': {'type': 'playwright_exploration', 'observed_at': datetime.now(timezone(timedelta(hours=7))).isoformat()}}
                 if observation:
                     record.update(request_count=observation['body']['request_count'], selector=observation['_ui_trigger'])
                 action_observations.append(record)
+                states.append({'state_id': state_id, 'from_state_id': record['from_state_id'],
+                               'valid': valid_transition, 'triggering_action': index,
+                               'source_step_seq': action.step_seq,
+                               'source_clause': binding['source_clause'], 'page': record['page'],
+                               'network': record['network'], 'source': record['source']})
+                if not valid_transition:
+                    issues.append(ExplorationIssue('UNEXPECTED_TRANSITION', 'Observed or attempted destination did not match the approved state.'))
+                    return result()
+                if binding['expected_url'] != binding['page']:
+                    node_page = None
                 continue
             phase = "action"
             bindings = [g for g in approved.grounding if g.get("source") == "validated_click"
@@ -500,13 +550,29 @@ def explore_page(
         if redirect_url or _origin(page.url) != _origin(base_url):
             issues.append(ExplorationIssue("CROSS_ORIGIN_REDIRECT", "External navigation stopped; no foreign page inspected."))
             return result()
+        if v2 and (unexpected_url or page.url != bindings[-1]['expected_url']):
+            states.append({'state_id': observed_at + ':' + str(len(states)), 'valid': False,
+                           'triggering_action': active_action_index,
+                           'source_clause': bindings[-1]['source_clause'],
+                           'page': {'url': unexpected_url or final_url}, 'network': [],
+                           'source': {'type': 'playwright_exploration', 'observed_at': datetime.now(timezone(timedelta(hours=7))).isoformat()}})
+            issues.append(ExplorationIssue('UNEXPECTED_TRANSITION', 'Page changed after the approved sequence.'))
+            return result()
         page_map, forms = _inspect(page, request.collect_text, truncated, redact=redact, safe_url=safe_url)
         if v2 and unsafe_network:
             page_map = None
             forms = ()
             issues.append(ExplorationIssue('UNSAFE_NETWORK_REQUEST', 'Unapproved write or foreign request was blocked.'))
     except Exception:  # Browser errors may contain credentials/URLs: report a fixed message.
-        if redirect_url:
+        if (redirect_url or unexpected_url) and v2:
+            states.append({'state_id': observed_at + ':' + str(len(states)), 'valid': False,
+                           'triggering_action': active_action_index,
+                           'source_clause': bindings[active_action_index]['source_clause'] if active_action_index is not None else None,
+                           'page': {'url': redirect_url or unexpected_url}, 'network': [],
+                           'source': {'type': 'playwright_exploration', 'observed_at': datetime.now(timezone(timedelta(hours=7))).isoformat()}})
+        if unexpected_url:
+            issues.append(ExplorationIssue('UNEXPECTED_TRANSITION', 'Unapproved destination was blocked.'))
+        elif redirect_url:
             final_url = safe_url(page.url)
             issues.append(ExplorationIssue("CROSS_ORIGIN_REDIRECT", "External navigation stopped; no foreign page inspected."))
         elif phase == "navigation":

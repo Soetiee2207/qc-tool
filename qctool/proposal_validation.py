@@ -322,7 +322,7 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
                     return (item.get("input_type") == hint or
                             hint == "email" and "email" in _norm(name).split())
                 return _norm(hint) == _norm(name)
-            matches = [item for page in context.observations.get("ui_pages", [])
+            matches = [item for page in _reference_pages(single, refs, context)
                        for item in page.get("elements", []) if matches_hint(item)]
             # A click's stable selector was already proven unique and cited by
             # _ground_action. Same-name navigation links must not override it.
@@ -469,11 +469,15 @@ def _resolve_references(references: tuple[EvidenceReference, ...],
             if len(items) == 1:
                 resolved.append(("openapi", items[0], None))
                 continue
-        elif evidence.source == "ui-map" and set(ref) <= {"page", "test_id", "role", "name"}:
-            page = next((item for item in context.observations.get("ui_pages", [])
-                         if item.get("url") == ref.get("page")), None)
+        elif evidence.source == "ui-map" and set(ref) <= {"page", "test_id", "role", "name", "state_id"}:
+            candidates = context.observations.get('ui_pages', [])
+            if 'state_id' in ref:
+                candidates = [s['page'] for s in context.observations.get('page_states', [])
+                              if s.get('valid') and s.get('state_id') == ref['state_id']]
+            pages = [item for item in candidates if item.get('url') == ref.get('page')]
+            page = pages[0] if len(pages) == 1 else None
             if page is not None:
-                locator = {key: value for key, value in ref.items() if key != "page"}
+                locator = {key: value for key, value in ref.items() if key not in {"page", "state_id"}}
                 elements = [item for item in page.get("elements", [])
                             if all(item.get(key) == value for key, value in locator.items())]
                 if not locator or len(elements) == 1:
@@ -515,7 +519,8 @@ def _ground_action(change: ProposedChange, refs: list[tuple[str, dict, dict | No
         target = args["target"]
         if not isinstance(target, str) or not target:
             return "INVALID_ARGUMENTS"
-        candidates = [(page, element) for page in context.observations.get("ui_pages", [])
+        source_pages = _reference_pages(change, refs, context)
+        candidates = [(page, element) for page in source_pages
                       for element in page.get("elements", [])
                       if target in {element.get("test_id"), element.get("id")}]
         if len(candidates) != 1:
@@ -569,6 +574,17 @@ def _ground_action(change: ProposedChange, refs: list[tuple[str, dict, dict | No
         if base is not None and base not in candidates[0].get("servers", []):
             return "API_EVIDENCE_NOT_FOUND"
     return None
+
+
+def _reference_pages(change: ProposedChange, refs, context: ResolutionContext) -> list[dict]:
+    """Scope uniqueness to explicitly cited, independently verified state snapshots.
+
+    Without a state reference the original global uniqueness rule is retained.
+    Source-meaning checks and all runtime/progress checks are unchanged.
+    """
+    state_scoped = any('state_id' in e.ref for e in change.evidence if e.source == 'ui-map')
+    pages = [page for source, page, _ in refs if source == 'ui-map'] if state_scoped else context.observations.get('ui_pages', [])
+    return [page for i, page in enumerate(pages) if not any(page is old for old in pages[:i])]
 
 
 _NEGATIVE = re.compile(r"\b(?:must\s+not\s+see|should\s+not\s+see|not\s+visible|"

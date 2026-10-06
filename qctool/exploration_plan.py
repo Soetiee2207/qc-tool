@@ -263,7 +263,10 @@ def _safe_planned(item, store):
     return replace(item, target=store.redact(item.target),
                    purposes=tuple(replace(p, reason=store.redact(p.reason)) for p in item.purposes),
                    actions=tuple(replace(a, value=store.redact(a.value) if a.value is not None else None,
-                                         target=store.redact(a.target)) for a in item.actions))
+                                         target=store.redact(a.target),
+                                         page=store.redact(a.page) if a.page is not None else None,
+                                         expected_url=store.redact(a.expected_url) if a.expected_url is not None else None)
+                                 for a in item.actions))
 
 
 def validate_exploration_plan(
@@ -344,7 +347,7 @@ def validate_exploration_plan(
         action_grounding = []
         if not failures and item.actions:
             try:
-                if all(a.action == "ui.click" and a.value is None for a in item.actions):
+                if all(a.action == "ui.click" and a.value is None and a.page is None and a.expected_url is None for a in item.actions):
                     try:
                         action_grounding = _click_grounding(item, target, context, case, base_url)
                     except (ValueError, TypeError, KeyError):

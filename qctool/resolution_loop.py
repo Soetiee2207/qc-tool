@@ -112,6 +112,13 @@ def _evidence_facts(context: ResolutionContext) -> frozenset[str]:
             for kind in ("forms", "network"):
                 for item in observation.get(kind, []):
                     add(kind, observed_scope, item)
+    for state in context.observations.get('page_states', []):
+        if not state.get('valid'):
+            continue
+        scope = [state['page'].get('url'), state.get('session'), state.get('source_clause')]
+        add('state', scope, state['page'])
+        for record in state.get('network', []):
+            add('state_network', scope, record)
     return frozenset(facts)
 
 
