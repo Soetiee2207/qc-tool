@@ -62,10 +62,17 @@ def build_exploration_prompt(
     return "\n\n".join([
         "Propose an UNTRUSTED exploration plan as JSON. Do not execute or repair anything.",
         "Rules: Plan only observation for the listed unresolved gaps. Allowed intents "
-        "are inspect_page and observe_network: navigate once and inspect, never interact. "
-        "Do not propose clicks, fills, submits, uploads, purchases, account creation, "
+        "are inspect_page and observe_network: navigate once and inspect. "
+        "Do not propose arbitrary clicks, fills, submits, uploads, purchases, account creation, "
         "credential discovery, or other state-changing actions. Do not propose action "
-        "sequences. Use only explicit routes from testcase ui.goto/notes, selected UI "
+        "sequences. The sole interaction exception is an anonymous /login inspection "
+        "whose explicit Given requires both credentials empty and whose Then requires "
+        "no POST /api/auth/login: optional actions may propose exactly ui.click on the "
+        "unique stable test_id of the login submit button on that page. Each action uses "
+        "only action, target, step_seq, bound to a listed unresolved source clause. "
+        "Never select a navigation link as the submit button. The safety validator must "
+        "approve every click and the explorer checks empty inputs before interacting. "
+        "Omit actions otherwise. Use only explicit routes from testcase ui.goto/notes, selected UI "
         "page URLs, or hrefs in the supplied UI evidence. Do not guess routes or invent "
         "elements. Targets must be safe application paths or same-origin HTTP(S) URLs; "
         "never propose foreign origins, javascript:, data:, or file: targets. An API "
@@ -94,6 +101,9 @@ def build_exploration_prompt(
         "nonempty purposes array. step_seq is an integer or null, not placeholder text. "
         "Angle-bracket strings indicate placeholders, not evidence.",
         section("OUTPUT JSON SHAPE", _OUTPUT_SHAPE),
+        section("OPTIONAL APPROVAL-REQUIRED ACTION SHAPE", {"actions": [{
+            "action": "ui.click", "target": "<exact submit test_id in supplied page>",
+            "step_seq": "<listed unresolved source step sequence>"}]}),
     ])
 
 

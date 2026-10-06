@@ -39,13 +39,14 @@ _RESPONSE_ASSERTIONS = frozenset({
 })
 
 
-def analyze_executability(case: TestCase) -> ExecutabilityReport:
+def analyze_executability(case: TestCase, *, context=None) -> ExecutabilityReport:
     """Inspect one case without changing it or touching its execution environment.
 
     ``validation_error`` preserves the model's own invalid-case decision. A
     structurally valid unmapped/manual case instead has gaps with no validation
     error. Runtime availability (URL, credentials, network, page elements) cannot
-    be established from a TestCase alone.
+    be established from a TestCase alone. Optional trusted context adds narrowly
+    provable source-grounding gaps; it never infers business expectations.
     """
     try:
         case.validate()
@@ -136,4 +137,8 @@ def analyze_executability(case: TestCase) -> ExecutabilityReport:
     if not executable_assertion:
         gaps.append(ExecutionGap("MISSING_ASSERTION", "No executable assertion in testcase."))
 
+    if context is not None:
+        from .source_grounding import SEMANTIC_GAP, semantic_mismatches
+        gaps.extend(ExecutionGap(SEMANTIC_GAP, message, seq)
+                    for seq, message in semantic_mismatches(case, context))
     return ExecutabilityReport(not gaps and validation_error is None, tuple(gaps), validation_error)

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Iterable, Sequence
 from urllib.parse import urlsplit
 
@@ -106,6 +106,11 @@ def build_resolution_context(
     )
     # Fail immediately if a caller placed a runtime-only value inside the case.
     # The returned context can then always be serialized without custom encoders.
+    from .executability import analyze_executability
+    semantic = [gap for gap in analyze_executability(case, context=context).gaps
+                if gap.code == "SEMANTIC_GROUNDING_MISMATCH" and gap not in gap_items]
+    gap_items += tuple(semantic)
+    context = replace(context, gaps=gap_items)
     snapshot = context.to_dict()
     return ResolutionContext(
         snapshot["testcase"], gap_items, snapshot["specification"],

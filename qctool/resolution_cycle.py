@@ -5,6 +5,8 @@ pipeline integration. Stage failures preserve earlier committed results.
 """
 
 from copy import deepcopy
+from collections import Counter
+import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -77,10 +79,22 @@ def _refresh_context(
                 unique.append(record)
         records[:] = unique
         for record in getattr(fresh, field)[key]:
-            if record not in records:
+            # A retained post-action snapshot already supplies this route.
+            # Re-adding the pre-action map would duplicate stable locators.
+            explored = field == "observations" and any(
+                old.get("url") == record.get("url") and any(
+                    source.get("action_observations") for source in old.get("explorations", []))
+                for old in records)
+            same_content = field == "observations" and any(
+                {k: v for k, v in old.items() if k != "elements"} ==
+                {k: v for k, v in record.items() if k != "elements"} and
+                Counter(json.dumps(e, sort_keys=True) for e in old.get("elements", [])) ==
+                Counter(json.dumps(e, sort_keys=True) for e in record.get("elements", []))
+                for old in records)
+            if record not in records and not explored and not same_content:
                 records.append(record)
-    return replace(detached, testcase=fresh.testcase, gaps=tuple(report.gaps),
-                   allowed_actions=fresh.allowed_actions)
+    detached = replace(detached, testcase=fresh.testcase, allowed_actions=fresh.allowed_actions)
+    return replace(detached, gaps=analyze_executability(case, context=detached).gaps)
 
 
 def run_resolution_cycle(
@@ -105,7 +119,7 @@ def run_resolution_cycle(
         resolution_llm = fixture_store.guard_adapter(resolution_llm)
         exploration_llm = fixture_store.guard_adapter(exploration_llm)
     trusted_ui, trusted_endpoints = deepcopy(ui_map), deepcopy(endpoints)
-    before = analyze_executability(working)
+    before = analyze_executability(working, context=packet)
     after = before
     issues = []
     audit = [ResolutionCycleStage("analysis", "COMPLETED")]
@@ -160,10 +174,10 @@ def run_resolution_cycle(
 
     ok, deterministic = attempt("deterministic", lambda: resolve_deterministically(
         deepcopy(working), ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints),
-        fixture_store=fixture_store))
+        fixture_store=fixture_store, context=deepcopy(packet)))
     if ok:
         working = deepcopy(deterministic.case)
-        after = analyze_executability(working)
+        after = analyze_executability(working, context=packet)
     if not refresh() or after.executable:
         return finish()
 
@@ -183,7 +197,7 @@ def run_resolution_cycle(
                 if ok:
                     working = deepcopy(application.case)
 
-    after = analyze_executability(working)
+    after = analyze_executability(working, context=packet)
     audit.append(ResolutionCycleStage("reanalysis", "COMPLETED"))
     if not refresh() or after.executable or not after.gaps:
         return finish()

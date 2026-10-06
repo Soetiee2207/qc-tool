@@ -20,6 +20,14 @@ def expected_expansion(step: Step, test_data: dict, *, min_atoms: int = 2,
     if not isinstance(text, str) or not text.strip():
         return None
     if step.action == "perform.unmapped" and step.kind == StepKind.GIVEN:
+        if text.strip() == "Phiên anonymous ở /login" and min_atoms == 1:
+            return [{"action": "ui.goto", "args": {"url": "/login"},
+                     "precondition_route": "/login", "requires_anonymous_session": True}]
+        if text.strip() == "cả hai ô email và mật khẩu trống":
+            return [{"action": "assert.value", "hint": "email", "empty_input": True,
+                     "args": {"expected": "^$", "operator": "matches"}},
+                    {"action": "assert.value", "hint": "password", "empty_input": True,
+                     "args": {"expected": "^$", "operator": "matches"}}]
         empty = re.fullmatch(r"Phiên anonymous ở (/login); cả hai ô email và mật khẩu trống", text.strip())
         if empty:
             return [{"action": "ui.session", "args": {"mode": "anonymous"}},

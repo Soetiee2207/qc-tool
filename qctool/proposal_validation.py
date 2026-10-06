@@ -50,6 +50,8 @@ class ProposalValidationResult:
     testcase_id: str
     case_fingerprint: str
     valid_changes_fingerprint: str
+    analysis_context: ResolutionContext | None = None
+    analysis_context_fingerprint: str = ""
 
     @property
     def status(self) -> str:
@@ -67,7 +69,7 @@ def validate_resolution_proposal(
     Changes are checked in proposal order on a private copy. ``valid_changes``
     are still proposals, not applied changes or proof of product correctness.
     """
-    original = analyze_executability(case)
+    original = analyze_executability(case, context=context)
     fingerprint = _case_fingerprint(case)
     issues: list[ValidationIssue] = []
     working = deepcopy(case)
@@ -81,7 +83,7 @@ def validate_resolution_proposal(
         rejected = tuple(RejectedChange(change, tuple(issues)) for change in proposal.changes)
         return ProposalValidationResult(
             (), rejected, (), tuple(issues), original, original, case.id, fingerprint,
-            _changes_fingerprint(()),
+            _changes_fingerprint(()), deepcopy(context), _context_fingerprint(context),
         )
 
     context_gaps = Counter(_gap_key(gap.code, gap.step_seq) for gap in context.gaps)
@@ -120,8 +122,8 @@ def validate_resolution_proposal(
                         fail(error, "Expansion must ground and preserve every source clause in order.")
                 if not failures:
                     candidate, new_origins = candidate_with_changes(case, [*valid, change])
-                    before = _origin_gaps(analyze_executability(working), origins)
-                    after = analyze_executability(candidate)
+                    before = _origin_gaps(analyze_executability(working, context=context), origins)
+                    after = analyze_executability(candidate, context=context)
                     after_counts = _origin_gaps(after, new_origins)
                     new = after_counts - before
                     if new:
@@ -151,7 +153,11 @@ def validate_resolution_proposal(
 
             if not failures and not isinstance(change.args, dict):
                 fail("INVALID_ARGUMENTS", "Proposed arguments must be an object.")
-            if not failures and step.action not in TestCase.UNMAPPED_ACTIONS:
+            from .source_grounding import SEMANTIC_GAP, semantic_repair_arguments
+            source_repair = semantic_repair_arguments(step, case, context) if SEMANTIC_GAP in step_gaps else None
+            if source_repair is not None and change.args != source_repair:
+                fail("SEMANTICS_UNPROVEN", "Repair differs from exact preserved source proof.")
+            if not failures and step.action not in TestCase.UNMAPPED_ACTIONS and source_repair is None:
                 if any(key not in change.args or change.args[key] != value
                        for key, value in step.args.items()):
                     fail("ARGUMENT_REWRITE_NOT_ALLOWED", "Existing concrete arguments must be preserved.")
@@ -183,14 +189,14 @@ def validate_resolution_proposal(
                     grounding = _ground_action(change, references, context)
                     if grounding is not None:
                         fail(grounding, "Proposed action or arguments are not grounded in cited context evidence.")
-                    semantics = _check_semantics(step, change, references, context, fixture_store=fixture_store)
+                    semantics = _check_semantics(step, change, references, context, fixture_store=fixture_store, working=working, origins=origins)
                     if semantics is not None:
                         fail(semantics, "Original step and requirements do not prove the proposed meaning.")
 
             if not failures:
-                before = analyze_executability(working)
+                before = analyze_executability(working, context=context)
                 candidate, candidate_origins = candidate_with_changes(case, [*valid, change])
-                after = analyze_executability(candidate)
+                after = analyze_executability(candidate, context=context)
                 before_counts = _origin_gaps(before, origins)
                 after_counts = _origin_gaps(after, candidate_origins)
                 new = after_counts - before_counts
@@ -216,7 +222,7 @@ def validate_resolution_proposal(
         else:
             valid.append(change)
 
-    remaining_gaps = _origin_gaps(analyze_executability(working), origins)
+    remaining_gaps = _origin_gaps(analyze_executability(working, context=context), origins)
     unresolved: list[UnresolvedGap] = []
     for item in proposal.unresolved:
         key = _gap_key(item.code, item.step_seq)
@@ -230,8 +236,8 @@ def validate_resolution_proposal(
 
     return ProposalValidationResult(
         tuple(valid), tuple(rejected), tuple(unresolved), tuple(issues),
-        original, analyze_executability(working), case.id, fingerprint,
-        _changes_fingerprint(valid),
+        original, analyze_executability(working, context=context), case.id, fingerprint,
+        _changes_fingerprint(valid), deepcopy(context), _context_fingerprint(context),
     )
 
 
@@ -290,6 +296,10 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
         if error := _ground_action(single, refs, context):
             return error
         required = dict(meaning.get("args", {}))
+        if meaning.get("requires_anonymous_session"):
+            sessions = [item for item in working.steps if origins[item.seq] < step.seq and item.action == "ui.session"] if working else []
+            if not sessions or sessions[-1].args.get("mode") != "anonymous":
+                return "EXPANSION_SEMANTICS_UNPROVEN"
         if "precondition_route" in meaning:
             # _ground_action above already requires a cited trusted UI page.
             # Accept its exact absolute URL or the explicit source-relative URL.
@@ -319,8 +329,14 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
             # Still prove the selected element matches the exact source meaning.
             stable_click = (atom.action == "ui.click" and bool(element.get("test_id"))
                             and atom.args.get("target") == element["test_id"])
+            from .source_grounding import empty_login_requirement, observed_validation, source_clause
+            requirement = empty_login_requirement(working, context) if working else None
+            stable_alert = (requirement is not None and
+                            source_clause(step, requirement) == "Hiển thị Vui lòng điền đầy đủ thông tin" and
+                            observed_validation(context, requirement) is element and
+                            atom.action in {"assert.visible", "assert.text"})
             if (not matches_hint(element) or
-                    not stable_click and (len(matches) != 1 or matches[0] is not element)):
+                    not (stable_click or stable_alert) and (len(matches) != 1 or matches[0] is not element)):
                 return "EXPANSION_SEMANTICS_UNPROVEN"
             required["target"] = atom.args.get("target")
         if atom.action == "ui.click" and "capture_response" in atom.args:
@@ -333,6 +349,8 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
                        for source, item, _ in refs):
                 return "API_EVIDENCE_NOT_FOUND"
             source_name = atom.args.get("source", "res")
+            if working is None:
+                return "MISSING_RESPONSE"
             captures = [item for item in working.steps if origins[item.seq] < step.seq and
                         item.action == "ui.click" and
                         item.args.get("capture_requests", {}).get("save_as", "res") == source_name]
@@ -385,6 +403,11 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
             if error := _check_semantics(probe, single, refs, context):
                 return error
     return None
+
+
+def _context_fingerprint(context: ResolutionContext) -> str:
+    payload = json.dumps(context.to_dict(), sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _case_fingerprint(case: TestCase) -> str:
@@ -569,7 +592,17 @@ def _expectation_texts(step: Step, context: ResolutionContext) -> list[str]:
 
 def _check_semantics(step: Step, change: ProposedChange,
                      refs: list[tuple[str, dict, dict | None]],
-                     context: ResolutionContext, *, fixture_store: FixtureStore | None = None) -> str | None:
+                     context: ResolutionContext, *, fixture_store: FixtureStore | None = None,
+                     working: TestCase | None = None, origins: dict | None = None) -> str | None:
+    from .source_grounding import empty_login_requirement, semantic_repair_arguments
+    proof = semantic_repair_arguments(step, working, context) if working else None
+    if proof is not None:
+        requirement = empty_login_requirement(working, context)
+        return None if change.args == proof and any(source == "requirement" and item.get("id") == requirement["id"] for source, item, _ in refs) else "SEMANTICS_UNPROVEN"
+    if (step.action == "perform.unmapped" and step.args.get("description") == "Phiên anonymous ở /login"
+            or step.action == "assert.unmapped" and step.args.get("expected") == "không gửi POST /api/auth/login"):
+        return _validate_expansion(step, replace(change, action="", args={}, expansion=(
+            AtomicProposal(change.action, change.args, change.evidence),)), context, working, origins or {}, allow_single=True, fixture_store=fixture_store)
     if step.action == "ui.goto" and not step.args.get("url"):
         if not _same_route(step.note.strip(), str(change.args.get("url", ""))):
             return "SEMANTICS_UNPROVEN"

@@ -71,6 +71,23 @@ def _enrich(observations: dict, result: ExplorationResult,
     if payload.get("action_observations"):
         provenance["action_observations"] = payload["action_observations"]
     pages = observations.setdefault("ui_pages", [])
+    if approved.request.actions and payload.get("action_observations"):
+        matching = [p for p in pages if p.get("url") == page["url"]
+                    and p.get("session") in (None, approved.request.session)]
+        if len(matching) == 1:
+            existing = matching[0]
+            # The current snapshot is the inspected post-action state. Keep the
+            # prior snapshot in the audit, not as duplicate locator candidates.
+            sources = existing.setdefault("explorations", [])
+            snapshot = {k: deepcopy(existing[k]) for k in ("url", "title", "text", "elements") if k in existing}
+            if snapshot != {k: page[k] for k in snapshot}:
+                provenance["previous_snapshot"] = {**snapshot, "evidence": deepcopy(existing.get("evidence"))}
+            if provenance not in sources:
+                sources.append(provenance)
+            existing.update(deepcopy(page))
+            existing["session"] = approved.request.session
+            existing["evidence"] = payload["source"]
+            return
     # Deduplicate matching page snapshots, not merely URLs. Session-specific or
     # changed states remain separate; old observations are never contradicted away.
     for existing in pages:

@@ -106,6 +106,9 @@ def _evidence_facts(context: ResolutionContext) -> frozenset[str]:
             add("text", scope, text)
         for observation in page.get("explorations", []):
             observed_scope = [page.get("url"), observation.get("request", {}).get("session")]
+            for action in observation.get("action_observations", []):
+                add("post_action", observed_scope, {key: action.get(key) for key in (
+                    "action", "target", "selector", "credential_inputs_empty", "request_count", "final_url")})
             for kind in ("forms", "network"):
                 for item in observation.get(kind, []):
                     add(kind, observed_scope, item)
@@ -142,7 +145,7 @@ def run_resolution_loop(
         raise ValueError("max_cycles must be a positive integer")
     working, packet = deepcopy(case), deepcopy(context)
     trusted_ui, trusted_endpoints = deepcopy(ui_map), deepcopy(endpoints)
-    report = analyze_executability(working)
+    report = analyze_executability(working, context=packet)
     history, issues = [], []
 
     def finish(reason):
@@ -163,7 +166,7 @@ def run_resolution_loop(
                 deepcopy(working), deepcopy(packet), resolution_llm=resolution_llm,
                 exploration_llm=exploration_llm, base_url=base_url, storage_state=storage_state, fixture_store=fixture_store,
                 ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints)))
-            candidate_report = analyze_executability(result.case)
+            candidate_report = analyze_executability(result.case, context=result.context)
             candidate_facts = _evidence_facts(result.context)
             fingerprint = _fingerprint(result.case, result.context, candidate_report, candidate_facts)
         except Exception:

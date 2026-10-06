@@ -149,7 +149,7 @@ def test_prompt_is_deterministic_and_uses_selected_gaps(inputs):
                  "UNMAPPED_ACTION", "Submit is unmapped", '"step_seq": 2',
                  "SESSION MODES", "anonymous", "authenticated", "storage_state",
                  "ALLOWED OBSERVATION INTENTS", "inspect_page", "observe_network",
-                 "Do not propose clicks, fills, submits", "Do not guess routes",
+                 "Do not propose arbitrary clicks, fills, submits", "Do not guess routes",
                  "never propose foreign origins", "empty requests list (unresolved)",
                  "REQUEST BUDGET"]:
         assert text in prompt

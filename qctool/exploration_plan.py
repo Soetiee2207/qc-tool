@@ -218,7 +218,8 @@ def _click_grounding(item, target, context, case, base_url):
         justified = len(steps) == 1 and (
             steps[0].action == "perform.unmapped" and steps[0].args.get("description") == clause
             or steps[0].action == "assert.unmapped" and
-            steps[0].args.get("expected") == "không gửi POST /api/auth/login"
+            steps[0].args.get("expected") in {"không gửi POST /api/auth/login",
+                                                   "Hiển thị Vui lòng điền đầy đủ thông tin"}
         )
         if not justified or not source_requirements:
             raise ValueError("Full source clause does not justify this submit")
@@ -263,7 +264,7 @@ def validate_exploration_plan(
     or API endpoint inference occurs. Identical target/session/action sequences
     merge before the request and total-click budgets are enforced in plan order.
     """
-    report = analyze_executability(case)
+    report = analyze_executability(case, context=context)
     global_issues: list[ExplorationPlanIssue] = []
     if plan.testcase_id != case.id or plan.testcase_id != context.testcase.get("id"):
         global_issues.append(ExplorationPlanIssue("TESTCASE_MISMATCH", "Plan must identify the supplied testcase."))

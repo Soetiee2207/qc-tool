@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from .executability import ExecutabilityReport, analyze_executability
 from .llm_resolution import ProposedChange
 from .proposal_validation import (
-    ProposalValidationResult, _case_fingerprint, _changes_fingerprint,
+    ProposalValidationResult, _case_fingerprint, _changes_fingerprint, _context_fingerprint,
 )
 from .step_expansion import candidate_with_changes
 from .testcase import TestCase, ValidationError
@@ -65,9 +65,12 @@ def apply_validated_resolution(
     if not isinstance(validation_result, ProposalValidationResult):
         raise TypeError("apply_validated_resolution requires ProposalValidationResult")
 
-    before = analyze_executability(case)
+    context = validation_result.analysis_context
+    before = analyze_executability(case, context=context)
     detached = deepcopy(case)
     issues: list[ApplicationIssue] = []
+    if context is not None and _context_fingerprint(context) != validation_result.analysis_context_fingerprint:
+        issues.append(ApplicationIssue("VALIDATION_RESULT_CHANGED", "Validated evidence was altered."))
     if case.id != validation_result.testcase_id:
         issues.append(ApplicationIssue("TESTCASE_MISMATCH", "Validation belongs to another testcase."))
     if (_case_fingerprint(case) != validation_result.case_fingerprint
@@ -100,7 +103,7 @@ def apply_validated_resolution(
         structural_error = None
     except ValidationError as exc:
         structural_error = str(exc)
-    after_changes = analyze_executability(detached)
+    after_changes = analyze_executability(detached, context=context)
     if (structural_error != after_changes.validation_error
             or structural_error is not None and before.validation_error is None):
         issues.append(ApplicationIssue("APPLY_VALIDATION_ERROR", "Applied copy failed structural validation."))
@@ -114,10 +117,10 @@ def apply_validated_resolution(
             and not detached.needs_mapping and before.validation_error is None):
         auto_candidate = deepcopy(detached)
         auto_candidate.execution = "auto"
-        if analyze_executability(auto_candidate).executable:
+        if analyze_executability(auto_candidate, context=context).executable:
             auto_candidate.validate()
             detached = auto_candidate
             promoted = True
 
     return ApplyResult(detached, tuple(applied), (), before,
-                       analyze_executability(detached), promoted)
+                       analyze_executability(detached, context=context), promoted)
