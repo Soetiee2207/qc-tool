@@ -20,10 +20,13 @@ out:
   dir: ./artifacts/salonhub-smoke
   skip_run: true  # review IR/XLSX trước khi thực thi trên deployment
 
-# Fixture references only; no secrets or inferred account state in this file.
+# Credential references and operator-declared public facts only; no secrets.
 test_fixtures:
   fixtures:
     active_user:
+      facts:
+        role: customer
+        account_state: active
       email: {env: QCTOOL_USERNAME}
       password: {env: QCTOOL_PASSWORD}
     locked_user:

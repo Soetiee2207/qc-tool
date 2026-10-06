@@ -10,14 +10,29 @@ import re
 
 from .generate.mapper import RE_CLICK, RE_FILL, RE_HTTP
 from .llm_resolution import ProposedChange
-from .testcase import Step, TestCase
-from .test_fixtures import trusted_value
+from .testcase import Step, StepKind, TestCase
+from .test_fixtures import FixtureStore, trusted_value
 
 
-def expected_expansion(step: Step, test_data: dict, *, min_atoms: int = 2) -> list[dict] | None:
+def expected_expansion(step: Step, test_data: dict, *, min_atoms: int = 2,
+                       fixture_store: FixtureStore | None = None) -> list[dict] | None:
     text = step.args.get("description" if step.action == "perform.unmapped" else "expected")
     if not isinstance(text, str) or not text.strip():
         return None
+    if step.action == "perform.unmapped" and step.kind == StepKind.GIVEN:
+        # Exact SalonHub source form only. Every non-runtime clause must be
+        # proven against config facts and provisioned aliases, never discarded.
+        precondition = re.fullmatch(
+            r"Phiên anonymous ở (/[A-Za-z0-9_./?=&-]*); tài khoản customer đang hoạt động "
+            r"và mật khẩu đúng do người vận hành cung cấp", text.strip())
+        if precondition:
+            if fixture_store is None or not fixture_store.proves_account_precondition(
+                test_data, role="customer", account_state="active"):
+                return None
+            atoms = [{"action": "ui.session", "args": {"mode": "anonymous"}},
+                     {"action": "ui.goto", "args": {"url": precondition[1]},
+                      "precondition_route": precondition[1]}]
+            return atoms if min_atoms <= len(atoms) <= 8 else None
     clauses = [part.strip() for part in text.split(";")]
     if re.fullmatch(r"fill email,\s*fill password,\s*click .+", text, re.I):
         clauses = [part.strip() for part in text.split(",")]

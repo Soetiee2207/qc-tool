@@ -261,7 +261,7 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
     if _resolve_references(change.evidence, context) is None:
         return "FABRICATED_EVIDENCE"
     expected = expected_expansion(step, context.testcase.get("test_data", {}),
-                                  min_atoms=1 if allow_single else 2)
+                                  min_atoms=1 if allow_single else 2, fixture_store=fixture_store)
     if expected is None or len(expected) != len(change.expansion):
         return "EXPANSION_SEMANTICS_UNPROVEN"
     for atom, meaning in zip(change.expansion, expected):
@@ -283,6 +283,12 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
         if error := _ground_action(single, refs, context):
             return error
         required = dict(meaning.get("args", {}))
+        if "precondition_route" in meaning:
+            # _ground_action above already requires a cited trusted UI page.
+            # Accept its exact absolute URL or the explicit source-relative URL.
+            if not _same_route(meaning["precondition_route"], str(atom.args.get("url", ""))):
+                return "EXPANSION_SEMANTICS_UNPROVEN"
+            required["url"] = atom.args["url"]
         if "hint" in meaning:
             element = next((element for source, _, element in refs
                             if source == "ui-map" and element is not None
