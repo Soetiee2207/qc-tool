@@ -47,6 +47,7 @@ class Element:
     # đoán khi sinh case `assert.disabled`.
     disabled: bool = False
     checked: bool = False
+    options: list[dict] = field(default_factory=list)
 
     @property
     def selector(self) -> dict:
@@ -67,6 +68,10 @@ class Element:
             out["disabled"] = True
         if self.checked:
             out["checked"] = True
+        if self.tag in {"select", "textarea"}:
+            out["tag"] = self.tag
+        if self.options:
+            out["options"] = self.options
         if self.href:
             out["href"] = self.href
         return out
@@ -162,6 +167,7 @@ class UIMap:
                     input_type=e.get("input_type"), required=e.get("required", False),
                     href=e.get("href"), test_id=e.get("test_id"),
                     disabled=e.get("disabled", False), checked=e.get("checked", False),
+                    options=list(e.get("options", [])),
                 ) for e in raw.get("elements", [])],
             ))
         return cls(base_url=data.get("base_url", ""),

@@ -111,7 +111,7 @@ def _enrich(observations: dict, result: ExplorationResult,
 def execute_validated_exploration(
     validation_result: ExplorationPlanValidationResult, context: ResolutionContext, *,
     base_url: str, storage_state: Path | None = None,
-    timeout_ms: int = 10000, render_wait_ms: int = 2000,
+    timeout_ms: int = 10000, render_wait_ms: int = 2000, fixture_store=None,
 ) -> ExplorationExecutionResult:
     """Execute only approved requests, independently, in validation order.
 
@@ -143,10 +143,11 @@ def execute_validated_exploration(
                 "GAP_NOT_FOUND", "Approved request no longer refers to supplied unresolved gaps.", index))
             continue
         try:
+            extra = {"fixture_store": fixture_store} if fixture_store is not None else {}
             result = deepcopy(explore_page(
                 deepcopy(approved if approved.request.actions else approved.request), base_url=base_url,
                 storage_state=storage_state if approved.requires_auth_state else None,
-                timeout_ms=timeout_ms, render_wait_ms=render_wait_ms,
+                timeout_ms=timeout_ms, render_wait_ms=render_wait_ms, **extra,
             ))
             # Stage enrichment independently so malformed results cannot leave
             # half-written observations or discard prior successful evidence.

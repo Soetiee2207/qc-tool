@@ -1,10 +1,10 @@
-"""Bounded page inspection and approved empty-form clicks; never expectations."""
+"""Bounded page inspection and approved UI interactions; never expectations."""
 
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, replace, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,7 +25,8 @@ MAX_FORMS = 10
 MAX_NETWORK = 40
 MAX_STRING = 160
 SESSION_MODES = frozenset({"anonymous", "authenticated"})
-MAX_EXPLORATION_ACTIONS = 2
+MAX_EXPLORATION_ACTIONS = 5
+MAX_OPTIONS = 20
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,16 @@ class ExplorationAction:
     target: str
     step_seq: int
     action: str = "ui.click"
+    value: str | None = field(default=None, repr=False)
+
+    def to_dict(self):
+        from ..test_fixtures import is_alias
+        result = {"action": self.action, "target": self.target, "step_seq": self.step_seq}
+        if self.value is not None:
+            # Untrusted literal values can be arbitrary secrets. Approved source
+            # literals have a separate proof; aliases never contain runtime values.
+            result["value"] = self.value if is_alias(self.value) else "[REDACTED_LITERAL]"
+        return result
 
 
 def _redact(value: str) -> str:
@@ -79,6 +90,8 @@ class ExplorationRequest:
         result = {**asdict(self), "target": _safe_url(self.target), "reason": _redact(self.reason)}
         if not self.actions:
             result.pop("actions")
+        else:
+            result["actions"] = [action.to_dict() for action in self.actions]
         return result
 
 
@@ -150,22 +163,23 @@ class ExplorationResult:
         return json.loads(json.dumps(payload, ensure_ascii=False))
 
 
-def _name(handle, tag: str) -> str:
+def _name(handle, tag: str, redact=_redact) -> str:
     # The crawler falls back to value; exploration deliberately never reads it.
     text = handle.inner_text() if tag in {"button", "a"} or handle.get_attribute("role") in {"alert", "status"} else handle.evaluate(
-        "element => Array.from(element.labels || [])"
-        ".filter(label => !label.querySelector('textarea,select'))"
-        ".map(label => label.innerText).join(' ')"
+        "element => Array.from(element.labels || []).map(label => {"
+        "const copy = label.cloneNode(true);"
+        "copy.querySelectorAll('input,textarea,select,button').forEach(e => e.remove());"
+        "return copy.textContent;}).join(' ')"
     )
     for value in (text, handle.get_attribute("aria-label"),
                   handle.get_attribute("placeholder"), handle.get_attribute("name"),
                   handle.get_attribute("title")):
         if value and value.strip():
-            return _redact(re.sub(r"\s+", " ", value.strip()))
+            return redact(re.sub(r"\s+", " ", value.strip()))
     return ""
 
 
-def _inspect(page, collect_text: bool, truncated: set[str]) -> tuple[PageMap, tuple[dict, ...]]:
+def _inspect(page, collect_text: bool, truncated: set[str], *, redact=_redact, safe_url=_safe_url) -> tuple[PageMap, tuple[dict, ...]]:
     elements: list[Element] = []
     # Conditional alerts are useful post-action evidence, even though they are
     # not interactive controls. Reuse Element rather than a second UI schema.
@@ -179,16 +193,21 @@ def _inspect(page, collect_text: bool, truncated: set[str]) -> tuple[PageMap, tu
             continue
         tag = handle.evaluate("element => element.tagName.toLowerCase()")
         test_id = _test_id(handle)
-        name = _name(handle, tag)
+        name = _name(handle, tag, redact)
+        if tag == "select" and handle.locator("option").count() > MAX_OPTIONS:
+            truncated.add("options")
         elements.append(Element(
-            id=_redact(handle.get_attribute("id") or _slug(name or test_id or "", f"element_{len(elements)}")),
-            role=_redact(handle.get_attribute("role") or INTERACTIVE.get(tag, tag)),
-            name=name or _redact(test_id or ""), tag=tag,
-            input_type=_redact(handle.get_attribute("type") or "text") if tag == "input" else None,
+            id=redact(handle.get_attribute("id") or _slug(name or test_id or "", f"element_{len(elements)}")),
+            role=redact(handle.get_attribute("role") or INTERACTIVE.get(tag, tag)),
+            name=name or redact(test_id or ""), tag=tag,
+            input_type=redact(handle.get_attribute("type") or "text") if tag == "input" else None,
             required=_has_attr(handle, "required"),
-            href=_safe_url(handle.get_attribute("href") or "") if tag == "a" else None,
-            test_id=_redact(test_id) if test_id else None,
+            href=safe_url(handle.get_attribute("href") or "") if tag == "a" else None,
+            test_id=redact(test_id) if test_id else None,
             disabled=_is_disabled(handle), checked=_is_checked(handle),
+            options=[{"value": redact(option.get_attribute("value") or option.inner_text()),
+                      "label": redact(option.inner_text()), "disabled": option.is_disabled()}
+                     for option in handle.locator("option").all()[:MAX_OPTIONS]] if tag == "select" else [],
         ))
     text: list[str] = []
     if collect_text:
@@ -201,7 +220,7 @@ def _inspect(page, collect_text: bool, truncated: set[str]) -> tuple[PageMap, tu
             if handle.locator("textarea,select").count():
                 continue
             if handle.is_visible():
-                chunk = _redact(handle.inner_text().strip())
+                chunk = redact(handle.inner_text().strip())
                 if chunk:
                     text.append(chunk)
     forms = []
@@ -213,24 +232,24 @@ def _inspect(page, collect_text: bool, truncated: set[str]) -> tuple[PageMap, tu
         handle = handles.nth(index)
         if handle.is_visible():
             forms.append({
-                "id": _redact(handle.get_attribute("id") or ""),
-                "name": _redact(handle.get_attribute("aria-label") or handle.get_attribute("name") or ""),
-                "method": _redact(handle.get_attribute("method") or "GET").upper(),
-                "action": _safe_url(urljoin(page.url, handle.get_attribute("action") or page.url)),
+                "id": redact(handle.get_attribute("id") or ""),
+                "name": redact(handle.get_attribute("aria-label") or handle.get_attribute("name") or ""),
+                "method": redact(handle.get_attribute("method") or "GET").upper(),
+                "action": safe_url(urljoin(page.url, handle.get_attribute("action") or page.url)),
             })
-    return PageMap(_safe_url(page.url), _redact(page.title()), text, elements), tuple(forms)
+    return PageMap(safe_url(page.url), redact(page.title()), text, elements), tuple(forms)
 
 
 def explore_page(
     request: ExplorationRequest | ValidatedExplorationRequest, *, base_url: str,
-    storage_state: Path | None = None, timeout_ms: int = 10000, render_wait_ms: int = 2000,
+    storage_state: Path | None = None, timeout_ms: int = 10000, render_wait_ms: int = 2000, fixture_store=None,
 ) -> ExplorationResult:
     """Inspect exactly one same-origin target in a fresh, owned browser context.
 
     Storage state is read only for authenticated requests. Foreign frame/document
     navigation is blocked before inspection; the attempted redirect is reported.
-    Clicks require a ValidatedExplorationRequest wrapper and deterministic
-    empty-form checks; raw action-bearing requests never open a browser.
+    Interactions require a ValidatedExplorationRequest wrapper and deterministic
+    source/control checks; raw action-bearing requests never open a browser.
     Navigated pages still run their own normal application code.
     """
     observed_at = datetime.now(timezone(timedelta(hours=7))).isoformat()
@@ -245,15 +264,19 @@ def explore_page(
     truncated: set[str] = set()
     action_observations: list[dict] = []
     active_action_index = None
+    def redact(value):
+        return _redact(fixture_store.redact(value) if fixture_store else value)
+    def safe_url(value):
+        return _safe_url(fixture_store.redact(value) if fixture_store else value)
 
     def result() -> ExplorationResult:
-        safe_request = replace(request, target=_safe_url(request.target), reason=_redact(request.reason))
+        safe_request = replace(request, target=safe_url(request.target), reason=redact(request.reason))
         return ExplorationResult(safe_request, final_url, page_map, forms, tuple(network),
                                  tuple(issues), observed_at, redirect_url, tuple(sorted(truncated)),
                                  tuple(action_observations))
 
     if request.actions and approved is None:
-        issues.append(ExplorationIssue("ACTION_NOT_VALIDATED", "Clicks require an approved exploration wrapper."))
+        issues.append(ExplorationIssue("ACTION_NOT_VALIDATED", "Interactions require an approved exploration wrapper."))
         return result()
     if len(request.actions) > MAX_EXPLORATION_ACTIONS:
         issues.append(ExplorationIssue("ACTION_BUDGET_EXCEEDED", "Too many exploration actions."))
@@ -288,7 +311,7 @@ def explore_page(
             outgoing = event["request"]["url"]
             if _origin(outgoing) != _origin(base_url):
                 if event["frameId"] == main_frame_id:
-                    redirect_url = _safe_url(outgoing)
+                    redirect_url = safe_url(outgoing)
                 cdp.send("Fetch.failRequest", {"requestId": event["requestId"], "errorReason": "Aborted"})
             else:
                 cdp.send("Fetch.continueRequest", {"requestId": event["requestId"]})
@@ -300,7 +323,7 @@ def explore_page(
             from ..response_capture import matches_request
             if _origin(response.url) != _origin(base_url):
                 if approved is None or not any(
-                    g.get("source") == "validated_click" and
+                    g.get("source") in {"validated_click", "validated_action"} and g.get("capture_requests") and
                     matches_request(response.request, g["capture_requests"])
                     for g in approved.grounding
                 ):
@@ -308,7 +331,7 @@ def explore_page(
             if len(network) >= MAX_NETWORK:
                 truncated.add("network")
                 return
-            record = {"method": response.request.method, "url": _safe_url(response.url),
+            record = {"method": response.request.method, "url": safe_url(response.url),
                       "status": response.status, "resource_type": response.request.resource_type}
             if active_action_index is not None:
                 record["action_index"] = active_action_index
@@ -318,7 +341,7 @@ def explore_page(
             page.on("response", response_metadata)
         phase = "navigation"
         response = page.goto(target, wait_until="load", timeout=timeout_ms)
-        final_url = _safe_url(page.url)
+        final_url = safe_url(page.url)
         if redirect_url or _origin(page.url) != _origin(base_url):
             issues.append(ExplorationIssue("CROSS_ORIGIN_REDIRECT", "External navigation stopped; no foreign page inspected."))
             return result()
@@ -328,7 +351,105 @@ def explore_page(
         phase = "inspection"
         if render_wait_ms:
             _wait_for_render(page, max_wait_ms=render_wait_ms)
+        v2 = approved is not None and any(g.get("source") == "validated_action" for g in approved.grounding)
+        if v2:
+            from ..exploration_actions import action_fingerprint, forbidden
+            bindings = [g for g in approved.grounding if g.get("source") == "validated_action"]
+            if not approved.action_fingerprint or approved.action_fingerprint != action_fingerprint(request, bindings):
+                issues.append(ExplorationIssue("ACTION_NOT_VALIDATED", "Approved sequence was altered."))
+                return result()
+            # Bind actual DOM nodes before any event-producing interaction.
+            nodes = {}
+            for action in request.actions:
+                locator = page.get_by_test_id(action.target)
+                if locator.count() != 1:
+                    issues.append(ExplorationIssue("ACTION_PRECONDITION_FAILED", "Stable control is missing or ambiguous."))
+                    return result()
+                nodes[action.target] = locator.element_handle()
+            unsafe_network = False
+            def safe_request(route):
+                nonlocal unsafe_network
+                from ..response_capture import matches_request
+                req = route.request
+                allowed_login = any(g.get("action_index") == active_action_index and g.get("capture_requests")
+                                    and matches_request(req, g["capture_requests"]) for g in bindings)
+                safe_read = req.method in {"GET", "HEAD", "OPTIONS"} and _origin(req.url) == _origin(base_url) and not forbidden(urlsplit(req.url).path)
+                if active_action_index is not None and not (allowed_login or safe_read):
+                    unsafe_network = True
+                    route.abort()
+                else:
+                    route.continue_()
+            page.route("**/*", safe_request)
         for index, action in enumerate(request.actions):
+            if v2:
+                phase = "action"
+                binding = next((g for g in bindings if g["action_index"] == index), None)
+                if binding is None or binding["page"] != target or page.url != target or redirect_url:
+                    issues.append(ExplorationIssue("ACTION_PAGE_CHANGED", "Approved current page changed."))
+                    return result()
+                locator = page.get_by_test_id(action.target)
+                tag = locator.evaluate("e => e.tagName.toLowerCase()") if locator.count() == 1 else None
+                role = (locator.get_attribute("role") or INTERACTIVE.get(tag, tag)) if tag else None
+                if (locator.count() != 1 or not locator.is_visible() or locator.is_disabled()
+                        or not locator.evaluate("(e, original) => e === original && e.isConnected", nodes[action.target])
+                        or tag != binding['tag'] or role != binding['role']
+                        or _name(locator, tag, redact) != binding['name']
+                        or tag == 'input' and (locator.get_attribute('type') or 'text') != binding['input_type']):
+                    issues.append(ExplorationIssue("ACTION_PRECONDITION_FAILED", "Approved control state or DOM identity changed."))
+                    return result()
+                active_action_index = index
+                observation = None
+                if action.action == 'ui.fill':
+                    if not locator.is_editable():
+                        issues.append(ExplorationIssue('ACTION_PRECONDITION_FAILED', 'Approved input is not editable.'))
+                        return result()
+                    value = action.value
+                    if binding.get('fixture_metadata'):
+                        if fixture_store is None or not fixture_store.trusts(value, {value: binding['fixture_metadata']}):
+                            issues.append(ExplorationIssue('FIXTURE_UNAVAILABLE', 'Trusted runtime fixture is unavailable.'))
+                            return result()
+                        value = fixture_store.resolve(value)
+                    session.fill({'target': action.target, 'value': value, '_fixture_alias': action.value})
+                    value = None
+                elif action.action == 'ui.select':
+                    options = locator.locator('option')
+                    matches = [o for o in options.all() if (o.get_attribute('value') or o.inner_text()) == action.value and not o.is_disabled()]
+                    if len(matches) != 1 or forbidden(matches[0].inner_text()):
+                        issues.append(ExplorationIssue('ACTION_PRECONDITION_FAILED', 'Approved option is unavailable or ambiguous.'))
+                        return result()
+                    session.select({'target': action.target, 'value': action.value})
+                elif action.action == 'ui.click':
+                    form = locator.locator('xpath=ancestor::form[1]')
+                    if form.count() and (form.get_attribute('method') or 'GET').upper() != 'GET' and not binding.get('capture_requests'):
+                        issues.append(ExplorationIssue('ACTION_PRECONDITION_FAILED', 'Unapproved form submission.'))
+                        return result()
+                    if binding.get('capture_requests'):
+                        observation = session.click_and_observe_requests({'target': action.target, 'capture_requests': binding['capture_requests']}, action.step_seq)
+                    else:
+                        session.click({'target': action.target})
+                else:
+                    issues.append(ExplorationIssue('ACTION_NOT_VALIDATED', 'Unsupported action.'))
+                    return result()
+                page.wait_for_timeout(250)
+                if render_wait_ms:
+                    _wait_for_render(page, max_wait_ms=min(render_wait_ms, 1000))
+                if unsafe_network:
+                    issues.append(ExplorationIssue('UNSAFE_NETWORK_REQUEST', 'Unapproved write or foreign request was blocked; remaining actions stopped.'))
+                    return result()
+                if redirect_url or _origin(page.url) != _origin(base_url):
+                    issues.append(ExplorationIssue('CROSS_ORIGIN_REDIRECT', 'External navigation stopped.'))
+                    return result()
+                final_url = safe_url(page.url)
+                post_page, _ = _inspect(page, request.collect_text, truncated, redact=redact, safe_url=safe_url)
+                record = {'action_index': index, 'action': action.action, 'target': action.target,
+                          'source_step_seq': action.step_seq, 'source_clause': binding['source_clause'],
+                          'value_ref': action.value if binding.get('fixture_metadata') else None,
+                          'final_url': final_url, 'page': post_page.to_dict(),
+                          'source': {'type': 'playwright_exploration', 'observed_at': datetime.now(timezone(timedelta(hours=7))).isoformat()}}
+                if observation:
+                    record.update(request_count=observation['body']['request_count'], selector=observation['_ui_trigger'])
+                action_observations.append(record)
+                continue
             phase = "action"
             bindings = [g for g in approved.grounding if g.get("source") == "validated_click"
                         and g.get("action_index") == index and g.get("target") == action.target
@@ -359,13 +480,13 @@ def explore_page(
             observation = session.click_and_observe_requests({
                 "target": action.target, "capture_requests": binding["capture_requests"],
             }, step_seq=action.step_seq)
-            final_url = _safe_url(page.url)
+            final_url = safe_url(page.url)
             if redirect_url or _origin(page.url) != _origin(base_url):
                 issues.append(ExplorationIssue("CROSS_ORIGIN_REDIRECT", "External navigation stopped; no foreign page inspected."))
                 return result()
-            post_page, _ = _inspect(page, request.collect_text, truncated)
+            post_page, _ = _inspect(page, request.collect_text, truncated, redact=redact, safe_url=safe_url)
             action_observations.append({
-                "action_index": index, "action": action.action, "target": _redact(action.target),
+                "action_index": index, "action": action.action, "target": redact(action.target),
                 "source_step_seq": action.step_seq, "credential_inputs_empty": True,
                 "request_count": observation["body"]["request_count"],
                 "selector": observation["_ui_trigger"], "final_url": final_url,
@@ -375,19 +496,23 @@ def explore_page(
                 "source": {"type": "playwright_exploration",
                            "observed_at": datetime.now(timezone(timedelta(hours=7))).isoformat()},
             })
-        final_url = _safe_url(page.url)
+        final_url = safe_url(page.url)
         if redirect_url or _origin(page.url) != _origin(base_url):
             issues.append(ExplorationIssue("CROSS_ORIGIN_REDIRECT", "External navigation stopped; no foreign page inspected."))
             return result()
-        page_map, forms = _inspect(page, request.collect_text, truncated)
+        page_map, forms = _inspect(page, request.collect_text, truncated, redact=redact, safe_url=safe_url)
+        if v2 and unsafe_network:
+            page_map = None
+            forms = ()
+            issues.append(ExplorationIssue('UNSAFE_NETWORK_REQUEST', 'Unapproved write or foreign request was blocked.'))
     except Exception:  # Browser errors may contain credentials/URLs: report a fixed message.
         if redirect_url:
-            final_url = _safe_url(page.url)
+            final_url = safe_url(page.url)
             issues.append(ExplorationIssue("CROSS_ORIGIN_REDIRECT", "External navigation stopped; no foreign page inspected."))
         elif phase == "navigation":
             issues.append(ExplorationIssue("NAVIGATION_FAILED", "Target navigation failed or timed out."))
         elif phase == "action":
-            issues.append(ExplorationIssue("ACTION_FAILED", "Approved click or observation failed."))
+            issues.append(ExplorationIssue("ACTION_FAILED", "Approved interaction or observation failed."))
         else:
             issues.append(ExplorationIssue("BROWSER_ERROR", "Browser setup or page inspection failed."))
     finally:

@@ -214,11 +214,11 @@ def run_resolution_cycle(
     if not ok:
         return finish()
     ok, plan_validation = attempt("exploration_validation", lambda: validate_exploration_plan(
-        deepcopy(plan), deepcopy(packet), deepcopy(working), base_url))
+        deepcopy(plan), deepcopy(packet), deepcopy(working), base_url, fixture_store=fixture_store))
     if not ok or not plan_validation.valid_requests:
         return finish()
     ok, execution = attempt("exploration_execution", lambda: execute_validated_exploration(
-        deepcopy(plan_validation), deepcopy(packet), base_url=base_url, storage_state=storage_state))
+        deepcopy(plan_validation), deepcopy(packet), base_url=base_url, storage_state=storage_state, fixture_store=fixture_store))
     if ok:
         packet = deepcopy(execution.context)
     # Observation does not modify the testcase or its executability. Stop here.

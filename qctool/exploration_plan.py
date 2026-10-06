@@ -42,7 +42,7 @@ class PlannedExploration:
         result = {"target": self.target, "session": self.session,
                   "purposes": [asdict(purpose) for purpose in self.purposes]}
         if self.actions:
-            result["actions"] = [asdict(action) for action in self.actions]
+            result["actions"] = [action.to_dict() for action in self.actions]
         return result
 
 
@@ -78,6 +78,7 @@ class ValidatedExplorationRequest:
     purposes: tuple[ExplorationPurpose, ...]
     grounding: tuple[dict, ...]
     plan_indices: tuple[int, ...]
+    action_fingerprint: str = ""
 
     @property
     def requires_auth_state(self) -> bool:
@@ -89,6 +90,7 @@ class ValidatedExplorationRequest:
             "purposes": [asdict(purpose) for purpose in self.purposes],
             "grounding": deepcopy(list(self.grounding)), "plan_indices": list(self.plan_indices),
             "requires_auth_state": self.requires_auth_state,
+            "action_fingerprint": self.action_fingerprint,
         }
 
 
@@ -255,10 +257,19 @@ def _click_grounding(item, target, context, case, base_url):
     return bindings
 
 
+def _safe_planned(item, store):
+    if store is None:
+        return deepcopy(item)
+    return replace(item, target=store.redact(item.target),
+                   purposes=tuple(replace(p, reason=store.redact(p.reason)) for p in item.purposes),
+                   actions=tuple(replace(a, value=store.redact(a.value) if a.value is not None else None,
+                                         target=store.redact(a.target)) for a in item.actions))
+
+
 def validate_exploration_plan(
-    plan: ExplorationPlan, context: ResolutionContext, case: TestCase, base_url: str,
+    plan: ExplorationPlan, context: ResolutionContext, case: TestCase, base_url: str, *, fixture_store=None,
 ) -> ExplorationPlanValidationResult:
-    """Approve grounded inspection and the narrow empty-login click rule.
+    """Approve grounded inspection and exact source-grounded UI interactions.
 
     Exact URL identity retains query/fragment and path case; no semantic matching
     or API endpoint inference occurs. Identical target/session/action sequences
@@ -276,7 +287,7 @@ def validate_exploration_plan(
     if not plan.requests:
         global_issues.append(ExplorationPlanIssue("EMPTY_PLAN", "Plan contains no exploration requests."))
     if global_issues:
-        rejected = tuple(RejectedExploration(index, deepcopy(item), tuple(
+        rejected = tuple(RejectedExploration(index, _safe_planned(item, fixture_store), tuple(
             replace(issue, request_index=index) for issue in global_issues
         )) for index, item in enumerate(plan.requests))
         return ExplorationPlanValidationResult((), rejected, tuple(global_issues))
@@ -295,9 +306,9 @@ def validate_exploration_plan(
         if not isinstance(item.session, str) or item.session not in SESSION_MODES:
             fail("UNSUPPORTED_SESSION", "Only existing anonymous/authenticated sessions are allowed.")
         if not isinstance(item.actions, tuple) or any(not isinstance(a, ExplorationAction) for a in item.actions):
-            fail("INVALID_ACTION", "Actions must be structured ordered click requests.")
+            fail("INVALID_ACTION", "Actions must be structured ordered UI requests.")
         elif len(item.actions) > MAX_EXPLORATION_ACTIONS:
-            fail("ACTION_BUDGET_EXCEEDED", "At most two actions are allowed per plan.")
+            fail("ACTION_BUDGET_EXCEEDED", "At most five actions are allowed per request.")
         if (not isinstance(item.target, str) or not item.target
                 or "\\" in item.target or any(char.isspace() for char in item.target)):
             fail("INVALID_TARGET", "Target must be an unambiguous URL or application path.")
@@ -333,32 +344,41 @@ def validate_exploration_plan(
         action_grounding = []
         if not failures and item.actions:
             try:
-                action_grounding = _click_grounding(item, target, context, case, base_url)
+                if all(a.action == "ui.click" and a.value is None for a in item.actions):
+                    try:
+                        action_grounding = _click_grounding(item, target, context, case, base_url)
+                    except (ValueError, TypeError, KeyError):
+                        action_grounding = []
+                if not action_grounding:
+                    from .exploration_actions import ground_actions
+                    action_grounding = ground_actions(item, target, context, case, base_url, fixture_store)
             except (ValueError, TypeError, KeyError):
-                fail("UNSAFE_OR_UNGROUNDED_ACTION", "Click is not a unique page-bound source-justified empty-login action.")
+                fail("UNSAFE_OR_UNGROUNDED_ACTION", "Sequence lacks exact safe controls, source clauses, values or trusted fixtures.")
         if not failures:
             key = target, item.session, item.actions
             if key not in valid and len(valid) >= MAX_EXPLORATION_REQUESTS:
                 fail("REQUEST_BUDGET_EXCEEDED", "Only the first three unique valid target/session pairs are approved.")
-            if key not in valid and sum(len(v.request.actions) for v in valid.values()) + len(item.actions) > MAX_EXPLORATION_ACTIONS:
-                fail("ACTION_BUDGET_EXCEEDED", "At most two total clicks are approved per plan.")
+
 
         if failures:
-            rejected.append(RejectedExploration(index, deepcopy(item), tuple(failures)))
+            rejected.append(RejectedExploration(index, _safe_planned(item, fixture_store), tuple(failures)))
             issues.extend(failures)
             continue
 
         previous = valid.get(key)
-        purposes = tuple(dict.fromkeys((previous.purposes if previous else ()) + tuple(deepcopy(item.purposes))))
+        safe_purposes = tuple(replace(p, reason=fixture_store.redact(p.reason)) if fixture_store else deepcopy(p) for p in item.purposes)
+        purposes = tuple(dict.fromkeys((previous.purposes if previous else ()) + safe_purposes))
         request = ExplorationRequest(
             target, session=item.session, collect_text=True,
             collect_network=any(purpose.intent == "observe_network" for purpose in purposes),
             reason="; ".join(dict.fromkeys(purpose.reason for purpose in purposes)),
             actions=tuple(deepcopy(item.actions)),
         )
+        from .exploration_actions import action_fingerprint
         valid[key] = ValidatedExplorationRequest(
             request, case.id, purposes, tuple(deepcopy(targets[target] + action_grounding)),
             (previous.plan_indices if previous else ()) + (index,),
+            action_fingerprint(request, action_grounding),
         )
 
     return ExplorationPlanValidationResult(tuple(valid.values()), tuple(rejected), tuple(issues))

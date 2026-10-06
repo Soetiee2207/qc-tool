@@ -68,16 +68,22 @@ def build_exploration_prompt(
         "Propose an UNTRUSTED exploration plan as JSON. Do not execute or repair anything.",
         "Rules: Plan only observation for the listed unresolved gaps. Allowed intents "
         "are inspect_page and observe_network: navigate once and inspect. "
-        "Do not propose arbitrary clicks, fills, submits, uploads, purchases, account creation, "
-        "credential discovery, or other state-changing actions. Do not propose action "
-        "sequences. The sole interaction exception is an anonymous /login inspection "
-        "whose explicit Given requires both credentials empty and whose Then requires "
-        "no POST /api/auth/login: optional actions may propose exactly ui.click on the "
-        "unique stable test_id of the login submit button on that page. Each action uses "
-        "only action, target, step_seq, bound to a listed unresolved source clause. "
-        "Never select a navigation link as the submit button. The safety validator must "
-        "approve every click and the explorer checks empty inputs before interacting. "
-        "Omit actions otherwise. Use only explicit routes from testcase ui.goto/notes, selected UI "
+        "Only bounded approved ui.fill, ui.select and ui.click are permitted. At most "
+        "five ordered actions per request. Every target must be an exact unique stable "
+        "test_id on the requested current page, justified in source-clause order by "
+        "the unresolved step's explicit requirement. Do not invent actions or values. "
+        "Fill values must be exact public source literals or available trusted fixture "
+        "aliases already bound in testcase.test_data. Use aliases literally, never "
+        "resolved passwords, tokens or credentials. Never fill secret literals. "
+        "Select only a native select and an exact observed option value or explicit "
+        "source option; the explorer verifies it again. No upload, account creation, "
+        "destructive/admin/payment action or arbitrary JavaScript. Only source-required "
+        "Login, Validate, Check, Search, Filter or Preview button clicks have a V2 "
+        "approval rule. Unknown controls stay unresolved. The V1 empty-login rule "
+        "remains supported. Each action.step_seq names the unresolved source gap, "
+        "not an already executable click. Every action requires deterministic approval; "
+        "stop if previous actions change page or invalidate grounding. Omit actions "
+        "when insufficient evidence. Use only explicit routes from testcase ui.goto/notes, selected UI "
         "page URLs, or hrefs in the supplied UI evidence. Do not guess routes or invent "
         "elements. Targets must be safe application paths or same-origin HTTP(S) URLs; "
         "never propose foreign origins, javascript:, data:, or file: targets. An API "
@@ -107,9 +113,12 @@ def build_exploration_prompt(
         "actions is OPTIONAL and belongs INSIDE its request at requests[i].actions; "
         "omit it for page-only inspection. Every request has exactly target, session, "
         "purposes and optionally actions. Each action has exactly action, target, "
-        "step_seq. Do not add any other fields. requests may be [] when unresolved. Each request needs a "
+        "step_seq; ui.fill and ui.select also require value. Never put value on ui.click. Do not add any other fields. requests may be [] when unresolved. Each request needs a "
         "nonempty purposes array. step_seq is an integer or null, not placeholder text. "
         "Angle-bracket strings indicate placeholders, not evidence.",
+        "Inside requests[i].actions, fill/select shape is exactly "
+        '{"action":"ui.fill|ui.select","target":"<grounded test_id>","step_seq":1,"value":"<public literal or available fixture alias>"}. '
+        "Replace step_seq with the real source gap; no extra fields.",
         section("OUTPUT JSON SHAPE", _OUTPUT_SHAPE),
     ])
 
@@ -149,11 +158,15 @@ def parse_exploration_plan(response: str) -> ExplorationPlan:
         actions = []
         for position, action in enumerate(_list(item.get("actions", []), f"{where}.actions")):
             label = f"{where}.actions[{position}]"
-            _fields(action, {"action", "target", "step_seq"}, label)
+            verb = _nonempty(action.get("action"), f"{label}.action") if isinstance(action, dict) else None
+            _fields(action, {"action", "target", "step_seq"} | ({"value"} if verb in {"ui.fill", "ui.select"} else set()), label)
+            if verb in {"ui.fill", "ui.select"} and not isinstance(action["value"], str):
+                raise LLMResponseError(f"{label}.value must be a string")
             actions.append(ExplorationAction(
                 target=_nonempty(action["target"], f"{label}.target"),
                 step_seq=_positive_int(action["step_seq"], f"{label}.step_seq"),
-                action=_nonempty(action["action"], f"{label}.action"),
+                action=verb,
+                value=action.get("value"),
             ))
         purposes_raw = _list(item["purposes"], f"{where}.purposes")
         if not purposes_raw:

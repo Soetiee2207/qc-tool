@@ -66,16 +66,15 @@ def test_action_json_is_untrusted_and_strict():
         parse_exploration_plan(json.dumps(raw))
 
 
-def test_request_actions_are_deduplicated_and_total_budget_is_bounded():
+def test_request_actions_are_deduplicated_and_request_budget_is_bounded():
     case, ui, context, plan = setup()
     item = plan.requests[0]
     duplicated = replace(plan, requests=(item, item))
     result = validate_exploration_plan(duplicated, context, case, ui.base_url)
     assert len(result.valid_requests) == 1
     assert result.valid_requests[0].plan_indices == (0, 1)
-    # Differing action sequences must not collapse into one request; the total
-    # plan budget rejects a second sequence that would add two more clicks.
-    extended = replace(plan, requests=(item, replace(item, actions=item.actions * 2)))
+    # Different sequences do not collapse; six actions exceed the request budget.
+    extended = replace(plan, requests=(item, replace(item, actions=item.actions * 6)))
     result = validate_exploration_plan(extended, context, case, ui.base_url)
     assert result.status == "PARTIALLY_VALID"
     assert result.issues[0].code == "ACTION_BUDGET_EXCEEDED"
@@ -110,7 +109,7 @@ def test_unsafe_actions_rejected(mutation):
         action = replace(action, step_seq=1)
     elif mutation == "js":
         action = replace(action, action="evaluate")
-    actions = (action,) * (3 if mutation == "budget" else 1)
+    actions = (action,) * (6 if mutation == "budget" else 1)
     plan = replace(plan, requests=(replace(plan.requests[0], actions=actions),))
     result = validate_exploration_plan(plan, context, case, ui.base_url)
     assert result.status == "REJECTED"
