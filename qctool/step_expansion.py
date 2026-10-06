@@ -20,6 +20,14 @@ def expected_expansion(step: Step, test_data: dict, *, min_atoms: int = 2,
     if not isinstance(text, str) or not text.strip():
         return None
     if step.action == "perform.unmapped" and step.kind == StepKind.GIVEN:
+        empty = re.fullmatch(r"Phiên anonymous ở (/login); cả hai ô email và mật khẩu trống", text.strip())
+        if empty:
+            return [{"action": "ui.session", "args": {"mode": "anonymous"}},
+                    {"action": "ui.goto", "args": {"url": empty[1]}, "precondition_route": empty[1]},
+                    {"action": "assert.value", "hint": "email", "empty_input": True,
+                     "args": {"expected": "^$", "operator": "matches"}},
+                    {"action": "assert.value", "hint": "password", "empty_input": True,
+                     "args": {"expected": "^$", "operator": "matches"}}]
         # Exact SalonHub source form only. Every non-runtime clause must be
         # proven against config facts and provisioned aliases, never discarded.
         precondition = re.fullmatch(
@@ -72,6 +80,9 @@ def expected_expansion(step: Step, test_data: dict, *, min_atoms: int = 2,
             if match := re.fullmatch(r"URL\s+(?:chuyển tới|vẫn ở|==)\s+(/\S*)", clause, re.I):
                 result.append({"action": "assert.url_matches", "args": {
                     "pattern": re.escape(match[1]) + "$"}, "route": match[1]})
+            elif match := re.fullmatch(r"không gửi (POST) (/api/auth/login)", clause):
+                result.append({"action": "assert.json_field", "args": {
+                    "path": "$.request_count", "expected": 0}, "no_request": (match[1], match[2])})
             elif match := re.fullmatch(r"(GET|POST|PUT|PATCH|DELETE)\s+(/\S+)\s+trả\s+([1-5]\d\d)(?:\s+với\s+success=(true|false))?", clause, re.I):
                 operation = (match[1].upper(), match[2])
                 result.append({"action": "assert.http_status", "args": {"expected": int(match[3])},

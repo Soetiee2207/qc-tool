@@ -305,10 +305,10 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
             hint = meaning["hint"]
             def matches_hint(item: dict) -> bool:
                 name = item.get("name", "")
-                if (atom.action == "ui.fill" and item.get("role") != "textbox"
+                if ((atom.action == "ui.fill" or meaning.get("empty_input")) and item.get("role") != "textbox"
                         and not item.get("input_type")):
                     return False
-                if atom.action == "ui.fill" and hint in {"email", "password"}:
+                if (atom.action == "ui.fill" or meaning.get("empty_input")) and hint in {"email", "password"}:
                     return (item.get("input_type") == hint or
                             hint == "email" and "email" in _norm(name).split())
                 return _norm(hint) == _norm(name)
@@ -325,6 +325,24 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
             required["target"] = atom.args.get("target")
         if atom.action == "ui.click" and "capture_response" in atom.args:
             required["capture_response"] = atom.args["capture_response"]  # independently grounded above
+        if atom.action == "ui.click" and "capture_requests" in atom.args:
+            required["capture_requests"] = atom.args["capture_requests"]
+        if "no_request" in meaning:
+            method, path = meaning["no_request"]
+            if not any(source == "openapi" and item.get("method") == method and item.get("path") == path
+                       for source, item, _ in refs):
+                return "API_EVIDENCE_NOT_FOUND"
+            source_name = atom.args.get("source", "res")
+            captures = [item for item in working.steps if origins[item.seq] < step.seq and
+                        item.action == "ui.click" and
+                        item.args.get("capture_requests", {}).get("save_as", "res") == source_name]
+            if not captures or any(item.action == "http.request" and origins[item.seq] < step.seq
+                                  and item.args.get("save_as", "res") == source_name for item in working.steps):
+                return "MISSING_RESPONSE"
+            selector = captures[-1].args["capture_requests"]
+            if (selector["method"], selector["path"]) != (method, path):
+                return "API_EVIDENCE_NOT_FOUND"
+            required["source"] = source_name
         if "value" in meaning:
             required["value"] = meaning["value"]
         if "operation" in meaning:
@@ -490,8 +508,8 @@ def _ground_action(change: ProposedChange, refs: list[tuple[str, dict, dict | No
             return "UI_EVIDENCE_NOT_FOUND"
         if not element.get("test_id") and args.get("by_name") != element.get("name"):
             return "UI_EVIDENCE_NOT_FOUND"
-    if action == "ui.click" and "capture_response" in args:
-        capture = args["capture_response"]
+    if action == "ui.click" and ("capture_response" in args or "capture_requests" in args):
+        capture = args.get("capture_response") or args["capture_requests"]
         try:
             validate_capture(capture)
         except (ValueError, TypeError):
@@ -507,6 +525,9 @@ def _ground_action(change: ProposedChange, refs: list[tuple[str, dict, dict | No
         if capture["origin"] not in origins:
             return "API_EVIDENCE_NOT_FOUND"
         reference = re.compile(r"\b" + re.escape(capture["method"]) + r"\s+" + re.escape(capture["path"]) + r"(?=\s|$)")
+        if "capture_requests" in args:
+            reference = re.compile(r"(?:^|;\s*)không gửi " + re.escape(capture["method"]) +
+                                   r"\s+" + re.escape(capture["path"]) + r"\s*(?=;|$)")
         if not any(item.get("seq", 0) > change.step_seq and item.get("action") == "assert.unmapped"
                    and reference.search(str(item.get("args", {}).get("expected", "")))
                    for item in context.testcase.get("steps", [])):
@@ -567,7 +588,7 @@ def _check_semantics(step: Step, change: ProposedChange,
     if step.action == "perform.unmapped":
         description = str(step.args.get("description") or "")
         grounded_arguments = {
-            "ui.click": {"target", "by_name", "capture_response"},
+            "ui.click": {"target", "by_name", "capture_response", "capture_requests"},
             "http.request": {"method", "path", "base"},
             "ui.goto": {"url"},
         }

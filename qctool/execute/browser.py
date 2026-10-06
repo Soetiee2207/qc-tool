@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
-from ..response_capture import origin_of, validate_capture
+from ..response_capture import origin_of, validate_capture, matches_request
 
 DEFAULT_VIEWPORT = {"width": 1440, "height": 900}
 
@@ -741,11 +741,7 @@ class BrowserSession:
         requests, responses, finished = [], [], set()
         deadline = time.monotonic() + spec.get("timeout_ms", 10000) / 1000
         def matches(req):
-            try:
-                return (req.method == spec["method"] and origin_of(req.url) == spec["origin"]
-                        and urlsplit(req.url).path == spec["path"])
-            except (ValueError, AttributeError):
-                return False
+            return matches_request(req, spec)
         def on_request(req):
             if time.monotonic() <= deadline and matches(req):
                 requests.append(req)
@@ -789,6 +785,43 @@ class BrowserSession:
             for event, handler in listeners:
                 with contextlib.suppress(Exception):
                     page.remove_listener(event, handler)
+
+    def click_and_observe_requests(self, args: dict, step_seq: int) -> dict:
+        """Count exact requests during this submit window, including failed calls.
+
+        Zero means absence only within the explicit bounded window. Every match
+        counts; duplicates cannot be mistaken for absence. No response/body read.
+        """
+        spec = args["capture_requests"]
+        try:
+            validate_capture(spec)
+        except (ValueError, TypeError):
+            raise ResponseCaptureError("INVALID_UI_RESPONSE_CAPTURE") from None
+        page = self.page
+        private_before = self._capture_private
+        self._capture_private = True
+        count = 0
+        deadline = None
+        window_ms = spec.get("timeout_ms", 10000)
+        def on_request(req):
+            nonlocal count
+            if (deadline is None or time.monotonic() <= deadline) and matches_request(req, spec):
+                count += 1
+        page.on("request", on_request)
+        try:
+            self.locate(args).click(timeout=window_ms)
+            deadline = time.monotonic() + window_ms / 1000
+            while time.monotonic() < deadline:
+                page.wait_for_timeout(min(50, max(1, int((deadline-time.monotonic())*1000))))
+            return {"body": {"request_count": count}, "_ui_trigger": {
+                "step_seq": step_seq, "method": spec["method"], "path": spec["path"],
+                "origin": spec["origin"], "window_ms": spec.get("timeout_ms", 10000)}}
+        except Exception:
+            raise ResponseCaptureError("UI_REQUEST_OBSERVATION_FAILED") from None
+        finally:
+            self._capture_private = private_before
+            with contextlib.suppress(Exception):
+                page.remove_listener("request", on_request)
 
     def fill(self, args: dict) -> str:
         locator = self.locate(args)

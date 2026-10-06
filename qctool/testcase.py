@@ -88,8 +88,8 @@ ACTION_SPECS: dict[str, ActionSpec] = {
     # sạch các bước vừa map (validator chỉ chạy trước mapper nên lỗi bị che).
     "ui.click": ActionSpec(
         required=("target",),
-        optional=("by_name", "capture_response"),
-        doc="Bấm element; capture_response quan sát đúng method/path/origin và lưu response công khai.",
+        optional=("by_name", "capture_response", "capture_requests"),
+        doc="Bấm element; capture_response lưu response công khai, capture_requests kiểm không có request trong cửa sổ bounded; selector đúng method/path/origin.",
     ),
     "ui.fill": ActionSpec(
         required=("target", "value"),
@@ -329,12 +329,16 @@ class Step:
                 f"Bước {self.seq} (`{self.action}`): tham số lạ {sorted(unknown)}. "
                 f"Cho phép: {sorted(set(spec.required) | set(spec.optional))}"
             )
-        if "capture_response" in self.args:
+        if "capture_response" in self.args and "capture_requests" in self.args:
+            raise ValidationError(f"Bước {self.seq}: chọn một capture mode duy nhất")
+        for capture_key in ("capture_response", "capture_requests"):
+            if capture_key not in self.args:
+                continue
             from .response_capture import validate_capture
             try:
-                validate_capture(self.args["capture_response"])
+                validate_capture(self.args[capture_key])
             except (ValueError, TypeError):
-                raise ValidationError(f"Bước {self.seq}: capture_response không hợp lệ") from None
+                raise ValidationError(f"Bước {self.seq}: {capture_key} không hợp lệ") from None
         if "operator" in self.args and self.args["operator"] not in _OPERATORS:
             raise ValidationError(
                 f"Bước {self.seq}: operator `{self.args['operator']}` không hợp lệ. "
@@ -404,7 +408,7 @@ class Step:
             return "Nạp lại phiên đã đăng nhập"
         if self.action == "ui.click":
             name = self.args.get("by_name") or self.args.get("target", "")
-            capture = self.args.get("capture_response")
+            capture = self.args.get("capture_response") or self.args.get("capture_requests")
             suffix = (f"; quan sát {capture['method']} {capture['path']} → {capture.get('save_as', 'res')}"
                       if capture else "")
             return f"Bấm «{name}»{suffix}"

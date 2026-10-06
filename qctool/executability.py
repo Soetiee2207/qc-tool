@@ -65,6 +65,7 @@ def analyze_executability(case: TestCase) -> ExecutabilityReport:
 
     saved_responses: set[str] = set()
     captured_responses: set[str] = set()
+    request_observations: set[str] = set()
     executable_assertion = False
     for step in case.steps:
         action, args = step.action, step.args
@@ -95,13 +96,27 @@ def analyze_executability(case: TestCase) -> ExecutabilityReport:
 
         if action in _RESPONSE_ASSERTIONS:
             source = args.get("source", "res")
-            if source not in saved_responses or action == "assert.response_time" and source in captured_responses:
+            count_source = (action == "assert.json_field" and args.get("path") == "$.request_count"
+                            and source in request_observations)
+            if not count_source and (source not in saved_responses or action == "assert.response_time" and source in captured_responses):
                 gaps.append(ExecutionGap(
                     "MISSING_RESPONSE", f"No preceding HTTP response saved as {source!r}", step.seq
                 ))
 
         if action == "http.request" and len(gaps) == before:
+            request_observations.discard(args.get("save_as", "res"))
             saved_responses.add(args.get("save_as", "res"))
+        if action == "ui.click" and "capture_requests" in args and len(gaps) == before:
+            try:
+                from .response_capture import validate_capture
+                validate_capture(args["capture_requests"])
+            except (ValueError, TypeError):
+                gaps.append(ExecutionGap("INVALID_ARGUMENTS", "Invalid request observation selector", step.seq))
+            else:
+                key = args["capture_requests"].get("save_as", "res")
+                saved_responses.discard(key)
+                captured_responses.discard(key)
+                request_observations.add(key)
         if action == "ui.click" and "capture_response" in args and len(gaps) == before:
             from .response_capture import validate_capture
             try:
@@ -110,6 +125,7 @@ def analyze_executability(case: TestCase) -> ExecutabilityReport:
                 gaps.append(ExecutionGap("MISSING_ARGUMENT", "Invalid response capture selector", step.seq))
             else:
                 key = args["capture_response"].get("save_as", "res")
+                request_observations.discard(key)
                 saved_responses.add(key)
                 captured_responses.add(key)
         if action == "http.request":

@@ -32,3 +32,12 @@ def validate_capture(spec: object) -> None:
     timeout = spec.get('timeout_ms', 10000)
     if type(timeout) is not int or not 100 <= timeout <= 30000:
         raise ValueError('Capture timeout must be an integer from 100 to 30000 ms')
+
+
+def matches_request(request, spec: dict) -> bool:
+    """Exact shared selector; never inspect headers or request payload."""
+    try:
+        return (request.method == spec["method"] and origin_of(request.url) == spec["origin"]
+                and urlsplit(request.url).path == spec["path"])
+    except (ValueError, AttributeError):
+        return False

@@ -494,7 +494,7 @@ def _run_once(case: TestCase, session: HttpSession,
             result.actual = [result.blocked_reason]
             return result
     capture_settings = {}
-    if (fixture_steps or any(s.args.get("capture_response") for s in case.steps)) and browser is not None:
+    if (fixture_steps or any(s.args.get("capture_response") or s.args.get("capture_requests") for s in case.steps)) and browser is not None:
         for name, replacement in (("trace_enabled", False), ("evidence_dir", None)):
             if hasattr(browser, name):
                 capture_settings[name] = getattr(browser, name)
@@ -525,6 +525,18 @@ def _run_once(case: TestCase, session: HttpSession,
                         response = browser.click_and_capture(step.args, step.seq)
                         saved[capture.get("save_as", "res")] = response
                         ok, detail = True, f"Captured {capture['method']} {capture['path']} → HTTP {response['status']} (trigger step {step.seq})"
+                    elif step.action == "ui.click" and "capture_requests" in step.args:
+                        if browser is None:
+                            from .browser import ResponseCaptureError
+                            raise ResponseCaptureError("UI_REQUEST_OBSERVATION_FAILED")
+                        capture = step.args["capture_requests"]
+                        key = capture.get("save_as", "res")
+                        saved.pop(key, None)
+                        observation = browser.click_and_observe_requests(step.args, step.seq)
+                        saved[key] = observation
+                        ok, detail = observation["body"]["request_count"] == 0, (f"Observed {capture['method']} {capture['path']}: "
+                            f"{observation['body']['request_count']} requests in {capture.get('timeout_ms',10000)}ms "
+                            f"(trigger step {step.seq})")
                     elif step in fixture_steps:
                         from dataclasses import replace
                         runtime_step = replace(step, args={**step.args,
@@ -558,7 +570,8 @@ def _run_once(case: TestCase, session: HttpSession,
                 result.status = STATUS_FAIL
                 result.duration_ms = (time.perf_counter() - started) * 1000
                 return result
-            if not ok and step.action == "http.request":
+            if not ok and (step.action == "http.request" or
+                           step.action == "ui.click" and "capture_requests" in step.args):
                 result.status = STATUS_FAIL
                 result.blocked_reason = detail
                 result.duration_ms = (time.perf_counter() - started) * 1000
