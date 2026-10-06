@@ -263,3 +263,51 @@ def test_duplicate_secret_json_key_not_in_error():
         parse_resolution_proposal('{"private-secret":1,"private-secret":2}')
     assert caught.value.category == "JSON_STRUCTURE"
     assert "private-secret" not in str(caught.value)
+
+
+def test_exact_normal_and_expansion_prompt_envelopes():
+    prompt = build_resolution_prompt(_context(_case()))
+    def section(name):
+        return json.loads(prompt.split(name + '\n', 1)[1].split('\n\n', 1)[0])
+    normal = section('OUTPUT JSON SHAPE')
+    expanded = section('EXPANSION CHANGE JSON SHAPE — alternative to a normal change')
+    fields = {'step_seq', 'from_action', 'gap_codes', 'proposed', 'reason', 'evidence'}
+    assert set(normal) == {'testcase_id', 'changes', 'unresolved'}
+    assert set(normal['changes'][0]) == fields == set(expanded)
+    assert set(normal['changes'][0]['proposed']) == {'action', 'args'}
+    assert set(expanded['proposed']) == {'steps'}
+    assert all(set(a) == {'action', 'args', 'evidence'} for a in expanded['proposed']['steps'])
+    capture = section('CAPTURE_RESPONSE JSON SHAPE — inside ui.click.args only')
+    assert set(capture) == {'method', 'path', 'origin', 'save_as', 'timeout_ms'}
+    assert capture['save_as'] == 'login_response'
+    atoms = section('RESPONSE ASSERTION ATOMS — inside proposed.steps only')
+    assert all(a['args']['source'] == 'login_response' for a in atoms)
+    assert 'No extra change-level fields' in prompt
+    assert 'COMPACT LOGIN EXAMPLE' not in prompt  # Insufficient evidence: no invented example.
+
+
+@pytest.mark.parametrize('field', ['steps', 'expansion', 'capture_response', 'action', 'args', 'source', 'confidence', 'status'])
+def test_change_level_extras_still_fail_without_auto_correction(field):
+    change = {**_change(), field: {}}
+    with pytest.raises(LLMResponseError) as error:
+        parse_resolution_proposal(_response(changes=[change]))
+    assert error.value.category == 'FIELD_SET'
+    assert error.value.path == 'changes[0]'
+
+
+def test_context_login_example_parses_and_validates_without_mutation():
+    from copy import deepcopy
+    from tests.test_ui_response_capture import resolution_inputs
+    from qctool.proposal_validation import validate_resolution_proposal
+    case, context, store, _ = resolution_inputs()
+    snapshot = deepcopy((case, context))
+    prompt = build_resolution_prompt(context)
+    marker = 'COMPACT LOGIN EXAMPLE — partial proposal from this context only\n'
+    example = json.loads(prompt.split(marker, 1)[1])
+    proposal = parse_resolution_proposal(json.dumps(example))
+    validation = validate_resolution_proposal(proposal, context, case, fixture_store=store)
+    assert [c.step_seq for c in validation.valid_changes] == [2, 3], validation.issues
+    assert not validation.rejected_changes
+    assert (case, context) == snapshot
+    assert store.resolve('active_user.password') not in prompt
+    assert example['changes'][0]['proposed']['steps'][2]['args']['capture_response']['save_as'] == 'login_response'

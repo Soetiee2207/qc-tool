@@ -26,6 +26,40 @@ from qctool.resolution_evaluation import _case_from_dict
 from qctool.ui.crawl import UIMap
 
 
+_CHANGE_FIELDS = {"step_seq", "from_action", "gap_codes", "proposed", "reason", "evidence"}
+# Unknown field names themselves may contain secrets. Persist known schema/alias
+# names only; arbitrary names and ALL values are omitted.
+_DIAGNOSTIC_FIELDS = _CHANGE_FIELDS | {
+    "action", "args", "steps", "expansion", "capture_response", "source", "kind",
+    "seq", "status", "confidence", "metadata", "testcase_id", "unresolved",
+    "proposed_steps", "replacement", "replace_with", "description", "note",
+}
+
+
+def completion_field_shape(response: str) -> list[dict]:
+    """Return field-set diagnostics, never completion values or unknown key names."""
+    try:
+        raw = json.loads(response)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(raw, dict) or not isinstance(raw.get("changes"), list):
+        return []
+    result = []
+    for index, change in enumerate(raw["changes"][:100]):
+        path = f"changes[{index}]"
+        if not isinstance(change, dict):
+            result.append({"path": path, "object": False})
+            continue
+        keys = set(change)
+        extra = keys - _CHANGE_FIELDS
+        result.append({"path": path, "object": True,
+                       "fields": sorted(keys & _DIAGNOSTIC_FIELDS),
+                       "missing_fields": sorted(_CHANGE_FIELDS - keys),
+                       "extra_fields": sorted(extra & _DIAGNOSTIC_FIELDS),
+                       "redacted_extra_field_count": len(extra - _DIAGNOSTIC_FIELDS)})
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -42,7 +76,14 @@ def main():
     class Replay:
         def complete(self, prompt):
             return args.replay_proposal.read_text()
-    adapter = provider if provider is not None else Replay()
+    source_adapter = provider if provider is not None else Replay()
+    field_shapes = []
+    class DiagnosticAdapter:
+        def complete(self, prompt):
+            response = source_adapter.complete(prompt)
+            field_shapes.extend(completion_field_shape(response))
+            return response  # Pass through unchanged to the strict parser.
+    adapter = DiagnosticAdapter()
     original = json.loads(args.audit.read_text())
     entries = original['coverage_loop']['history'][0]['resolution']['case_results']
     entry = next(e for e in entries if e['testcase_id'] == 'TC_SALON_AUTH_007')
@@ -59,7 +100,8 @@ def main():
                                   fixture_store=cfg.fixture_store, ui_map=ui_map, endpoints=endpoints)
     assert (case, context) == snapshot, 'Caller inputs changed'
     payload = {'testcase_id': case.id, 'observed_at': datetime.now(timezone.utc).isoformat(),
-               'model': provider.model if provider else 'recorded-replay', 'cycle': _serializable(result)}
+               'model': provider.model if provider else 'recorded-replay',
+               'completion_field_shape': field_shapes, 'cycle': _serializable(result)}
     if cfg.fixture_store:
         payload = cfg.fixture_store.redact(payload)
     # Defense against API-key echo in public provider identifiers too.
@@ -70,6 +112,7 @@ def main():
     args.out.write_text(encoded + '\n')
     attempts = [attempt for stage in result.audit for attempt in stage.provider_attempts]
     print(json.dumps({'audit': str(args.out), 'provider_attempts': attempts,
+                      'completion_field_shape': field_shapes,
                       'proposal_parsed': result.proposal is not None,
                       'validation_status': getattr(result.validation, 'status', None),
                       'executable': result.after.executable,
