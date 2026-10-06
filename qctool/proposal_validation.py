@@ -307,7 +307,13 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
                 return _norm(hint) == _norm(name)
             matches = [item for page in context.observations.get("ui_pages", [])
                        for item in page.get("elements", []) if matches_hint(item)]
-            if len(matches) != 1 or matches[0] is not element:
+            # A click's stable selector was already proven unique and cited by
+            # _ground_action. Same-name navigation links must not override it.
+            # Still prove the selected element matches the exact source meaning.
+            stable_click = (atom.action == "ui.click" and bool(element.get("test_id"))
+                            and atom.args.get("target") == element["test_id"])
+            if (not matches_hint(element) or
+                    not stable_click and (len(matches) != 1 or matches[0] is not element)):
                 return "EXPANSION_SEMANTICS_UNPROVEN"
             required["target"] = atom.args.get("target")
         if "value" in meaning:

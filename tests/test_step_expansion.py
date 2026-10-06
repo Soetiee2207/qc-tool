@@ -265,8 +265,8 @@ def test_parser_rejects_unbounded_or_empty_expansion(count):
         parse_resolution_proposal(json.dumps({"testcase_id": "TC_SALON_AUTH_007", "changes": [change], "unresolved": []}))
 
 
-@pytest.mark.parametrize("original", ["email", "login"])
-def test_ambiguous_field_or_button_cannot_be_arbitrarily_selected(original):
+def test_ambiguous_field_matching_is_unchanged():
+    original = "email"
     case, context = fixture()
     page = context.observations["ui_pages"][0]
     duplicate = deepcopy(next(e for e in page["elements"] if e["test_id"] == original))
@@ -283,3 +283,94 @@ def test_atom_reference_wrong_source_type_is_controlled_error(source):
     change["proposed"]["steps"][0]["evidence"][0]["source"] = source
     with pytest.raises(LLMResponseError):
         parse_resolution_proposal(json.dumps({"testcase_id": "TC_SALON_AUTH_007", "changes": [change], "unresolved": []}))
+
+
+def salonhub_login_controls():
+    case, context = fixture()
+    page = context.observations["ui_pages"][0]
+    submit = next(e for e in page["elements"] if e["test_id"] == "login")
+    submit.update(test_id="login-submit-btn", id="ng_nh_p")
+    nav = {"test_id": "nav-login-btn", "id": "ng_nh_p", "role": "link",
+           "name": "Đăng nhập", "href": "/login"}
+    page["elements"].append(nav)
+    context.observations["ui_pages"].append({"url": BASE + "/", "elements": [deepcopy(nav)]})
+    change = expansion()
+    atoms = (*change.expansion[:2], atom("ui.click", {"target": "login-submit-btn"}, "login-submit-btn"))
+    return case, context, replace(change, expansion=atoms)
+
+
+def test_salonhub_unique_submit_test_id_wins_over_same_named_navigation_links():
+    case, context, change = salonhub_login_controls()
+    snapshot = deepcopy((case, context, change))
+    result = validate(case, context, change)
+    assert result.valid_changes == (change,)
+    applied = apply_validated_resolution(case, result)
+    assert not applied.issues
+    assert applied.case.steps[3].action == "ui.click"
+    assert applied.case.steps[3].args["target"] == "login-submit-btn"
+    assert (case, context, change) == snapshot
+
+
+@pytest.mark.parametrize("other_page", [False, True])
+def test_duplicate_stable_click_test_ids_still_rejected(other_page):
+    case, context, change = salonhub_login_controls()
+    duplicate = deepcopy(next(e for e in context.observations["ui_pages"][0]["elements"]
+                              if e.get("test_id") == "login-submit-btn"))
+    duplicate["id"] = "another-submit"
+    context.observations["ui_pages"][int(other_page)]["elements"].append(duplicate)
+    result = validate(case, context, change)
+    assert not result.valid_changes
+    assert codes(result) & {"UI_EVIDENCE_NOT_FOUND", "FABRICATED_EVIDENCE"}
+
+
+def test_exact_click_test_id_does_not_prove_wrong_source_meaning():
+    case, context, change = salonhub_login_controls()
+    submit = next(e for e in context.observations["ui_pages"][0]["elements"]
+                  if e.get("test_id") == "login-submit-btn")
+    submit["name"] = "Đăng ký"
+    result = validate(case, context, change)
+    assert not result.valid_changes
+    assert "EXPANSION_SEMANTICS_UNPROVEN" in codes(result)
+
+
+def test_duplicate_navigation_test_id_is_not_a_valid_alternative():
+    case, context, change = salonhub_login_controls()
+    last = atom("ui.click", {"target": "nav-login-btn"}, "nav-login-btn")
+    result = validate(case, context, replace(change, expansion=(*change.expansion[:2], last)))
+    assert not result.valid_changes
+    assert "UI_EVIDENCE_NOT_FOUND" in codes(result)
+
+
+def test_missing_stable_test_id_keeps_strict_name_ambiguity_rule():
+    case, context = fixture()
+    page = context.observations["ui_pages"][0]
+    submit = next(e for e in page["elements"] if e["test_id"] == "login")
+    del submit["test_id"]
+    duplicate = {**submit, "id": "other-login", "role": "link"}
+    page["elements"].append(duplicate)
+    last = atom("ui.click", {"target": "login", "by_name": "Đăng nhập"},
+                refs=(EvidenceReference("ui-map", {"page": BASE + "/login", "role": "button", "name": "Đăng nhập"}),))
+    result = validate(case, context, replace(expansion(), expansion=(*expansion().expansion[:2], last)))
+    assert not result.valid_changes
+    assert "EXPANSION_SEMANTICS_UNPROVEN" in codes(result)
+
+
+def test_different_click_name_in_by_name_is_still_rejected():
+    case, context, change = salonhub_login_controls()
+    last = replace(change.expansion[-1], args={"target": "login-submit-btn", "by_name": "Đăng ký"})
+    result = validate(case, context, replace(change, expansion=(*change.expansion[:2], last)))
+    assert not result.valid_changes
+    assert "UI_EVIDENCE_NOT_FOUND" in codes(result)
+
+
+def test_name_and_role_citation_cannot_hide_duplicate_test_id():
+    case, context, change = salonhub_login_controls()
+    page = context.observations['ui_pages'][0]
+    duplicate = deepcopy(next(e for e in page['elements'] if e.get('test_id') == 'login-submit-btn'))
+    duplicate.update(name='Other submit', role='link', id='another-submit')
+    page['elements'].append(duplicate)
+    last = replace(change.expansion[-1], evidence=(EvidenceReference('ui-map', {
+        'page': BASE + '/login', 'test_id': 'login-submit-btn', 'role': 'button', 'name': 'Đăng nhập'}),))
+    result = validate(case, context, replace(change, expansion=(*change.expansion[:2], last)))
+    assert not result.valid_changes
+    assert 'UI_EVIDENCE_NOT_FOUND' in codes(result)
