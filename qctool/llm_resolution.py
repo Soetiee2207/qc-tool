@@ -273,6 +273,7 @@ def build_resolution_prompt(context: ResolutionContext) -> str:
         section("SPECIFICATION — REQUIREMENTS", data["specification"]),
         section("INTERFACE CONTRACT — OPENAPI", data["interface_contract"]),
         section("CURRENT UI OBSERVATION — UI MAP", data["observations"]),
+        section('TEST DATA EVIDENCE — declarations are not live verification; never provision', data.get('data_acquisition', {})),
         section("TESTCASE", data["testcase"]),
         section("EXECUTION GAPS", data["gaps"]),
         section("ALLOWED ACTIONS — ACTION_SPECS", data["allowed_actions"]),

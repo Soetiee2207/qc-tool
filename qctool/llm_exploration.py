@@ -99,6 +99,7 @@ def build_exploration_prompt(
         section("SPECIFICATION — REQUIREMENTS", data["specification"]),
         section("INTERFACE CONTRACT — OPENAPI", data["interface_contract"]),
         section("CURRENT UI OBSERVATION — GROUNDED PAGE/LINK EVIDENCE", data["observations"]),
+        section('TEST DATA EVIDENCE — declarations are not live verification; never provision', data.get('data_acquisition', {})),
         section("TESTCASE — EXPLICIT ROUTES AND SESSION REQUIREMENTS", data["testcase"]),
         section("UNRESOLVED EXECUTION GAPS", [asdict(gap) for gap in gap_items]),
         section("ALLOWED OBSERVATION INTENTS", sorted(OBSERVATION_INTENTS)),

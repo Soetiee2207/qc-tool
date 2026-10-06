@@ -113,8 +113,14 @@ def run_resolution_cycle(
     be followed by exploration, but never by a second resolution LLM request.
     Manual/auto decisions belong solely to the resolver/applier and analyzer.
     """
-    working = fixture_store.bind(case) if fixture_store else deepcopy(case)
     packet = deepcopy(context)
+    if fixture_store and fixture_store.acquisition_config:
+        from .test_data_acquisition import acquire_test_data
+        acquired = acquire_test_data(case, fixture_store=fixture_store, endpoints=endpoints or ())
+        working = acquired.case
+        packet = replace(packet, data_acquisition=acquired.to_dict())
+    else:
+        working = fixture_store.bind(case) if fixture_store else deepcopy(case)
     if fixture_store:
         resolution_llm = fixture_store.guard_adapter(resolution_llm)
         exploration_llm = fixture_store.guard_adapter(exploration_llm)

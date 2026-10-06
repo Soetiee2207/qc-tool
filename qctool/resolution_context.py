@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, replace, field
 from typing import Iterable, Sequence
 from urllib.parse import urlsplit
 
@@ -34,6 +34,7 @@ class ResolutionContext:
     observations: dict
     allowed_actions: dict
     constraints: tuple[str, ...]
+    data_acquisition: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Return detached JSON-compatible data, ready for JSON or safe YAML."""
@@ -49,6 +50,8 @@ class ResolutionContext:
             "allowed_actions": self.allowed_actions,
             "constraints": list(self.constraints),
         }
+        if self.data_acquisition:
+            payload['data_acquisition'] = self.data_acquisition
         return json.loads(json.dumps(payload, ensure_ascii=False))
 
 

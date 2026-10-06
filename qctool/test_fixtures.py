@@ -29,7 +29,7 @@ def is_alias(value: object) -> bool:
 class FixtureStore:
     """Non-dataclass secret container: repr/to_dict expose safe metadata only."""
 
-    def __init__(self, definitions: dict, bindings: dict | None = None, *, environ=None):
+    def __init__(self, definitions: dict, bindings: dict | None = None, *, environ=None, acquisition=None):
         env = os.environ if environ is None else environ
         self._values, self._metadata, self._facts = {}, {}, {}
         self._bindings = deepcopy(bindings or {})
@@ -77,6 +77,10 @@ class FixtureStore:
                 for key, alias in mapping.items()
             ):
                 raise ConfigError("Fixture bindings must map source IDs to test-data keys and aliases")
+        from .test_data_acquisition import validate_acquisition_config
+        self.acquisition_config = validate_acquisition_config(acquisition or {})
+        if self.redact(self.acquisition_config) != self.acquisition_config:
+            raise ConfigError('Acquisition metadata must not contain fixture secrets')
 
     def __repr__(self):
         return f"FixtureStore(aliases={sorted(self._metadata)!r}, values=<redacted>)"
@@ -85,6 +89,8 @@ class FixtureStore:
         payload = {"aliases": deepcopy(self._metadata), "bindings": deepcopy(self._bindings)}
         if self._facts:
             payload["facts"] = deepcopy(self._facts)
+        if self.acquisition_config:
+            payload['acquisition'] = deepcopy(self.acquisition_config)
         return payload
 
     def resolve(self, alias: str) -> str:
@@ -172,9 +178,9 @@ class FixtureStore:
 def load_fixture_store(config: dict | None) -> FixtureStore | None:
     if not config:
         return None
-    if not isinstance(config, dict) or set(config) - {"fixtures", "bindings"}:
-        raise ConfigError("test_fixtures allows fixtures and bindings only")
-    return FixtureStore(config.get("fixtures", {}), config.get("bindings", {}))
+    if not isinstance(config, dict) or set(config) - {"fixtures", "bindings", "acquisition"}:
+        raise ConfigError("test_fixtures allows fixtures, bindings and acquisition only")
+    return FixtureStore(config.get("fixtures", {}), config.get("bindings", {}), acquisition=config.get('acquisition'))
 
 
 def trusted_value(test_data: dict, key: str) -> str | None:

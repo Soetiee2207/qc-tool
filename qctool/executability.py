@@ -63,6 +63,18 @@ def analyze_executability(case: TestCase, *, context=None) -> ExecutabilityRepor
 
     gaps.extend(ExecutionGap("MISSING_FIXTURE", f"Trusted fixture unavailable: {alias}", seq)
                 for alias, seq in fixture_gaps(case))
+    if context is not None and getattr(context, 'data_acquisition', None):
+        data = context.data_acquisition
+        if data.get('testcase_id') != case.id:
+            gaps.append(ExecutionGap('MISSING_TEST_DATA', 'Test-data evidence belongs to another testcase.'))
+        else:
+            for issue in data.get('issues', []):
+                code = issue['code']
+                if code == 'MISSING_FIXTURE' and any(g.code == code for g in gaps):
+                    continue
+                # Data blockers belong to the whole case; original step numbers
+                # remain in the data audit even after an expansion renumbers IR.
+                gaps.append(ExecutionGap(code, issue['message']))
 
     saved_responses: set[str] = set()
     captured_responses: set[str] = set()
