@@ -6,6 +6,19 @@ status: source-derived
 
 # SRS — Đăng nhập bằng mật khẩu
 
+## Phạm vi smoke và dữ liệu
+
+Chỉ AC-001-1/2/3/4 của luồng login được đánh giá. Registration/OTP mang trạng thái
+**OUT_OF_SCOPE_FOR_SMOKE**, reason: **requires external OTP/mailbox interaction**
+(URD: SMOKE-REGISTRATION-OTP). Không sinh/resolve case đăng ký; không đưa phần
+loại trừ vào coverage login và không báo nó covered. OpenAPI smoke chỉ có login.
+
+AC-001-1 cần account đang hoạt động có sẵn đã xác minh bằng login thật. Chưa có
+valid account thì giữ candidate unresolved do missing valid test data; không
+provision, bypass OTP hoặc seed production. Config smoke không khai báo fixture
+active_user hợp lệ khi dữ liệu hiện tại chưa đạt điều kiện này. Giữ alias bindings
+để data thiếu được báo tường minh; credentials chỉ nằm trong env.
+
 ## 3. Functional Requirements
 
 ### 3.1 Function List

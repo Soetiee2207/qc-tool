@@ -23,12 +23,14 @@ out:
 # Credential references and operator-declared public facts only; no secrets.
 test_fixtures:
   fixtures:
-    active_user:
-      facts:
-        role: customer
-        account_state: active
-      email: {env: QCTOOL_USERNAME}
-      password: {env: QCTOOL_PASSWORD}
+    # active_user is intentionally unavailable: the current credentials returned
+    # HTTP 401 in both direct API and UI login. Do not claim them as valid data.
+    # Restore this fixture only after an EXISTING dedicated customer is verified.
+    # Keep credentials in the existing env variables; do not provision via smoke.
+    # active_user:
+    #   facts: {role: customer, account_state: active}
+    #   email: {env: QCTOOL_USERNAME}
+    #   password: {env: QCTOOL_PASSWORD}
     locked_user:
       email: {env: QCTOOL_LOCKED_USER_EMAIL}
       password: {env: QCTOOL_LOCKED_USER_PASSWORD}

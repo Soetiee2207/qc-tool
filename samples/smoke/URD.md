@@ -2,6 +2,14 @@
 type: urd
 feature: salonhub-smoke
 status: source-derived
+smoke_scope:
+  included: [AC-001-1, AC-001-2, AC-001-3, AC-001-4]
+  excluded:
+    - id: SMOKE-REGISTRATION-OTP
+      status: OUT_OF_SCOPE_FOR_SMOKE
+      reason: requires external OTP/mailbox interaction
+      operations: [POST /api/auth/register, POST /api/auth/verify-registration-otp]
+      coverage_claim: false
 ---
 
 # Đăng nhập SalonHub bằng mật khẩu
@@ -11,6 +19,17 @@ status: source-derived
 Một luồng duy nhất: người chưa đăng nhập mở `/login`, nhập thông tin và bấm
 **Đăng nhập**. Phạm vi gồm khách hàng đăng nhập thành công và ba nhánh từ chối.
 Đây là bản mô tả hành vi từ source, không phải bằng chứng deployment đã đạt.
+
+### Loại trừ tường minh
+
+**SMOKE-REGISTRATION-OTP — OUT_OF_SCOPE_FOR_SMOKE**
+Reason: **requires external OTP/mailbox interaction**.
+
+Đăng ký và xác nhận OTP không phải obligation của smoke: không sinh/resolve
+case đăng ký, không đưa vào mẫu số coverage login, không tính phần loại trừ là
+coverage failure và không tuyên bố đã covered. Mục này chỉ là scope record;
+không thêm User Story, Acceptance Criterion hoặc operation đăng ký vào smoke.
+Không tạo account, bypass OTP, seed production hay đổi backend để chuẩn bị data.
 
 ### US-001 — Đăng nhập bằng tài khoản khách hàng
 
@@ -37,6 +56,12 @@ Một luồng duy nhất: người chưa đăng nhập mở `/login`, nhập th�
   ứng và người dùng ở lại `/login` (AC-001-3, AC-001-4; SRS F-03).
 
 ## Dữ liệu và giới hạn
+
+Chỉ dùng account customer hoạt động có sẵn và đã kiểm chứng login thành công.
+Fixture hiện tại trả 401 cả khi login trực tiếp và qua UI; các facts được khai báo
+trong config không chứng minh account đó hợp lệ trên deployment. Chưa có valid
+active account thì AC-001-1 giữ unresolved vì thiếu valid test data; không đổi
+kỳ vọng 200/success=true thành 401 để coi là đạt.
 
 Không có credential mẫu trong fixture. Người vận hành phải cung cấp tài khoản
 customer hoạt động, mật khẩu đúng/sai đã kiểm chứng và tài khoản bị khóa.

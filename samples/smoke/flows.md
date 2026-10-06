@@ -6,6 +6,17 @@ status: source-derived
 
 # Luồng đăng nhập bằng mật khẩu
 
+## Giới hạn smoke
+
+Registration/OTP: **OUT_OF_SCOPE_FOR_SMOKE** — **requires external OTP/mailbox interaction**.
+Không tạo obligation/testcase đăng ký, không resolve nó và không tuyên bố covered.
+Coverage smoke chỉ tính bốn AC login dưới đây; loại trừ không phải smoke failure.
+Không tạo account hoặc chuẩn bị dữ liệu bằng seed/bypass OTP.
+
+Happy-path chỉ dùng account active có sẵn đã xác minh. Chưa có valid test data
+thì AC-001-1 giữ unresolved; không đổi expected outcome. Các nhánh sai password
+và account bị khóa cũng cần dữ liệu riêng đã được người vận hành xác nhận.
+
 ## 5. Core Flows
 
 ### 5.1 Đăng nhập SalonHub
