@@ -269,6 +269,6 @@ def _api_operations(case: TestCase, endpoints: Sequence[Endpoint]) -> list[dict]
         "parameters": [{key: param[key] for key in ("name", "in", "required") if key in param}
                        for param in ep.parameters],
         "request_required": list(ep.request_required),
-        "response_codes": sorted(ep.responses), "servers": list(ep.servers),
+        "response_codes": sorted(ep.responses), "servers": list(ep.servers or ep.contract_servers),
         "evidence": {"type": "openapi", "operation_id": ep.operation_id},
     } for ep in matched]

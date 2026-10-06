@@ -75,6 +75,8 @@ class Endpoint:
     # spec mô tả nhiều service — không tôn trọng nó thì mọi request của service
     # phụ đều đi sai host và nhận 404.
     servers: list[str] = field(default_factory=list)
+    # Effective declared servers for evidence; does not change http.request base overrides.
+    contract_servers: list[str] = field(default_factory=list)
 
     @property
     def module(self) -> str:

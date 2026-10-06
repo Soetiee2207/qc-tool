@@ -72,10 +72,14 @@ class StepResult:
     ok: bool
     detail: str
     duration_ms: float = 0.0
+    issue_code: str | None = None
 
     def to_dict(self) -> dict:
-        return {"seq": self.seq, "action": self.action, "ok": self.ok,
-                "detail": self.detail, "duration_ms": round(self.duration_ms, 1)}
+        result = {"seq": self.seq, "action": self.action, "ok": self.ok,
+                  "detail": self.detail, "duration_ms": round(self.duration_ms, 1)}
+        if self.issue_code:
+            result["issue_code"] = self.issue_code
+        return result
 
 
 @dataclass
@@ -490,7 +494,7 @@ def _run_once(case: TestCase, session: HttpSession,
             result.actual = [result.blocked_reason]
             return result
     capture_settings = {}
-    if fixture_steps and browser is not None:
+    if (fixture_steps or any(s.args.get("capture_response") for s in case.steps)) and browser is not None:
         for name, replacement in (("trace_enabled", False), ("evidence_dir", None)):
             if hasattr(browser, name):
                 capture_settings[name] = getattr(browser, name)
@@ -512,7 +516,16 @@ def _run_once(case: TestCase, session: HttpSession,
             step_started = time.perf_counter()
             try:
                 if step.action in UI_VERBS:
-                    if step in fixture_steps:
+                    if step.action == "ui.click" and "capture_response" in step.args:
+                        from .browser import ResponseCaptureError
+                        if browser is None:
+                            raise ResponseCaptureError("UI_RESPONSE_CAPTURE_FAILED")
+                        capture = step.args["capture_response"]
+                        saved.pop(capture.get("save_as", "res"), None)
+                        response = browser.click_and_capture(step.args, step.seq)
+                        saved[capture.get("save_as", "res")] = response
+                        ok, detail = True, f"Captured {capture['method']} {capture['path']} → HTTP {response['status']} (trigger step {step.seq})"
+                    elif step in fixture_steps:
                         from dataclasses import replace
                         runtime_step = replace(step, args={**step.args,
                             "value": fixture_store.resolve(step.args["value"]),
@@ -524,6 +537,9 @@ def _run_once(case: TestCase, session: HttpSession,
                     ok, detail = _run_step(step, session, saved)
             except NeedsEnvironment as exc:
                 # Không đủ điều kiện chạy — KHÔNG phải sản phẩm có lỗi.
+                if getattr(exc, "code", None):
+                    result.steps.append(StepResult(step.seq, step.action, False, str(exc),
+                        (time.perf_counter() - step_started) * 1000, exc.code))
                 result.status = STATUS_BLOCKED
                 message = fixture_store.redact(str(exc)) if fixture_store else str(exc)
                 result.blocked_reason = message
@@ -650,6 +666,8 @@ def _run_step(step, session: HttpSession, saved: dict) -> tuple[bool, str]:
                         ("" if ok else f", mong đợi {operator} {expected!r}"))
 
         case "assert.response_time":
+            if saved.get(args.get("source", "res"), {}).get("_ui_trigger"):
+                return False, "Latency resampling is not supported for UI-captured responses"
             # Ngưỡng tài liệu ghi là **phân vị** (`p95 < 100ms`), không phải "mọi
             # lần gọi đều dưới 100ms". Một lần gọi không đo được phân vị — lấy mẫu
             # ngẫu nhiên một request rồi so với ngưỡng p95 là *kiểm chặt hơn yêu

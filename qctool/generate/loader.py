@@ -154,6 +154,8 @@ def _build_endpoint(spec: dict, path: str, method: str, op: dict,
         request_required=list((body_schema or {}).get("required", [])),
         responses=responses,
         servers=servers,
+        contract_servers=servers or [s["url"] for s in spec.get("servers", [])
+                                    if isinstance(s, dict) and isinstance(s.get("url"), str)],
     )
 
 

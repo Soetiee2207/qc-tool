@@ -23,6 +23,8 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
+from ..response_capture import origin_of, validate_capture
 
 DEFAULT_VIEWPORT = {"width": 1440, "height": 900}
 
@@ -62,6 +64,13 @@ class NeedsEnvironment(Exception):
     đó hỏng. Nếu để nó thành `Fail` thì báo cáo nói "sản phẩm sai" trong khi
     sản phẩm chưa hề được kiểm — đúng loại nói dối mà cả tool này sinh ra để tránh.
     """
+
+
+class ResponseCaptureError(NeedsEnvironment):
+    """Cannot identify one completed response; never echo transport/body secrets."""
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code + ": no unique safely captured UI response")
 
 
 class NeedsLogin(NeedsEnvironment):
@@ -161,6 +170,7 @@ class BrowserSession:
         self._expect = None
         self._console: list[str] = []
         self._network: list[str] = []
+        self._capture_private = False
         self._inflight = 0
         self._last_activity = 0.0
         self._axe_source: str | None = None
@@ -287,10 +297,12 @@ class BrowserSession:
     # ── Thu thập trong lúc chạy ─────────────────────────────────────────────
     def _on_console(self, message) -> None:
         if message.type == "error":
-            self._console.append(f"console.error: {_short(message.text)}")
+            self._console.append("console.error during response capture (content omitted)" if self._capture_private
+                                 else f"console.error: {_short(message.text)}")
 
     def _on_pageerror(self, error) -> None:
-        self._console.append(f"pageerror: {_short(error)}")
+        self._console.append("pageerror during response capture (content omitted)" if self._capture_private
+                             else f"pageerror: {_short(error)}")
 
     def _on_request(self, request) -> None:
         self._inflight += 1
@@ -303,6 +315,8 @@ class BrowserSession:
         with contextlib.suppress(Exception):
             if response.status >= 400:
                 url = response.url
+                if self._capture_private:
+                    url = origin_of(url) + urlsplit(url).path
                 if any(host in url for host in _IGNORED_REQUEST_HOSTS):
                     return
                 self._network.append(
@@ -313,10 +327,9 @@ class BrowserSession:
         self._inflight = max(0, self._inflight - 1)
         self._last_activity = time.monotonic()
         with contextlib.suppress(Exception):
-            self._network.append(
-                f"{request.method} {_short(request.url, 90)} → không gửi được "
-                f"({_short(request.failure or 'lỗi mạng', 60)})"
-            )
+            url = origin_of(request.url) + urlsplit(request.url).path if self._capture_private else request.url
+            failure = "request failed; details omitted" if self._capture_private else request.failure or "lỗi mạng"
+            self._network.append(f"{request.method} {_short(url, 90)} → không gửi được ({_short(failure, 60)})")
 
     def wait_network_quiet(self, quiet_ms: int | None = None,
                            max_wait_ms: int | None = None) -> bool:
@@ -709,6 +722,73 @@ class BrowserSession:
         locator.click(timeout=self.timeout_ms)
         self._wait_for_render(max_wait_ms=4000)
         return f"Đã bấm «{self._label(args)}» → {self.page.url}"
+
+    def click_and_capture(self, args: dict, step_seq: int) -> dict:
+        """Inspect only requests started inside this click's bounded window.
+
+        Listen before clicking; collect the entire window to reject duplicates.
+        Download completion must occur within the window before reading JSON.
+        Only public boolean success is retained; never headers/raw payloads.
+        """
+        spec = args["capture_response"]
+        try:
+            validate_capture(spec)
+        except (ValueError, TypeError):
+            raise ResponseCaptureError("INVALID_UI_RESPONSE_CAPTURE") from None
+        page = self.page
+        private_before = self._capture_private
+        self._capture_private = True
+        requests, responses, finished = [], [], set()
+        deadline = time.monotonic() + spec.get("timeout_ms", 10000) / 1000
+        def matches(req):
+            try:
+                return (req.method == spec["method"] and origin_of(req.url) == spec["origin"]
+                        and urlsplit(req.url).path == spec["path"])
+            except (ValueError, AttributeError):
+                return False
+        def on_request(req):
+            if time.monotonic() <= deadline and matches(req):
+                requests.append(req)
+        def on_response(resp):
+            if resp.request in requests and matches(resp.request):
+                responses.append(resp)
+        def on_finished(req):
+            if req in requests:
+                finished.add(req)
+        listeners = [("request", on_request), ("response", on_response), ("requestfinished", on_finished)]
+        for event, handler in listeners:
+            page.on(event, handler)
+        try:
+            self.locate(args).click(timeout=max(1, int((deadline - time.monotonic()) * 1000)))
+            while time.monotonic() < deadline:
+                page.wait_for_timeout(min(50, max(1, int((deadline - time.monotonic()) * 1000))))
+            if len(requests) > 1 or len(responses) > 1:
+                raise ResponseCaptureError("AMBIGUOUS_UI_RESPONSE")
+            if len(responses) != 1 or responses[0].request not in finished:
+                raise ResponseCaptureError("UI_RESPONSE_TIMEOUT")
+            response = responses[0]
+            raw = response.body()
+            if len(raw) > 1048576:
+                raise ResponseCaptureError("UI_RESPONSE_BODY_LIMIT")
+            try:
+                data = json.loads(raw)
+            except (ValueError, UnicodeError):
+                data = None
+            # Projection, not a redacted copy of an auth response: token/user/
+            # password and all unknown payload fields never enter saved/results.
+            body = {"success": data["success"]} if isinstance(data, dict) and type(data.get("success")) is bool else None
+            return {"status": response.status, "body": body, "error": None,
+                    "_ui_trigger": {"step_seq": step_seq, "method": spec["method"],
+                                    "path": spec["path"], "origin": spec["origin"]}}
+        except ResponseCaptureError:
+            raise
+        except Exception:
+            raise ResponseCaptureError("UI_RESPONSE_CAPTURE_FAILED") from None
+        finally:
+            self._capture_private = private_before
+            for event, handler in listeners:
+                with contextlib.suppress(Exception):
+                    page.remove_listener(event, handler)
 
     def fill(self, args: dict) -> str:
         locator = self.locate(args)

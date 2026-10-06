@@ -64,6 +64,7 @@ def analyze_executability(case: TestCase) -> ExecutabilityReport:
                 for alias, seq in fixture_gaps(case))
 
     saved_responses: set[str] = set()
+    captured_responses: set[str] = set()
     executable_assertion = False
     for step in case.steps:
         action, args = step.action, step.args
@@ -94,13 +95,25 @@ def analyze_executability(case: TestCase) -> ExecutabilityReport:
 
         if action in _RESPONSE_ASSERTIONS:
             source = args.get("source", "res")
-            if source not in saved_responses:
+            if source not in saved_responses or action == "assert.response_time" and source in captured_responses:
                 gaps.append(ExecutionGap(
                     "MISSING_RESPONSE", f"No preceding HTTP response saved as {source!r}", step.seq
                 ))
 
         if action == "http.request" and len(gaps) == before:
             saved_responses.add(args.get("save_as", "res"))
+        if action == "ui.click" and "capture_response" in args and len(gaps) == before:
+            from .response_capture import validate_capture
+            try:
+                validate_capture(args["capture_response"])
+            except (ValueError, TypeError):
+                gaps.append(ExecutionGap("MISSING_ARGUMENT", "Invalid response capture selector", step.seq))
+            else:
+                key = args["capture_response"].get("save_as", "res")
+                saved_responses.add(key)
+                captured_responses.add(key)
+        if action == "http.request":
+            captured_responses.discard(args.get("save_as", "res"))
         if action.startswith("assert.") and action != "assert.screenshot" and len(gaps) == before:
             executable_assertion = True
 

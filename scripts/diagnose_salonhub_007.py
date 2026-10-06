@@ -28,15 +28,21 @@ from qctool.ui.crawl import UIMap
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--enable-llm', action='store_true', required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument('--enable-llm', action='store_true')
+    source.add_argument('--replay-proposal', type=Path)
     parser.add_argument('--config', type=Path, default=Path('qctool.smoke.yaml'))
     parser.add_argument('--audit', type=Path, default=Path('artifacts/salonhub-smoke/generation.json'))
     parser.add_argument('--out', type=Path, default=Path('artifacts/salonhub-007-provider-diagnostic/audit.json'))
     args = parser.parse_args()
     cfg = PipelineConfig.from_file(args.config)
-    if not cfg.llm_enabled:
+    if args.enable_llm and not cfg.llm_enabled:
         parser.error('LLM must also be explicitly enabled in configuration.')
-    provider = load_llm_provider()
+    provider = load_llm_provider() if args.enable_llm else None
+    class Replay:
+        def complete(self, prompt):
+            return args.replay_proposal.read_text()
+    adapter = provider if provider is not None else Replay()
     original = json.loads(args.audit.read_text())
     entries = original['coverage_loop']['history'][0]['resolution']['case_results']
     entry = next(e for e in entries if e['testcase_id'] == 'TC_SALON_AUTH_007')
@@ -49,15 +55,17 @@ def main():
     context = build_resolution_context(case, analyze_executability(case).gaps,
                                        requirements=requirements, ui_map=ui_map, endpoints=endpoints)
     snapshot = deepcopy((case, context))
-    result = run_resolution_cycle(case, context, resolution_llm=provider,
+    result = run_resolution_cycle(case, context, resolution_llm=adapter,
                                   fixture_store=cfg.fixture_store, ui_map=ui_map, endpoints=endpoints)
     assert (case, context) == snapshot, 'Caller inputs changed'
     payload = {'testcase_id': case.id, 'observed_at': datetime.now(timezone.utc).isoformat(),
-               'model': provider.model, 'cycle': _serializable(result)}
+               'model': provider.model if provider else 'recorded-replay', 'cycle': _serializable(result)}
     if cfg.fixture_store:
         payload = cfg.fixture_store.redact(payload)
     # Defense against API-key echo in public provider identifiers too.
-    encoded = json.dumps(payload, ensure_ascii=False, indent=2).replace(provider.api_key, '[REDACTED]')
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2)
+    if provider:
+        encoded = encoded.replace(provider.api_key, '[REDACTED]')
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(encoded + '\n')
     attempts = [attempt for stage in result.audit for attempt in stage.provider_attempts]

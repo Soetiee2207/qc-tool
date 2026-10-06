@@ -18,6 +18,7 @@ from .executability import ExecutabilityReport, analyze_executability
 from .generate.mapper import RE_CLICK, RE_HTTP, RE_OPEN_PATH
 from .llm_resolution import AtomicProposal, EvidenceReference, ProposedChange, ResolutionProposal, UnresolvedGap
 from .resolution_context import ResolutionContext
+from .response_capture import origin_of, validate_capture
 from .step_expansion import candidate_with_changes, expected_expansion
 from .test_fixtures import FixtureStore, REGISTRY, is_alias
 from .testcase import ACTION_SPECS, Step, TestCase, ValidationError
@@ -260,8 +261,14 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
         return "INVALID_EXPANSION"
     if _resolve_references(change.evidence, context) is None:
         return "FABRICATED_EVIDENCE"
+    captured_login = working is not None and any(
+        item.action == "ui.click" and origins[item.seq] < step.seq
+        and item.args.get("capture_response", {}).get("method") == "POST"
+        and item.args.get("capture_response", {}).get("path") == "/api/auth/login"
+        for item in working.steps)
     expected = expected_expansion(step, context.testcase.get("test_data", {}),
-                                  min_atoms=1 if allow_single else 2, fixture_store=fixture_store)
+                                  min_atoms=1 if allow_single else 2, fixture_store=fixture_store,
+                                  allow_captured_login=captured_login)
     if expected is None or len(expected) != len(change.expansion):
         return "EXPANSION_SEMANTICS_UNPROVEN"
     for atom, meaning in zip(change.expansion, expected):
@@ -316,6 +323,8 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
                     not stable_click and (len(matches) != 1 or matches[0] is not element)):
                 return "EXPANSION_SEMANTICS_UNPROVEN"
             required["target"] = atom.args.get("target")
+        if atom.action == "ui.click" and "capture_response" in atom.args:
+            required["capture_response"] = atom.args["capture_response"]  # independently grounded above
         if "value" in meaning:
             required["value"] = meaning["value"]
         if "operation" in meaning:
@@ -330,7 +339,14 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
             requests = [item for item in working.steps
                         if origins[item.seq] < step.seq and item.action == "http.request"
                         and item.args.get("save_as", "res") == source_name]
-            if not requests or (requests[-1].args.get("method", "").upper(), requests[-1].args.get("path")) != (method, path):
+            captures = [item for item in working.steps
+                        if origins[item.seq] < step.seq and item.action == "ui.click"
+                        and item.args.get("capture_response", {}).get("save_as", "res") == source_name]
+            sources = sorted(requests + captures, key=lambda item: item.seq)
+            if not sources:
+                return "MISSING_RESPONSE"
+            args = sources[-1].args.get("capture_response", sources[-1].args)
+            if (args.get("method", "").upper(), args.get("path")) != (method, path):
                 return "MISSING_RESPONSE"
             if "source" in atom.args:
                 required["source"] = source_name
@@ -474,6 +490,27 @@ def _ground_action(change: ProposedChange, refs: list[tuple[str, dict, dict | No
             return "UI_EVIDENCE_NOT_FOUND"
         if not element.get("test_id") and args.get("by_name") != element.get("name"):
             return "UI_EVIDENCE_NOT_FOUND"
+    if action == "ui.click" and "capture_response" in args:
+        capture = args["capture_response"]
+        try:
+            validate_capture(capture)
+        except (ValueError, TypeError):
+            return "INVALID_ARGUMENTS"
+        operations = [item for item in context.interface_contract.get("api_operations", [])
+                      if (item.get("method"), item.get("path")) == (capture["method"], capture["path"])]
+        if len(operations) != 1 or not any(item is operations[0] for item in api_refs):
+            return "API_EVIDENCE_NOT_FOUND"
+        try:
+            origins = {origin_of(server) for server in operations[0].get("servers", [])}
+        except (ValueError, TypeError):
+            return "API_EVIDENCE_NOT_FOUND"
+        if capture["origin"] not in origins:
+            return "API_EVIDENCE_NOT_FOUND"
+        reference = re.compile(r"\b" + re.escape(capture["method"]) + r"\s+" + re.escape(capture["path"]) + r"(?=\s|$)")
+        if not any(item.get("seq", 0) > change.step_seq and item.get("action") == "assert.unmapped"
+                   and reference.search(str(item.get("args", {}).get("expected", "")))
+                   for item in context.testcase.get("steps", [])):
+            return "SEMANTICS_UNPROVEN"
     if action == "http.request":
         method, path = args.get("method"), args.get("path")
         if not isinstance(method, str) or not isinstance(path, str):
@@ -530,7 +567,7 @@ def _check_semantics(step: Step, change: ProposedChange,
     if step.action == "perform.unmapped":
         description = str(step.args.get("description") or "")
         grounded_arguments = {
-            "ui.click": {"target", "by_name"},
+            "ui.click": {"target", "by_name", "capture_response"},
             "http.request": {"method", "path", "base"},
             "ui.goto": {"url"},
         }

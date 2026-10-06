@@ -230,8 +230,16 @@ def build_resolution_prompt(context: ResolutionContext) -> str:
         "controls, and documented HTTP status outcomes. Fill values must exist in test_data or be "
         "explicit literals in source. For the Vietnamese email/password form use supplied email and "
         "correct_password/wrong_password/non_empty_password respectively. Do not invent these values. "
-        "HTTP assertions require a preceding actual http.request; observed UI requests do not create "
-        "a saved runner response. Do not add a request solely to manufacture such a response. "
+        "HTTP assertions require a preceding http.request OR ui.click with explicit capture_response. "
+        "capture_response is {method, path, origin, save_as (optional, default res), timeout_ms "
+        "(optional, 100–30000)}. Use exact documented method/path and origin from contract servers, "
+        "cite that operation, and only capture an operation explicitly expected by a later source outcome. "
+        "Capture observes the triggering click, never sends an extra request. Captured body exposes only "
+        "boolean $.success; headers, tokens and raw payload are not retained. A captured login response "
+        "permits the EXACT outcome 'Đăng nhập thành công; URL chuyển tới /; POST /api/auth/login trả 200 "
+        "với success=true' to expand into assert.http_status(200), assert.json_field($.success, true), "
+        "assert.url_matches(/$), with matching source names and API/UI evidence. Preserve every outcome. "
+        "Do not add a request solely to manufacture a response. "
         "Runtime UI evidence never establishes the expected business outcome.",
         section("OUTPUT JSON SHAPE", output_shape),
     ])

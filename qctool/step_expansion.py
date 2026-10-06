@@ -15,7 +15,7 @@ from .test_fixtures import FixtureStore, trusted_value
 
 
 def expected_expansion(step: Step, test_data: dict, *, min_atoms: int = 2,
-                       fixture_store: FixtureStore | None = None) -> list[dict] | None:
+                       fixture_store: FixtureStore | None = None, allow_captured_login: bool = False) -> list[dict] | None:
     text = step.args.get("description" if step.action == "perform.unmapped" else "expected")
     if not isinstance(text, str) or not text.strip():
         return None
@@ -33,6 +33,14 @@ def expected_expansion(step: Step, test_data: dict, *, min_atoms: int = 2,
                      {"action": "ui.goto", "args": {"url": precondition[1]},
                       "precondition_route": precondition[1]}]
             return atoms if min_atoms <= len(atoms) <= 8 else None
+    if (allow_captured_login and step.action == "assert.unmapped" and text.strip() ==
+            "Đăng nhập thành công; URL chuyển tới /; POST /api/auth/login trả 200 với success=true"):
+        # This exact contract expresses success with ALL explicit outcomes.
+        # Conjunctive checks have no intervening actions; no clause is dropped.
+        operation = ("POST", "/api/auth/login")
+        return [{"action": "assert.http_status", "args": {"expected": 200}, "operation": operation},
+                {"action": "assert.json_field", "args": {"path": "$.success", "expected": True}, "operation": operation},
+                {"action": "assert.url_matches", "args": {"pattern": "/$"}, "route": "/"}]
     clauses = [part.strip() for part in text.split(";")]
     if re.fullmatch(r"fill email,\s*fill password,\s*click .+", text, re.I):
         clauses = [part.strip() for part in text.split(",")]

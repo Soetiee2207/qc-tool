@@ -88,8 +88,8 @@ ACTION_SPECS: dict[str, ActionSpec] = {
     # sạch các bước vừa map (validator chỉ chạy trước mapper nên lỗi bị che).
     "ui.click": ActionSpec(
         required=("target",),
-        optional=("by_name",),
-        doc="Bấm element theo nhãn trong UI map.",
+        optional=("by_name", "capture_response"),
+        doc="Bấm element; capture_response quan sát đúng method/path/origin và lưu response công khai.",
     ),
     "ui.fill": ActionSpec(
         required=("target", "value"),
@@ -329,6 +329,12 @@ class Step:
                 f"Bước {self.seq} (`{self.action}`): tham số lạ {sorted(unknown)}. "
                 f"Cho phép: {sorted(set(spec.required) | set(spec.optional))}"
             )
+        if "capture_response" in self.args:
+            from .response_capture import validate_capture
+            try:
+                validate_capture(self.args["capture_response"])
+            except (ValueError, TypeError):
+                raise ValidationError(f"Bước {self.seq}: capture_response không hợp lệ") from None
         if "operator" in self.args and self.args["operator"] not in _OPERATORS:
             raise ValidationError(
                 f"Bước {self.seq}: operator `{self.args['operator']}` không hợp lệ. "
@@ -398,7 +404,10 @@ class Step:
             return "Nạp lại phiên đã đăng nhập"
         if self.action == "ui.click":
             name = self.args.get("by_name") or self.args.get("target", "")
-            return f"Bấm «{name}»"
+            capture = self.args.get("capture_response")
+            suffix = (f"; quan sát {capture['method']} {capture['path']} → {capture.get('save_as', 'res')}"
+                      if capture else "")
+            return f"Bấm «{name}»{suffix}"
         if self.action == "ui.fill":
             name = self.args.get("by_name") or self.args.get("target", "")
             return f"Nhập «{self.args.get('value', '')}» vào «{name}»"
