@@ -244,3 +244,53 @@ def test_route_mapping_does_not_discard_attached_expectation_or_fix_concrete_reg
     result = resolve_deterministically(case, ui_map=_map())
     assert not result.changes
     assert result.case == case
+
+
+def test_trusted_active_customer_given_resolves_without_llm_and_preserves_source():
+    import json
+    from tests.test_fixture_facts import inputs, GIVEN
+    from tests.test_step_expansion import BASE
+    from qctool.test_fixtures import FACT_REGISTRY
+    case, context, store, _ = inputs({'role': 'customer', 'account_state': 'active'})
+    ui = UIMap(BASE, 'now', [PageMap(BASE + '/login', 'Login')])
+    snapshot = deepcopy((case, ui, store.to_dict()))
+    result = resolve_deterministically(case, ui_map=ui, fixture_store=store)
+    assert [s.action for s in result.case.steps] == ['ui.session', 'ui.goto', 'perform.unmapped', 'assert.unmapped']
+    assert result.case.steps[1].args == {'url': BASE + '/login'}
+    assert [s.seq for s in result.case.steps] == [1, 2, 3, 4]
+    assert len(result.changes) == 1 and result.changes[0].step_seq == 1
+    assert result.changes[0].evidence['facts'] == case.test_data[FACT_REGISTRY]
+    assert [(g.code, g.step_seq) for g in result.resolved_gaps] == [('UNMAPPED_ACTION', 1)]
+    assert [(g.code, g.step_seq) for g in result.after.gaps if g.code == 'UNMAPPED_ACTION'] == [('UNMAPPED_ACTION', 3), ('UNMAPPED_ACTION', 4)]
+    for step in result.case.steps[:2]:
+        source = json.loads(step.note.split('[resolution-expansion] ', 1)[1])
+        assert source['type'] == 'validated-deterministic-expansion'
+        assert source['source_step']['args']['description'] == GIVEN
+    assert not result.after.executable
+    assert (case, ui, store.to_dict()) == snapshot
+
+
+@pytest.mark.parametrize('facts', [None, {'role': 'staff', 'account_state': 'active'},
+                                   {'role': 'customer', 'account_state': 'locked'}])
+def test_trusted_given_wrong_or_missing_facts_stays_unresolved(facts):
+    from tests.test_fixture_facts import inputs
+    from tests.test_step_expansion import BASE
+    case, _, store, _ = inputs(facts)
+    result = resolve_deterministically(case, ui_map=UIMap(BASE, 'now', [PageMap(BASE+'/login', 'Login')]), fixture_store=store)
+    assert result.case == case and not result.changes
+
+
+@pytest.mark.parametrize('problem', ['missing_credentials', 'missing_page', 'ambiguous_page',
+                                      'foreign_page', 'extra_clause', 'no_store', 'forged_facts'])
+def test_trusted_given_does_not_guess_or_discard_any_clause(problem):
+    from tests.test_fixture_facts import inputs
+    from tests.test_step_expansion import BASE
+    case, _, store, _ = inputs({'role': 'customer', 'account_state': 'active'}, missing_credentials=problem=='missing_credentials')
+    pages = [PageMap(BASE+'/login', 'Login')]
+    if problem == 'missing_page': pages = []
+    if problem == 'ambiguous_page': pages.append(PageMap(BASE+'/login', 'Different state'))
+    if problem == 'foreign_page': pages = [PageMap('https://foreign.test/login', 'Login')]
+    if problem == 'extra_clause': case.steps[0].args['description'] += '; unknown business setup'
+    if problem == 'forged_facts': case.test_data['_fixture_facts']['active_user']['values']['role'] = 'admin'
+    result = resolve_deterministically(case, ui_map=UIMap(BASE, 'now', pages), fixture_store=None if problem=='no_store' else store)
+    assert result.case == case and not result.changes

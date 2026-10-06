@@ -159,7 +159,8 @@ def run_resolution_cycle(
         return finish()
 
     ok, deterministic = attempt("deterministic", lambda: resolve_deterministically(
-        deepcopy(working), ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints)))
+        deepcopy(working), ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints),
+        fixture_store=fixture_store))
     if ok:
         working = deepcopy(deterministic.case)
         after = analyze_executability(working)

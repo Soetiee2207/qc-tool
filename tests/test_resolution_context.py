@@ -239,3 +239,22 @@ def test_element_limit_reports_omissions_and_keeps_named_element():
     assert len(page["elements"]) == MAX_ELEMENTS_PER_PAGE
     assert page["elements"][0]["test_id"] == "btn-login"
     assert page["omitted_elements"] == 6
+
+
+def test_salonhub_compound_outcome_selects_exact_root_and_login_without_fuzzy_routes():
+    case = _case(
+        _step(1, 'perform.unmapped', {'description': 'Phiên anonymous ở /login; tài khoản customer đang hoạt động và mật khẩu đúng do người vận hành cung cấp'}),
+        _step(2, 'perform.unmapped', {'description': 'Nhập email và mật khẩu đúng; bấm Đăng nhập'}),
+        _step(3, 'assert.unmapped', {'expected': 'Đăng nhập thành công; URL chuyển tới /; POST /api/auth/login trả 200 với success=true'}),
+    )
+    ui = _ui_map()
+    root = PageMap('https://portal.test/', 'Home')
+    ui.pages.extend([root, deepcopy(root)])
+    before = deepcopy((case, ui))
+    context = build_resolution_context(case, analyze_executability(case).gaps, ui_map=ui)
+    assert [p['url'] for p in context.observations['ui_pages']] == ['https://portal.test/login', 'https://portal.test/']
+    assert context.observations['omitted_ui_pages'] == 0
+    case.steps[2].args['expected'] = 'URL chuyển tới /wrong'
+    wrong = build_resolution_context(case, analyze_executability(case).gaps, ui_map=ui)
+    assert [p['url'] for p in wrong.observations['ui_pages']] == ['https://portal.test/login']
+    assert ui == before[1]

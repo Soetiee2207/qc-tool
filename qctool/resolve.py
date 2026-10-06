@@ -8,14 +8,16 @@ from __future__ import annotations
 
 from collections import Counter
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import re
+import json
 from urllib.parse import urlsplit
 
 from .executability import ExecutionGap, ExecutabilityReport, analyze_executability
 from .generate.from_openapi import Endpoint
 from .generate.mapper import RE_OPEN_PATH, _target_of
-from .testcase import Step, TestCase, ValidationError
+from .testcase import Step, StepKind, TestCase, ValidationError
+from .test_fixtures import FixtureStore, FACT_REGISTRY
 from .ui.crawl import UIMap, _norm
 from .ui.explore import ExplorationRequest, validate_exploration_request
 
@@ -43,12 +45,15 @@ class ResolutionResult:
 def resolve_deterministically(
     case: TestCase, *, ui_map: UIMap | None = None,
     endpoints: list[Endpoint] | None = None,
+    fixture_store: FixtureStore | None = None,
 ) -> ResolutionResult:
     """Repair only gaps tied to one exact, unique UI or OpenAPI record.
 
     ``endpoints`` is the output of ``load_endpoints()``. The returned case is a
     deep copy, including when no repair is possible. ``after`` is always obtained
     from ``analyze_executability``; the resolver never declares success itself.
+    Exact supported Given clauses may expand only when the supplied fixture
+    store proves every account fact and the route is a trusted same-origin page.
     Complete literal Open/URL clauses may replace unmapped verbs, retaining
     their source in the change audit. Manual promotion uses the applier's gate.
     """
@@ -92,6 +97,11 @@ def resolve_deterministically(
             step.seq, step.action, before_args, deepcopy(step.args), evidence
         ))
 
+    origins = {step.seq: step.seq for step in repaired.steps}
+    if ui_map is not None and fixture_store is not None:
+        repaired, setup_changes, origins = _trusted_given(repaired, ui_map, fixture_store)
+        changes.extend(setup_changes)
+
     # Match the applier's promotion boundary: manual because of unmapped steps,
     # with every blocker now gone. Never promote setup/manual-only cases blindly.
     if (changes and case.execution == "manual" and case.needs_mapping
@@ -101,7 +111,8 @@ def resolve_deterministically(
         if analyze_executability(auto_candidate).executable:
             repaired = auto_candidate
     after = analyze_executability(repaired)
-    remaining = Counter(after.gaps)
+    remaining = Counter(replace(gap, step_seq=origins.get(gap.step_seq, gap.step_seq))
+                        for gap in after.gaps)
     resolved: list[ExecutionGap] = []
     for gap in before.gaps:
         if remaining[gap]:
@@ -109,6 +120,76 @@ def resolve_deterministically(
         else:
             resolved.append(gap)
     return ResolutionResult(repaired, before, after, tuple(resolved), after.gaps, tuple(changes))
+
+
+def _trusted_given(case: TestCase, ui_map: UIMap, store: FixtureStore):
+    """Reuse the existing full-clause proof, proposal validator and safe applier.
+
+    Generated proposals here are deterministic, not model output. No account
+    fact is inferred from credentials; unknown clauses and ambiguous pages stop.
+    """
+    from .apply_resolution import apply_validated_resolution
+    from .llm_resolution import AtomicProposal, EvidenceReference, ProposedChange, ResolutionProposal
+    from .proposal_validation import validate_resolution_proposal
+    from .resolution_context import build_resolution_context
+    from .step_expansion import expected_expansion, candidate_with_changes
+
+    context = build_resolution_context(case, analyze_executability(case).gaps, ui_map=ui_map)
+    proposals = []
+    for step in case.steps:
+        if step.kind != StepKind.GIVEN or step.action != "perform.unmapped":
+            continue
+        meanings = expected_expansion(step, case.test_data, fixture_store=store)
+        if (not meanings or [m["action"] for m in meanings] != ["ui.session", "ui.goto"]
+                or "precondition_route" not in meanings[1]):
+            continue
+        route = meanings[1]["precondition_route"]
+        target, issues = validate_exploration_request(ExplorationRequest(route), base_url=ui_map.base_url)
+        if issues:
+            continue
+        pages = []
+        for page in context.observations["ui_pages"]:
+            url, errors = validate_exploration_request(ExplorationRequest(page["url"]), base_url=ui_map.base_url)
+            if not errors and url == target:
+                pages.append(page)
+        if len(pages) != 1:
+            continue
+        source = EvidenceReference("testcase-step", {"step_seq": step.seq, "action": step.action})
+        page_ref = EvidenceReference("ui-map", {"page": pages[0]["url"]})
+        proposals.append(ProposedChange(
+            step.seq, step.action, ("UNMAPPED_ACTION",), "", {},
+            "Exact Given clause: trusted fixture facts and provisioned aliases prove the account; "
+            "anonymous session and route are preserved as explicit actions.",
+            (source, page_ref), (
+                AtomicProposal("ui.session", deepcopy(meanings[0]["args"]), (source,)),
+                AtomicProposal("ui.goto", {"url": pages[0]["url"]}, (source, page_ref)),
+            )))
+    validation = validate_resolution_proposal(ResolutionProposal(case.id, tuple(proposals), ()),
+                                              context, case, fixture_store=store)
+    applied = apply_validated_resolution(case, validation)
+    if not applied.applied_changes or applied.issues:
+        return case, [], {step.seq: step.seq for step in case.steps}
+    _, origins = candidate_with_changes(case, validation.valid_changes)
+    repaired = applied.case
+    changes = []
+    for record in applied.applied_changes:
+        change = record.change
+        changes.append(ResolutionChange(
+            change.step_seq, "ui.session", deepcopy(record.before_args),
+            {"steps": [atom.to_dict() for atom in change.expansion]},
+            {"source": "trusted-fixture-and-ui-map", "facts": deepcopy(case.test_data.get(FACT_REGISTRY, {})),
+             "references": [ref.to_dict() for ref in change.evidence],
+             "validated_by": "deterministic-proposal-validator"}, from_action=change.from_action))
+    # The shared applier preserves source clauses on each atom. Mark their actual
+    # origin accurately: this proposal was constructed without an LLM call.
+    changed_sequences = {c.step_seq for c in validation.valid_changes}
+    for step in repaired.steps:
+        if origins[step.seq] in changed_sequences:
+            prefix, _, payload = step.note.rpartition("\n[resolution-expansion] ")
+            audit = json.loads(payload)
+            audit["type"] = "validated-deterministic-expansion"
+            step.note = prefix + "\n[resolution-expansion] " + json.dumps(audit, ensure_ascii=False, sort_keys=True)
+    return repaired, changes, origins
 
 
 # Whole source clauses only; exclude regex/query/template syntax and prose.
