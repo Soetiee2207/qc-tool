@@ -41,6 +41,11 @@ _OUTPUT_SHAPE = {
             "reason": "<why inspecting this grounded target helps this gap>",
             "intent": "<inspect_page|observe_network>",
         }],
+        "actions": [{
+            "action": "ui.click",
+            "target": "<exact grounded submit test_id on this request's page>",
+            "step_seq": "<listed unresolved source step sequence>",
+        }],
     }],
 }
 
@@ -97,13 +102,15 @@ def build_exploration_prompt(
         section("REQUEST BUDGET", {"maximum_requests": MAX_EXPLORATION_REQUESTS}),
         section("CONTEXT CONSTRAINTS", data["constraints"]),
         "Return one JSON object only, without prose or Markdown fences. Use exactly "
-        "the fields below. requests may be [] when unresolved. Each request needs a "
+        "the fields below. The root object MUST have ONLY testcase_id and requests. "
+        "Never put actions, status, reason, evidence or unresolved at the root. "
+        "actions is OPTIONAL and belongs INSIDE its request at requests[i].actions; "
+        "omit it for page-only inspection. Every request has exactly target, session, "
+        "purposes and optionally actions. Each action has exactly action, target, "
+        "step_seq. Do not add any other fields. requests may be [] when unresolved. Each request needs a "
         "nonempty purposes array. step_seq is an integer or null, not placeholder text. "
         "Angle-bracket strings indicate placeholders, not evidence.",
         section("OUTPUT JSON SHAPE", _OUTPUT_SHAPE),
-        section("OPTIONAL APPROVAL-REQUIRED ACTION SHAPE", {"actions": [{
-            "action": "ui.click", "target": "<exact submit test_id in supplied page>",
-            "step_seq": "<listed unresolved source step sequence>"}]}),
     ])
 
 

@@ -202,3 +202,25 @@ def test_no_browser_network_or_automatic_validation(inputs, monkeypatch):
     monkeypatch.setattr(qctool.exploration_plan, "validate_exploration_plan", forbidden)
     _, context, _ = inputs
     assert propose_exploration(context, FakeLLM(json.dumps(_payload()))).requests
+
+
+def test_live_root_actions_shape_is_rejected_and_prompt_nests_it(inputs):
+    # Real DeepSeek completion had actions alongside requests at the root.
+    # Never move it after parsing; fix only the instructions sent to the model.
+    _, context, _ = inputs
+    response = {"testcase_id": context.testcase["id"], "requests": [{
+        "target": "/login", "session": "anonymous", "purposes": [{
+            "gap_code": "UNMAPPED_ACTION", "step_seq": 2,
+            "reason": "Observe source-required validation", "intent": "inspect_page"}]}],
+        "actions": [{"action": "ui.click", "target": "btn-login", "step_seq": 2}]}
+    with pytest.raises(LLMResponseError) as failure:
+        parse_exploration_plan(json.dumps(response))
+    assert failure.value.diagnostics["category"] == "FIELD_SET"
+    assert failure.value.diagnostics["path"] == "plan"
+    prompt = build_exploration_prompt(context)
+    shape = json.loads(prompt.split("OUTPUT JSON SHAPE\n")[1])
+    assert set(shape) == {"testcase_id", "requests"}
+    assert "actions" in shape["requests"][0]
+    assert "requests[i].actions" in prompt
+    assert "Never put actions" in prompt
+    assert "OPTIONAL APPROVAL-REQUIRED ACTION SHAPE" not in prompt
