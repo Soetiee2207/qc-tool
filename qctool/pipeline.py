@@ -26,6 +26,7 @@ from .executability import analyze_executability
 from .llm_resolution import ResolutionLLM
 from .llm_exploration import ExplorationLLM
 from .llm_provider import load_llm_provider
+from .test_fixtures import FixtureStore, load_fixture_store
 
 ProgressFn = Callable[[str, str], None]      # (bước, mô tả)
 
@@ -59,6 +60,7 @@ class PipelineConfig:
     headless: bool = True               # chạy trình duyệt ẩn
     out_dir: Path | None = None         # mặc định: artifacts/<feature>/
     created_by: str = "qc-tool"
+    fixture_store: FixtureStore | None = field(default=None, repr=False)
     llm_enabled: bool = False          # chỉ bật tường minh; không suy từ credential
 
     # ── UI/UX test (Playwright) ────────────────────────────────────────────
@@ -125,6 +127,7 @@ class PipelineConfig:
             out_dir=resolve(out.get("dir")),
             created_by=out.get("created_by") or "qc-tool",
             llm_enabled=llm_enabled,
+            fixture_store=load_fixture_store(data.get("test_fixtures")),
             ui_retry=max(0, min(int(ui.get("retry", 0) or 0), 3)),
             ui_evidence=str(ui.get("evidence", "on-fail") or "on-fail"),
             ui_trace=bool(ui.get("trace", False)),
@@ -198,11 +201,17 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                  resolution_llm: ResolutionLLM | None = None,
                  exploration_llm: ExplorationLLM | None = None) -> PipelineResult:
     """Chạy toàn bộ pipeline. Không bao giờ ném lỗi ra ngoài — trả về `error`."""
-    notify = on_progress or _noop
+    progress = on_progress or _noop
     result = PipelineResult(feature=cfg.feature)
 
+    def safe(message: str) -> str:
+        return cfg.fixture_store.redact(message) if cfg.fixture_store else message
+
+    def notify(stage: str, message: str) -> None:
+        progress(stage, safe(message))
+
     def log(message: str) -> None:
-        result.log.append(message)
+        result.log.append(safe(message))
 
     try:
         if cfg.llm_enabled and (resolution_llm is None or exploration_llm is None):
@@ -433,11 +442,14 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
             base_url=cfg.web_url or _resolve_base_url(cfg, meta) or None,
             storage_state=state_path if state_path.is_file() else None,
             resolution_llm=resolution_llm, exploration_llm=exploration_llm,
-            module=cfg.module or "COV",
+            module=cfg.module or "COV", fixture_store=cfg.fixture_store,
         )
         result.generation_result = generation_result
         generation_path = out_dir / "generation.json"
-        generation_path.write_text(json.dumps(generation_result.to_dict(),
+        generation_payload = generation_result.to_dict()
+        if cfg.fixture_store:
+            generation_payload = cfg.fixture_store.redact(generation_payload)
+        generation_path.write_text(json.dumps(generation_payload,
                                              ensure_ascii=False, indent=2), encoding="utf-8")
         result.generation_path = generation_path
         summary = (f"Generation: {result.generation_status} · "
@@ -598,6 +610,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
             run_result = execute.run_cases(
                 cases, session, environment=cfg.web_url or target,
                 browser=browser, retry=cfg.ui_retry, soft_assert=cfg.soft_assert,
+                fixture_store=cfg.fixture_store,
             )
         finally:
             if browser is not None:
@@ -655,9 +668,9 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
         return result
 
     except Exception as exc:                       # noqa: BLE001 — báo cho người dùng, không sập
-        result.error = f"{type(exc).__name__}: {exc}"
+        result.error = safe(f"{type(exc).__name__}: {exc}")
         result.log.append(f"LỖI: {result.error}")
-        result.log.append(traceback.format_exc())
+        result.log.append(safe(traceback.format_exc()))
         notify("error", result.error)
         return result
 

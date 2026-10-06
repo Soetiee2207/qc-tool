@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .execute.runner import UI_VERBS
+from .test_fixtures import fixture_gaps
 from .testcase import ACTION_SPECS, TestCase, ValidationError
 
 
@@ -58,6 +59,9 @@ def analyze_executability(case: TestCase) -> ExecutabilityReport:
         gaps.append(ExecutionGap("MANUAL_EXECUTION", "Case is marked for manual execution."))
     if case.requires:
         gaps.append(ExecutionGap("MISSING_PRECONDITION", f"Requires setup: {case.requires}"))
+
+    gaps.extend(ExecutionGap("MISSING_FIXTURE", f"Trusted fixture unavailable: {alias}", seq)
+                for alias, seq in fixture_gaps(case))
 
     saved_responses: set[str] = set()
     executable_assertion = False

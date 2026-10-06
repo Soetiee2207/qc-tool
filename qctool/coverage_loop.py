@@ -16,6 +16,7 @@ from .llm_exploration import ExplorationLLM
 from .llm_resolution import ResolutionLLM
 from .model import Requirement
 from .resolution_context import ResolutionContext
+from .test_fixtures import FixtureStore
 from .testcase import TestCase
 from .ui.crawl import UIMap
 
@@ -91,6 +92,7 @@ def run_coverage_loop(
     contexts: Mapping[str, ResolutionContext] | None = None,
     ui_map: UIMap | None = None, endpoints: list[Endpoint] | None = None,
     base_url: str | None = None, storage_state: Path | None = None,
+    fixture_store: FixtureStore | None = None,
 ) -> CoverageLoopResult:
     """Reanalyse after each pass, add accepted cases only, never repair inputs.
 
@@ -110,7 +112,7 @@ def run_coverage_loop(
             flows = requirements.get("flows")
         requirements = requirements.get("requirements", [])
     rows, sources = deepcopy(tuple(requirements)), deepcopy(flows)
-    working = list(deepcopy(tuple(cases)))
+    working = [fixture_store.bind(c) if fixture_store else deepcopy(c) for c in cases]
     if len({case.id for case in working}) != len(working):
         raise ValueError("Testcase IDs must be unique")
     trusted_contexts, trusted_ui, trusted_endpoints = deepcopy((contexts, ui_map, endpoints))
@@ -152,7 +154,7 @@ def run_coverage_loop(
                 resolution_llm=resolution_llm, exploration_llm=exploration_llm,
                 contexts=deepcopy(trusted_contexts), requirements=deepcopy(rows),
                 ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints),
-                base_url=base_url, storage_state=storage_state))
+                base_url=base_url, storage_state=storage_state, fixture_store=fixture_store))
         except Exception:
             issues.append(CoverageLoopIssue(index, "PASS_FAILED",
                                           "Pass failed; previously accepted cases retained."))

@@ -18,6 +18,7 @@ from .llm_exploration import ExplorationLLM
 from .llm_resolution import ResolutionLLM
 from .resolution_context import ResolutionContext
 from .resolution_cycle import ResolutionCycleResult, run_resolution_cycle
+from .test_fixtures import FixtureStore
 from .testcase import TestCase
 from .ui.crawl import UIMap
 
@@ -127,6 +128,7 @@ def run_resolution_loop(
     resolution_llm: ResolutionLLM | None = None,
     exploration_llm: ExplorationLLM | None = None,
     base_url: str | None = None, storage_state: Path | None = None,
+    fixture_store: FixtureStore | None = None,
     ui_map: UIMap | None = None, endpoints: list[Endpoint] | None = None,
 ) -> ResolutionLoopResult:
     """Run at most max_cycles, passing each resulting case/context to the next.
@@ -159,7 +161,7 @@ def run_resolution_loop(
         try:
             result = deepcopy(run_resolution_cycle(
                 deepcopy(working), deepcopy(packet), resolution_llm=resolution_llm,
-                exploration_llm=exploration_llm, base_url=base_url, storage_state=storage_state,
+                exploration_llm=exploration_llm, base_url=base_url, storage_state=storage_state, fixture_store=fixture_store,
                 ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints)))
             candidate_report = analyze_executability(result.case)
             candidate_facts = _evidence_facts(result.context)

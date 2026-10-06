@@ -713,7 +713,7 @@ class BrowserSession:
     def fill(self, args: dict) -> str:
         locator = self.locate(args)
         locator.fill(str(args.get("value", "")), timeout=self.timeout_ms)
-        return f"Đã điền «{args.get('value', '')}» vào «{self._label(args)}»"
+        return f"Đã điền «{args.get('_fixture_alias', args.get('value', ''))}» vào «{self._label(args)}»"
 
     def select(self, args: dict) -> str:
         locator = self.locate(args)

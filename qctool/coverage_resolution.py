@@ -15,6 +15,7 @@ from .llm_resolution import ResolutionLLM
 from .model import Requirement
 from .resolution_context import ResolutionContext, build_resolution_context
 from .resolution_loop import ResolutionLoopResult, run_resolution_loop
+from .test_fixtures import FixtureStore
 from .testcase import TestCase
 from .ui.crawl import UIMap
 
@@ -88,6 +89,7 @@ def run_coverage_resolution_pass(
     requirements: Sequence[dict | Requirement] | dict | None = None,
     ui_map: UIMap | None = None, endpoints: list[Endpoint] | None = None,
     base_url: str | None = None, storage_state: Path | None = None,
+    fixture_store: FixtureStore | None = None,
 ) -> CoverageResolutionPassResult:
     """Plan once, then call the bounded resolution loop once per new candidate.
 
@@ -107,6 +109,9 @@ def run_coverage_resolution_pass(
                          reserved_case_ids=tuple(reserved_case_ids))
     trusted_requirements, trusted_ui, trusted_endpoints = deepcopy((requirements, ui_map, endpoints))
     trusted_contexts = deepcopy(dict(contexts or {}))
+    if fixture_store is not None:
+        from dataclasses import replace
+        plan = replace(plan, cases=tuple(fixture_store.bind(c) for c in plan.cases))
     results, issues = [], []
     # The planner already merges shared intents; iterate cases, not audit links.
     for logical in plan.cases:
@@ -125,7 +130,7 @@ def run_coverage_resolution_pass(
                 deepcopy(working), deepcopy(context), max_cycles=max_cycles,
                 resolution_llm=resolution_llm, exploration_llm=exploration_llm,
                 ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints),
-                base_url=base_url, storage_state=storage_state))
+                base_url=base_url, storage_state=storage_state, fixture_store=fixture_store))
             # Recompute rather than accepting the loop's executable flag.
             final_report = analyze_executability(candidate.case)
             working, resolution = deepcopy(candidate.case), candidate

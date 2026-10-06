@@ -180,6 +180,13 @@ def build_resolution_prompt(context: ResolutionContext) -> str:
         section("EXECUTION GAPS", data["gaps"]),
         section("ALLOWED ACTIONS — ACTION_SPECS", data["allowed_actions"]),
         section("CONSTRAINTS", data["constraints"]),
+        "Trusted fixture data is represented by aliases in TESTCASE.test_data and "
+        "_fixture_refs metadata. For fill values, copy the exact supplied alias string "
+        "(for example a configured fixture.field), never its underlying secret. "
+        "Only aliases whose metadata says available=true may be used. Do not invent "
+        "fixture names, fields, values or account state; missing aliases stay unresolved. "
+        "Alias names are references, not literal email/password values. Fixture availability "
+        "does not prove role, active/locked account state or business expectations.",
         section("EVIDENCE REFERENCE SCHEMA — exact ref field names, no additional fields", _EVIDENCE_SCHEMA),
         section("EVIDENCE REFERENCES — identifiers present in this context only", catalog),
         "Each evidence entry is exactly {\"source\": <source>, \"ref\": <object>}. "

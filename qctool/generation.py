@@ -15,6 +15,7 @@ from .llm_exploration import ExplorationLLM
 from .llm_resolution import ResolutionLLM
 from .model import Requirement
 from .resolution_context import ResolutionContext
+from .test_fixtures import FixtureStore
 from .testcase import TestCase
 from .ui.crawl import UIMap
 from .validate import Report, validate_batch
@@ -93,6 +94,7 @@ def run_generation(
     resolution_llm: ResolutionLLM | None = None,
     exploration_llm: ExplorationLLM | None = None,
     base_url: str | None = None, storage_state: Path | None = None,
+    fixture_store: FixtureStore | None = None,
     max_passes: int = 3, max_cycles: int = 3, module: str = "COV",
     contexts: Mapping[str, ResolutionContext] | None = None,
 ) -> GenerationResult:
@@ -114,7 +116,8 @@ def run_generation(
             flows = requirements.get("flows")
         requirements = requirements.get("requirements", [])
     rows, source_flows = deepcopy(tuple(requirements)), deepcopy(flows)
-    original = tuple(deepcopy(tuple(existing_cases)))
+    original = tuple(fixture_store.bind(c) if fixture_store else deepcopy(c)
+                     for c in existing_cases)
     validation = validate_batch(list(original))
     issues = []
     result = None
@@ -127,7 +130,7 @@ def run_generation(
                 resolution_llm=resolution_llm, exploration_llm=exploration_llm,
                 base_url=base_url, storage_state=storage_state,
                 max_passes=max_passes, max_cycles=max_cycles, module=module,
-                contexts=deepcopy(contexts)))
+                contexts=deepcopy(contexts), fixture_store=fixture_store))
         except Exception:
             failed = True
             issues.append(GenerationIssue("coverage_loop", "GENERATION_FAILED",

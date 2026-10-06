@@ -11,9 +11,10 @@ import re
 from .generate.mapper import RE_CLICK, RE_FILL, RE_HTTP
 from .llm_resolution import ProposedChange
 from .testcase import Step, TestCase
+from .test_fixtures import trusted_value
 
 
-def expected_expansion(step: Step, test_data: dict) -> list[dict] | None:
+def expected_expansion(step: Step, test_data: dict, *, min_atoms: int = 2) -> list[dict] | None:
     text = step.args.get("description" if step.action == "perform.unmapped" else "expected")
     if not isinstance(text, str) or not text.strip():
         return None
@@ -69,11 +70,11 @@ def expected_expansion(step: Step, test_data: dict) -> list[dict] | None:
             return None
     for item in result:
         if "data_key" in item:
-            value = test_data.get(item["data_key"])
+            value = trusted_value(test_data, item["data_key"])
             if not isinstance(value, str) or not value:
                 return None
             item["value"] = value
-    return result if 2 <= len(result) <= 8 else None
+    return result if min_atoms <= len(result) <= 8 else None
 
 
 def candidate_with_changes(case: TestCase, changes: list[ProposedChange] | tuple[ProposedChange, ...]) -> tuple[TestCase, dict[int, int]]:

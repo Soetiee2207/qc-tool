@@ -19,6 +19,7 @@ from .generate.mapper import RE_CLICK, RE_HTTP, RE_OPEN_PATH
 from .llm_resolution import AtomicProposal, EvidenceReference, ProposedChange, ResolutionProposal, UnresolvedGap
 from .resolution_context import ResolutionContext
 from .step_expansion import candidate_with_changes, expected_expansion
+from .test_fixtures import FixtureStore, REGISTRY, is_alias
 from .testcase import ACTION_SPECS, Step, TestCase, ValidationError
 from .ui.crawl import _norm
 
@@ -57,7 +58,8 @@ class ProposalValidationResult:
 
 
 def validate_resolution_proposal(
-    proposal: ResolutionProposal, context: ResolutionContext, case: TestCase,
+    proposal: ResolutionProposal, context: ResolutionContext, case: TestCase, *,
+    fixture_store: FixtureStore | None = None,
 ) -> ProposalValidationResult:
     """Validate one proposal against only the supplied case, context, and vocabulary.
 
@@ -112,7 +114,7 @@ def validate_resolution_proposal(
 
             if change.expansion:
                 if not failures:
-                    error = _validate_expansion(step, change, context, working, origins)
+                    error = _validate_expansion(step, change, context, working, origins, fixture_store=fixture_store)
                     if error:
                         fail(error, "Expansion must ground and preserve every source clause in order.")
                 if not failures:
@@ -157,6 +159,9 @@ def validate_resolution_proposal(
                          for key in change.args.keys() - step.args.keys()):
                     fail("SEMANTICS_UNPROVEN", "New argument has no deterministic grounding rule.")
 
+            if not failures and (error := _fixture_fill_error(change.action, change.args, context, fixture_store)):
+                fail(error, "Fill alias is not backed by the supplied trusted fixture store.")
+
             if not failures:
                 try:
                     Step(step.seq, step.kind, change.action, change.args, step.note).validate()
@@ -177,7 +182,7 @@ def validate_resolution_proposal(
                     grounding = _ground_action(change, references, context)
                     if grounding is not None:
                         fail(grounding, "Proposed action or arguments are not grounded in cited context evidence.")
-                    semantics = _check_semantics(step, change, references, context)
+                    semantics = _check_semantics(step, change, references, context, fixture_store=fixture_store)
                     if semantics is not None:
                         fail(semantics, "Original step and requirements do not prove the proposed meaning.")
 
@@ -229,22 +234,34 @@ def validate_resolution_proposal(
     )
 
 
+def _fixture_fill_error(action: str, args: dict, context: ResolutionContext,
+                        fixture_store: FixtureStore | None) -> str | None:
+    data = context.testcase.get("test_data", {})
+    value = args.get("value")
+    if action == "ui.fill" and is_alias(value) and REGISTRY in data:
+        if fixture_store is None or not fixture_store.trusts(value, data[REGISTRY]):
+            return "UNTRUSTED_FIXTURE"
+    return None
+
+
 def _origin_gaps(report: ExecutabilityReport, origins: dict[int, int]) -> Counter:
     return Counter((gap.code, origins.get(gap.step_seq, gap.step_seq)) for gap in report.gaps)
 
 
 def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionContext,
-                        working: TestCase, origins: dict[int, int]) -> str | None:
+                        working: TestCase | None, origins: dict[int, int], *,
+                        allow_single: bool = False, fixture_store: FixtureStore | None = None) -> str | None:
     if step.action not in TestCase.UNMAPPED_ACTIONS:
         return "EXPANSION_NOT_ALLOWED"
     if (not isinstance(change.expansion, (tuple, list))
             or not all(isinstance(atom, AtomicProposal) and isinstance(atom.args, dict)
                        for atom in change.expansion)
-            or change.action or change.args or not 2 <= len(change.expansion) <= 8):
+            or change.action or change.args or not (1 if allow_single else 2) <= len(change.expansion) <= 8):
         return "INVALID_EXPANSION"
     if _resolve_references(change.evidence, context) is None:
         return "FABRICATED_EVIDENCE"
-    expected = expected_expansion(step, context.testcase.get("test_data", {}))
+    expected = expected_expansion(step, context.testcase.get("test_data", {}),
+                                  min_atoms=1 if allow_single else 2)
     if expected is None or len(expected) != len(change.expansion):
         return "EXPANSION_SEMANTICS_UNPROVEN"
     for atom, meaning in zip(change.expansion, expected):
@@ -259,6 +276,8 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
         refs = _resolve_references(atom.evidence, context)
         if refs is None:
             return "FABRICATED_EVIDENCE"
+        if error := _fixture_fill_error(atom.action, atom.args, context, fixture_store):
+            return error
         single = replace(change, action=atom.action, args=atom.args,
                          evidence=atom.evidence, expansion=())
         if error := _ground_action(single, refs, context):
@@ -480,7 +499,7 @@ def _expectation_texts(step: Step, context: ResolutionContext) -> list[str]:
 
 def _check_semantics(step: Step, change: ProposedChange,
                      refs: list[tuple[str, dict, dict | None]],
-                     context: ResolutionContext) -> str | None:
+                     context: ResolutionContext, *, fixture_store: FixtureStore | None = None) -> str | None:
     if step.action == "ui.goto" and not step.args.get("url"):
         if not _same_route(step.note.strip(), str(change.args.get("url", ""))):
             return "SEMANTICS_UNPROVEN"
@@ -493,6 +512,9 @@ def _check_semantics(step: Step, change: ProposedChange,
         hint = str(step.args.get("by_name") or step.note)
         if not name or _norm(name) not in _norm(hint):
             return "SEMANTICS_UNPROVEN"
+    if step.action == "perform.unmapped" and change.action == "ui.fill":
+        return _validate_expansion(step, replace(change, action="", args={}, expansion=(
+            AtomicProposal(change.action, change.args, change.evidence),)), context, None, {}, allow_single=True, fixture_store=fixture_store)
     if step.action == "perform.unmapped":
         description = str(step.args.get("description") or "")
         grounded_arguments = {

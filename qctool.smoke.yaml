@@ -19,3 +19,26 @@ ui:
 out:
   dir: ./artifacts/salonhub-smoke
   skip_run: true  # review IR/XLSX trước khi thực thi trên deployment
+
+# Fixture references only; no secrets or inferred account state in this file.
+test_fixtures:
+  fixtures:
+    active_user:
+      email: {env: QCTOOL_USERNAME}
+      password: {env: QCTOOL_PASSWORD}
+    locked_user:
+      email: {env: QCTOOL_LOCKED_USER_EMAIL}
+      password: {env: QCTOOL_LOCKED_USER_PASSWORD}
+    invalid_user:
+      email: {env: QCTOOL_INVALID_USER_EMAIL}
+      password: {env: QCTOOL_INVALID_USER_PASSWORD}
+  bindings:
+    AC-salonhub-smoke-001-1:
+      email: active_user.email
+      correct_password: active_user.password
+    AC-salonhub-smoke-001-3:
+      email: invalid_user.email
+      wrong_password: invalid_user.password
+    AC-salonhub-smoke-001-4:
+      email: locked_user.email
+      non_empty_password: locked_user.password

@@ -19,6 +19,7 @@ from .llm_provider import LLMProviderError
 from .proposal_validation import ProposalValidationResult, validate_resolution_proposal
 from .resolution_context import ResolutionContext, build_resolution_context
 from .resolve import ResolutionResult, resolve_deterministically
+from .test_fixtures import FixtureStore
 from .testcase import TestCase
 from .ui.crawl import UIMap
 
@@ -85,6 +86,7 @@ def run_resolution_cycle(
     resolution_llm: ResolutionLLM | None = None,
     exploration_llm: ExplorationLLM | None = None,
     base_url: str | None = None, storage_state: Path | None = None,
+    fixture_store: FixtureStore | None = None,
     ui_map: UIMap | None = None, endpoints: list[Endpoint] | None = None,
 ) -> ResolutionCycleResult:
     """Run resolution once, then collect evidence once if gaps remain.
@@ -95,7 +97,11 @@ def run_resolution_cycle(
     be followed by exploration, but never by a second resolution LLM request.
     Manual/auto decisions belong solely to the resolver/applier and analyzer.
     """
-    working, packet = deepcopy(case), deepcopy(context)
+    working = fixture_store.bind(case) if fixture_store else deepcopy(case)
+    packet = deepcopy(context)
+    if fixture_store:
+        resolution_llm = fixture_store.guard_adapter(resolution_llm)
+        exploration_llm = fixture_store.guard_adapter(exploration_llm)
     trusted_ui, trusted_endpoints = deepcopy(ui_map), deepcopy(endpoints)
     before = analyze_executability(working)
     after = before
@@ -163,7 +169,7 @@ def run_resolution_cycle(
             deepcopy(packet), resolution_llm))
         if ok:
             ok, validation = attempt("proposal_validation", lambda: validate_resolution_proposal(
-                deepcopy(proposal), deepcopy(packet), deepcopy(working)))
+                deepcopy(proposal), deepcopy(packet), deepcopy(working), fixture_store=fixture_store))
             if ok:
                 ok, application = attempt("application", lambda: apply_validated_resolution(
                     deepcopy(working), deepcopy(validation)))
