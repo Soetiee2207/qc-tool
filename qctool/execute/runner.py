@@ -737,7 +737,7 @@ def _run_step(step, session: HttpSession, saved: dict) -> tuple[bool, str]:
 def _run_ui_step(step, browser) -> tuple[bool, str]:
     """Chạy một bước trên trình duyệt. Không có browser ⇒ Blocked, không phải Fail."""
     if browser is None:
-        return False, "Chưa mở trình duyệt — cần URL web để chạy bước UI"
+        raise NeedsEnvironment("Chưa mở trình duyệt — cần URL web để chạy bước UI")
 
     args = step.args
     match step.action:

@@ -1,0 +1,39 @@
+# Generic primary CLI config. Paths relative to this file.
+# uv run qctool run --config qctool.run.example.yaml
+# URL/paths here are placeholders; supply your own application and documents.
+feature: smoke
+module: SMOKE
+docs_dir: ./docs
+openapi: ./openapi.yaml
+web_url: https://app.example.com
+run:
+  base_url: https://app.example.com
+  timeout_seconds: 30
+  verify_ssl: true
+auth:
+  mode: manual # env credentials do not authorize automatic browser login
+llm:
+  enabled: false # opt-in; model/key/provider URL from QCTOOL_LLM_* env
+provisioning:
+  enabled: false # opt-in only; reviewed test_fixtures.acquisition policy still required
+  environment: test
+ui:
+  evidence: on-fail
+  trace: false
+  retry: 0
+out:
+  dir: ./artifacts/run
+  skip_run: false
+# Optional trusted existing fixtures: values ONLY from environment.
+# test_fixtures:
+#   fixtures:
+#     active_user:
+#       email: {env: SMOKE_USER_EMAIL}
+#       password: {env: SMOKE_USER_PASSWORD}
+#       facts: {role: customer, account_state: active} # declarations, not live proof
+#   bindings:
+#     <exact-source-requirement-ID>:
+#       email: active_user.email
+#       correct_password: active_user.password
+# Reviewed verification/provisioning rules belong under acquisition.
+# Credentials alone never prove account existence, state or valid password.

@@ -97,8 +97,12 @@ def test_local_app_fresh_database_and_supported_creation_contract():
 
 def recorded_completion(prompt):
     """Offline contract completion; used ONLY by marked localhost tests."""
-    def section(name):return json.loads(prompt.split(name+'\n',1)[1].split('\n\n',1)[0])
-    if prompt.startswith('Propose an UNTRUSTED exploration plan'):
+    from qctool.llm_prompt import prompt_cache_diagnostics
+    # Match complete headings: the cache prefix has semantic project projections;
+    # this stub needs the full exact bindings/evidence in the dynamic section.
+    def section(name):return json.loads(prompt.split('\n'+name+'\n',1)[1].split('\n\n',1)[0])
+    if (prompt_cache_diagnostics(prompt).get('cache_family') == 'exploration'
+            or prompt.startswith('Propose an UNTRUSTED exploration plan')):
         case=section('TESTCASE — EXPLICIT ROUTES AND SESSION REQUIREMENTS')
         gaps=section('UNRESOLVED EXECUTION GAPS')
         pages=section('CURRENT UI OBSERVATION — GROUNDED PAGE/LINK EVIDENCE')['ui_pages']

@@ -62,6 +62,8 @@ class PipelineConfig:
     created_by: str = "qc-tool"
     fixture_store: FixtureStore | None = field(default=None, repr=False)
     llm_enabled: bool = False          # chỉ bật tường minh; không suy từ credential
+    allow_provisioning: bool = False   # opt-in, vẫn phải qua reviewed engine policy
+    data_environment: str | None = None
 
     # ── UI/UX test (Playwright) ────────────────────────────────────────────
     ui_retry: int = 0                   # số lần chạy lại case hỏng (tối đa 3)
@@ -87,6 +89,10 @@ class PipelineConfig:
         out = data.get("out", {}) or {}
         ui = data.get("ui", {}) or {}
         llm = data.get("llm", {}) or {}
+        provisioning = data.get("provisioning", {}) or {}
+        allow_provisioning = provisioning.get("enabled", False)
+        if type(allow_provisioning) is not bool:
+            raise cfg_mod.ConfigError("provisioning.enabled must be a boolean.")
 
         # Tài khoản lấy từ `.env` nếu file cấu hình không ghi.
         # Nhờ vậy `qc.yaml` commit được mà không lộ bí mật, còn người dùng vẫn
@@ -127,6 +133,8 @@ class PipelineConfig:
             out_dir=resolve(out.get("dir")),
             created_by=out.get("created_by") or "qc-tool",
             llm_enabled=llm_enabled,
+            allow_provisioning=allow_provisioning,
+            data_environment=provisioning.get("environment"),
             fixture_store=load_fixture_store(data.get("test_fixtures")),
             ui_retry=max(0, min(int(ui.get("retry", 0) or 0), 3)),
             ui_evidence=str(ui.get("evidence", "on-fail") or "on-fail"),
@@ -443,6 +451,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
             storage_state=state_path if state_path.is_file() else None,
             resolution_llm=resolution_llm, exploration_llm=exploration_llm,
             module=cfg.module or "COV", fixture_store=cfg.fixture_store,
+            allow_provisioning=cfg.allow_provisioning, environment=cfg.data_environment,
         )
         result.generation_result = generation_result
         generation_path = out_dir / "generation.json"

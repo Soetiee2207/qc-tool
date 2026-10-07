@@ -34,9 +34,9 @@ OpenAPI  ─┼─► requirements.yaml ─► testcases.yaml ─► runner ─�
 ra một lần, rồi chạy điền kết quả vào chính file đó (4 cột runtime). QC không phải đối
 chiếu hai file.
 
-**LLM không bao giờ sinh ra thứ không chạy được.** LLM chỉ làm hai việc — prose → mô hình
-test, và prose → step theo vocabulary đóng. Hiện chưa có track LLM; mọi case đều
-`generated_by: engine`.
+**LLM output luôn là untrusted proposal/plan.** Deterministic validators quyết định
+changes/actions được phép. Chỉ testcase đã được analyzer xác nhận executable mới
+được chấp nhận vào automation; phần chưa đủ source/evidence/data vẫn unresolved.
 
 ## Cài đặt
 
@@ -50,6 +50,74 @@ cp .env.example .env                  # rồi điền tài khoản, token (khôn
 ```
 
 ## Dùng
+
+### Quick-start: một lệnh cho toàn bộ QC
+
+```bash
+uv run qctool validate --docs ./docs --openapi ./openapi.yaml
+uv run qctool run --docs ./docs --openapi ./openapi.yaml \
+  --url https://app.example.com --out artifacts/run
+```
+
+Thay URL/paths mẫu bằng inputs của bạn. `docs` chứa `urd.md`, `srs.md`;
+luồng bổ sung nằm trong `srs/*flow*.md` theo định dạng tool hỗ trợ. OpenAPI là tùy chọn nếu workflow không có
+API contract. Không cần tạo testcase YAML trước.
+
+Hoặc copy [qctool.run.example.yaml](qctool.run.example.yaml) thành `qctool.yaml`,
+điền inputs và chạy:
+
+```bash
+uv run qctool run --config qctool.yaml
+```
+
+CLI dùng chung `run_pipeline()` cho ingest, crawl/evidence, generation/resolution,
+Chromium/API execution và report. Mặc định output gọn; `summary.json` chứa số liệu,
+`pipeline.log` và `generation.json` giữ diagnostics/history chi tiết đã redact.
+Case manual/unresolved giữ trong testcase YAML/XLSX và reports, không tự thành Pass.
+
+**LLM mặc định OFF.** Có API key không tự bật model. Bật qua `llm.enabled: true`
+hoặc `--llm`, sau khi cấu hình `QCTOOL_LLM_BASE_URL`, `QCTOOL_LLM_MODEL`,
+`QCTOOL_LLM_API_KEY` và tùy chọn `QCTOOL_LLM_TIMEOUT_SECONDS`. Không ghi key vào
+YAML; dùng env/secrets. `--no-llm` ghi đè cấu hình bật.
+
+**Provisioning mặc định OFF.** `provisioning.enabled: true` hoặc
+`--allow-provisioning --test-environment test` chỉ bật gate; engine vẫn đòi exact
+operation, reviewed rule, allowed test environment/origin và verification phù hợp.
+Không có rule hợp lệ thì không tạo dữ liệu. Fixtures đi qua `test_fixtures`, giá trị
+qua env; credentials/facts khai báo không tự chứng minh trạng thái backend.
+
+`auth.mode: manual` là mặc định của primary CLI; có credentials trong env không
+tự đăng nhập. Muốn bootstrap login phải chọn mode trong config rõ ràng.
+
+`validate` chỉ kiểm tra config, docs có thể ingest, OpenAPI đọc được bằng loader
+hiện có và provider configuration nếu bật LLM. Không gọi model/browser/API,
+không ghi artifacts, không chứng minh coverage/account/website hoạt động và không
+phải validator đầy đủ mọi tính năng chuẩn OpenAPI.
+
+Artifacts: `requirements.yaml`, `ui-map.yaml` khi có evidence, `testcases.yaml`,
+`testcases.xlsx`, `generation.json`, `summary.json`, `pipeline.log`; execution
+reports `results.json`, `results.csv`, `junit.xml`, `report.md` dưới `runs/<timestamp>/`.
+Evidence/trace giữ policy và secret protection hiện có. Xem `summary.json.artifacts`
+để lấy đường dẫn chính xác. `--out` chọn thư mục mới cho mỗi run nếu cần giữ lịch sử.
+
+#### Exit codes của primary `run`
+
+| Code | Ý nghĩa |
+| --- | --- |
+| 0 | Generation thành công và toàn bộ testcase đã chạy Pass |
+| 1 | Có execution Fail; generation status vẫn hiển thị riêng |
+| 2 | Config/preflight/pipeline/artifact error |
+| 3 | Generation/coverage incomplete hoặc unassessable, không có execution Fail |
+| 4 | Generation hoàn tất nhưng execution bị Blocked/chưa chạy/skip |
+
+`generation_success` và `pipeline_ok` là hai trường riêng. Coverage không thay
+cho runtime Pass; testcase chưa chạy không có Pass. Flaky Pass vẫn có cờ/count
+riêng trong summary và reports. Blocker resolution không thay đổi status runner:
+manual testcase có thể là `Not Executed` với reason `MISSING_FIXTURE`.
+
+Tương thích: `qctool run testcases.yaml --base-url URL --web-url URL` vẫn chạy YAML
+đã có; `qctool all` vẫn dùng hành vi/exit codes cũ. Không trộn testcase positional
+với `--docs/--config/--openapi/--url` của primary mode.
 
 ### 1. Cả pipeline bằng một lệnh
 

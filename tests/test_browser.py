@@ -386,5 +386,5 @@ def test_ui_case_without_browser_is_blocked_not_failed(site):
     """Thiếu trình duyệt là thiếu môi trường — không được đổ cho sản phẩm."""
     case = _case(Step(1, StepKind.THEN, "assert.visible", {"target": "x"}))
     result = run_case(case, HttpSession(site, timeout=5), browser=None)
-    assert result.status == STATUS_FAIL
+    assert result.status == STATUS_BLOCKED
     assert "Chưa mở trình duyệt" in result.actual[0]

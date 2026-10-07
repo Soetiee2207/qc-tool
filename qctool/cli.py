@@ -79,6 +79,18 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    """Primary project run, with compatible execution of existing testcase YAML."""
+    from .cli_run import cmd_project
+    if not args.testcases:
+        return cmd_project(args)
+    if any(getattr(args, key, None) is not None for key in
+           ('docs', 'openapi', 'url', 'config', 'out', 'llm', 'allow_provisioning', 'test_environment')):
+        print('LỖI  Không trộn testcase YAML với project flags; dùng một trong hai chế độ.', file=sys.stderr)
+        return 2
+    return cmd_run_testcases(args)
+
+
+def cmd_run_testcases(args: argparse.Namespace) -> int:
     cases_path = Path(args.testcases)
     if not cases_path.is_file():
         print(f"LỖI  Không tìm thấy file testcase: {cases_path}", file=sys.stderr)
@@ -404,8 +416,11 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Có gap/cảnh báo thì trả mã lỗi 1 (dùng cho CI)")
     p_gen.set_defaults(func=cmd_generate)
 
-    p_run = sub.add_parser("run", help="Chạy testcase trên một môi trường")
-    p_run.add_argument("testcases", help="File testcases.yaml (từ lệnh generate)")
+    p_run = sub.add_parser("run", help="Docs + OpenAPI + URL → testcase, thực thi và báo cáo",
+                           description="Chạy toàn pipeline. Tương thích: run testcases.yaml --base-url URL.",
+                           epilog="Advanced YAML-execution flags vẫn hỗ trợ; xem HUONG-DAN.md. UI/auth/fixtures cho project mode cấu hình trong YAML.")
+    p_run.add_argument("testcases", nargs="?", help="Tùy chọn: chạy testcase YAML đã có (chế độ cũ)")
+    _project_flags(p_run)
     p_run.add_argument("--base-url", help="Địa chỉ API cần test (mặc định: QCTOOL_BASE_URL)")
     p_run.add_argument("--web-url", help="Link webapp — cần khi có bước UI/UX")
     p_run.add_argument("--token", help="Bearer token (mặc định: lấy từ .env)")
@@ -430,7 +445,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--soft-assert", action="store_true",
                        help="Bước kiểm tra sai không dừng case — chạy hết để thấy mọi lỗi")
     p_run.add_argument("--timeout", type=int, help="Thời gian chờ mỗi bước (giây)")
+    # Compatibility flags stay accepted; primary help exposes the simple project flow.
+    compatibility_only = {'token','allow_anonymous','environment','xlsx','executed_by',
+                          'out_dir','login','retry','evidence','trace','axe','soft_assert'}
+    for action in p_run._actions:
+        if action.dest in compatibility_only:
+            action.help = argparse.SUPPRESS
     p_run.set_defaults(func=cmd_run)
+
+    p_validate = sub.add_parser("validate", help="Preflight config/docs/OpenAPI, không gọi model/browser/API")
+    _project_flags(p_validate)
+    p_validate.set_defaults(func=cmd_preflight)
 
     p_all = sub.add_parser("all", help="Chạy cả pipeline: tài liệu + spec → testcase → chạy → báo cáo")
     p_all.add_argument("--config", help="File cấu hình qctool.yaml (thay cho các tham số dưới)")
@@ -476,6 +501,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.set_defaults(func=cmd_serve)
 
     return parser
+
+
+def _project_flags(parser):
+    parser.add_argument('--docs', '--docs-dir', dest='docs', help='Thư mục URD/SRS/flows')
+    parser.add_argument('--openapi', help='File OpenAPI')
+    parser.add_argument('--url', help='HTTP(S) URL ứng dụng')
+    parser.add_argument('--config', help='YAML config; CLI flags ghi đè các giá trị đã chọn')
+    parser.add_argument('--out', help='Thư mục artifacts')
+    parser.add_argument('--feature', help='Tên feature/namespace requirement')
+    parser.add_argument('--module', help='Module testcase')
+    parser.add_argument('--llm', action=argparse.BooleanOptionalAction, default=None,
+                        help='Bật/tắt LLM; provider/model/key lấy từ QCTOOL_LLM_*')
+    parser.add_argument('--allow-provisioning', action=argparse.BooleanOptionalAction, default=None,
+                        help='Opt-in tạo fixture qua reviewed policy; mặc định OFF')
+    parser.add_argument('--test-environment', help='Environment cho reviewed provisioning policy')
+    parser.add_argument('--skip-run', action='store_true', help='Chỉ generation; không báo Pass')
+
+
+def cmd_preflight(args):
+    from .cli_run import cmd_project
+    return cmd_project(args, validate_only=True)
 
 
 def main(argv: list[str] | None = None) -> int:
