@@ -9,6 +9,7 @@ from dataclasses import asdict, replace
 import hashlib
 import hmac
 import json
+import math
 import secrets
 import time
 from enum import Enum
@@ -46,80 +47,128 @@ def preparation_identity(acquisition, store, endpoints, base_url, environment, e
 
 
 class _Entry:
-    def __init__(self, identity, result, store):
+    def __init__(self, identity, result, store, created):
         self.seal, self.identity, self.result, self.store = _SEAL, identity, result, store
         self.source_case_id = result.initial.case.id
-        self.created = time.monotonic()
+        self.created = created
 
 
 class PreparationCache:
-    """Private authentic receipts only; bounded to 128 successful preparations.
+    """Private authentic history; bounded to 128 data identities per run.
 
-    No import/export API. Entries expire after five minutes and require the
-    original trusted store object as well as identical semantic inputs.
+    No import/export API. Live assurance expires independently of creation
+    history. Freshness is monotonic and configurable by the run owner.
     """
-    def __init__(self):
+    def __init__(self, *, freshness_seconds=300, clock=time.monotonic):
+        if (isinstance(freshness_seconds, bool)
+                or not isinstance(freshness_seconds, (int, float))
+                or not 0 < freshness_seconds < float('inf')):
+            raise ConfigError("Preparation freshness must be positive finite seconds")
+        self.freshness_seconds = freshness_seconds
+        self._clock = clock
         self._entries = {}
 
     def _remember(self, identity, result, store, endpoints):
         from .test_data_preparation import PreparationStatus
-        from .test_data_verification import VerificationStatus
         from .test_data_provisioning import ProvisioningStatus
-        if result.status != PreparationStatus.AVAILABLE or result.blockers:
+        # Retain authenticated creation history even when subsequent verification
+        # fails. It is not available proof and must not trigger another creation.
+        created = result.provisioning and result.provisioning.status == ProvisioningStatus.PROVISIONED
+        if not created and (result.status != PreparationStatus.AVAILABLE or result.blockers):
             return
-        if result.verification and result.verification.status != VerificationStatus.VERIFIED:
-            return
-        if result.provisioning and result.provisioning.status != ProvisioningStatus.PROVISIONED:
-            return
-        # Authenticate the private runtime evidence before admitting it.
         self._authenticate(result, store, endpoints)
         if len(self._entries) < 128 or identity in self._entries:
-            self._entries[identity] = _Entry(identity, result, store)
+            entry = _Entry(identity, result, store, self._clock())
+            self._entries[identity] = entry
 
     @staticmethod
     def _authenticate(result, store, endpoints):
-        from .test_data_acquisition import acquire_test_data, DataStatus
-        proof = acquire_test_data(result.initial.case, fixture_store=store, endpoints=endpoints,
-                                  verification=result.verification, provisioning=result.provisioning)
-        if proof.status != DataStatus.AVAILABLE or proof.issues:
-            raise ConfigError('Preparation proof is absent or stale')
-        return proof
+        # Authentication only: expired facts are never acquired through this path.
+        from .test_data_acquisition import DataAcquisitionResult
+        from .test_data_verification import VerificationResult
+        from .test_data_provisioning import ProvisioningResult, ProvisioningStatus
+        if not isinstance(result.initial, DataAcquisitionResult):
+            raise ConfigError('Preparation history has no authentic acquisition')
+        if result.verification is not None and not isinstance(result.verification, VerificationResult):
+            raise ConfigError('Preparation history has no authentic verification')
+        if result.provisioning is not None and (
+                not isinstance(result.provisioning, ProvisioningResult)
+                or result.provisioning.status != ProvisioningStatus.PROVISIONED):
+            raise ConfigError('Preparation history has no successful provisioning')
+        if result.verification:
+            result.verification.evidence_for(result.initial.case, store)
+        if result.provisioning:
+            result.provisioning.evidence_for(result.initial.case, store, endpoints)
 
-    def _reuse(self, identity, acquisition, store, endpoints):
-        from .test_data_acquisition import acquire_test_data, DataStatus
+    def _reuse(self, identity, acquisition, store, endpoints, **kwargs):
         from .test_data_verification import _Receipt, VerificationResult
         from .test_data_provisioning import ProvisioningResult
-        from .test_data_preparation import PreparationStage, TestDataPreparationResult, PreparationStatus
+        from .test_data_preparation import PreparationStage, TestDataPreparationResult
         entry = self._entries.get(identity)
         if entry is None:
             return None
-        if not isinstance(entry, _Entry) or entry.seal is not _SEAL or entry.identity != identity or entry.store is not store or not 0 <= time.monotonic() - entry.created <= 300:
-            raise ConfigError('Preparation entry is stale or not authentic')
+        now = self._clock()
+        if (not isinstance(entry, _Entry) or entry.seal is not _SEAL
+                or entry.identity != identity or entry.store is not store
+                or type(entry.created) not in (int, float)
+                or not math.isfinite(entry.created) or now < entry.created):
+            raise ConfigError('Preparation entry is not authentic')
         previous = entry.result
-        if not isinstance(previous, TestDataPreparationResult) or previous.status != PreparationStatus.AVAILABLE or previous.blockers or previous.initial is None:
-            raise ConfigError('Preparation entry contains no successful proof')
+        if not isinstance(previous, TestDataPreparationResult) or previous.initial is None:
+            raise ConfigError('Preparation entry contains no authenticated history')
         self._authenticate(previous, store, endpoints)
         # Rebind only after exact identity equality AND authentic original proof.
         # Lower-level evidence_for still checks current case, store and contract.
         case = acquisition.case
         verification, provisioning = None, None
-        if previous.verification:
+        live_assurance = bool(previous.verification or (previous.provisioning and previous.provisioning.observation.facts))
+        stale = live_assurance and now - entry.created > self.freshness_seconds
+        if previous.verification and not stale:
             observations = deepcopy(previous.verification.observations)
             verification = VerificationResult(observations, _Receipt(case, store, observations))
         if previous.provisioning:
             observation = deepcopy(previous.provisioning.observation)
+            if stale:
+                observation = replace(observation, facts={})
             receipt = _Receipt(case, store, (observation,))
             receipt.provisioning_contract = deepcopy(previous.provisioning._receipt.provisioning_contract)
             provisioning = ProvisioningResult(observation, receipt)
-        final = acquire_test_data(case, fixture_store=store, endpoints=endpoints,
-                                  verification=verification, provisioning=provisioning)
-        if final.status != DataStatus.AVAILABLE or final.issues:
-            raise ConfigError('Preparation proof does not satisfy current requirements')
-        return replace(previous, case=deepcopy(final.case), initial=acquisition, final=final,
-                       verification=verification, provisioning=provisioning,
-                       verification_attempted=False, verification_reason='RECEIPT_REUSED',
-                       provisioning_reason='PROVISIONING_RECEIPT_REUSED' if provisioning else 'NOT_REQUIRED',
-                       preparation_mode='REUSED', preparation_identity=identity,
+        from .test_data_preparation import _prepare_test_data
+        options = dict(kwargs, fixture_store=store, endpoints=endpoints)
+        if provisioning:
+            options['provisioning_receipt'] = provisioning
+        if verification:
+            options['verification'] = verification
+        if stale:
+            # No expired assurance is forwarded; only the creation event survives.
+            # Existing preparation selects and validates safe verification rules.
+            if provisioning is None:
+                # Expiry is not evidence that an existing entity disappeared.
+                # Refresh only; never create merely to recover expired assurance.
+                options['allow_provisioning'] = False
+            result = _prepare_test_data(case, **options)
+            mode = ('REVERIFIED' if result.available and result.verification_attempted
+                    else 'PREPARED' if result.available else 'UNVERIFIED')
+            result = replace(result, preparation_mode=mode, preparation_identity=identity,
+                             reused_from_testcase=entry.source_case_id,
+                             stages=(PreparationStage('preparation', 'STALE', identity),
+                                     PreparationStage('provisioning_history', 'REUSED' if provisioning else 'SKIPPED', identity)) + result.stages +
+                                    (PreparationStage('preparation', mode if result.available else 'BLOCKED', result.status.value),))
+            self._remember(identity, result, store, endpoints)
+            return result
+        result = _prepare_test_data(case, **options)
+        if result.verification_attempted:
+            result = replace(result, preparation_identity=identity,
+                             reused_from_testcase=entry.source_case_id,
+                             preparation_mode='REVERIFIED' if result.available else 'UNVERIFIED',
+                             stages=(PreparationStage('provisioning_history', 'REUSED', identity),) + result.stages)
+            self._remember(identity, result, store, endpoints)
+            return result
+        return replace(result, verification_reason=(
+                           'RECEIPT_REUSED' if verification and result.available
+                           else 'PREVIOUS_VERIFICATION_FAILED' if verification
+                           else result.verification_reason),
+                       preparation_mode='REUSED' if result.available else 'UNVERIFIED', preparation_identity=identity,
                        reused_from_testcase=entry.source_case_id,
                        stages=(PreparationStage('acquisition', 'COMPLETED', acquisition.status.value),
-                               PreparationStage('preparation', 'REUSED', identity)))
+                               PreparationStage('preparation', 'REUSED' if result.available else 'BLOCKED', identity)))

@@ -317,15 +317,19 @@ def prepare_test_data(case, *, preparation_cache=None, **kwargs):
     identity = preparation_identity(initial, store, endpoints, kwargs.get('base_url'),
                                     kwargs.get('environment'), kwargs.get('allow_provisioning', False))
     try:
-        reused = preparation_cache._reuse(identity, initial, store, endpoints)
+        reused = preparation_cache._reuse(
+            identity, initial, store, endpoints,
+            **{k: v for k, v in kwargs.items() if k not in {'fixture_store', 'endpoints'}})
         if reused is not None:
             return reused
     except ConfigError:
         blocked = deepcopy(initial.case)
         blocked.execution = 'manual'
         return TestDataPreparationResult(blocked, PreparationStatus.UNVERIFIED_TEST_DATA, initial, initial,
-            blockers=({'code':'PREPARATION_RECEIPT_REJECTED', 'message':'Preparation proof is stale or not authentic; no call made.'},),
+            blockers=({'code':'PREPARATION_RECEIPT_REJECTED', 'message':'Preparation proof is not authentic; no call made.'},),
             preparation_mode='REJECTED', preparation_identity=identity)
     result = replace(_prepare_test_data(case, **kwargs), preparation_identity=identity)
+    result = replace(result, stages=result.stages + (
+        PreparationStage('preparation', 'PREPARED' if result.available else 'BLOCKED', result.status.value),))
     preparation_cache._remember(identity, result, store, endpoints)
     return result

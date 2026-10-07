@@ -69,17 +69,19 @@ def test_every_trust_input_changes_identity(change):
     assert before!=preparation_identity(changed,store,ops,backend,env,enabled)
 
 
-@pytest.mark.parametrize('tamper',['expiry','receipt','observation','container','changed_store','fake_result'])
+@pytest.mark.parametrize('tamper',['receipt','observation','container','changed_store','fake_result','timestamp','fake_verification','fake_provisioning'])
 def test_stale_or_fake_cache_entry_is_rejected_without_new_calls(tamper,monkeypatch):
     case,store,login,create,_=setup();cache=PreparationCache();calls=[]
     original=attempt(case,store,[login,create],cache,calls)
     entry=cache._entries[original.preparation_identity]
     if tamper=='fake_result':entry.result={'status':'AVAILABLE'}
-    if tamper=='expiry':entry.created-=301
     if tamper=='receipt':entry.result=replace(entry.result,verification=VerificationResult(entry.result.verification.observations))
     if tamper=='observation':entry.result.verification.observations[0].facts['role']='admin'
     if tamper=='container':cache._entries[original.preparation_identity]={'status':'AVAILABLE'}
     if tamper=='changed_store':entry.store=deepcopy(store)
+    if tamper=='timestamp':entry.created=None
+    if tamper=='fake_verification':entry.result=replace(entry.result,verification={'status':'VERIFIED'})
+    if tamper=='fake_provisioning':entry.result=replace(entry.result,provisioning={'status':'PROVISIONED'})
     second=deepcopy(case);second.id='TC_OTHER_002'
     result=attempt(second,store,[login,create],cache,calls)
     assert not result.available and result.preparation_mode=='REJECTED'
@@ -88,13 +90,17 @@ def test_stale_or_fake_cache_entry_is_rejected_without_new_calls(tamper,monkeypa
 
 
 @pytest.mark.parametrize('failed_phase',['create','verify'])
-def test_failed_proof_is_never_remembered(failed_phase):
+def test_failed_proof_is_not_available_but_creation_history_survives(failed_phase):
     case,store,login,create,_=setup();cache=PreparationCache()
     result=prepare_test_data(case,fixture_store=store,endpoints=[login,create],base_url=BASE,
         environment='test',allow_provisioning=True,preparation_cache=cache,
         provisioning_transport=lambda *a:created() if failed_phase=='verify' else {'status':409,'body':{'success':False}},
         transport=lambda *a:{'status':401,'body':{'success':False}})
-    assert not result.available and not cache._entries
+    assert not result.available
+    assert bool(cache._entries) == (failed_phase == "verify")
+    if failed_phase == "verify":
+        again = attempt(case, store, [login, create], cache, [])
+        assert not again.available and not again.verification_attempted and not again.provisioning_attempted
 
 
 def test_serialized_cache_is_not_trusted():
@@ -140,3 +146,112 @@ def test_partial_requirement_proof_is_not_reused_for_stronger_facts():
     assert result.preparation_identity!=first.preparation_identity
     assert result.preparation_mode=='EXECUTED' and not result.available
     assert calls==['verify','verify']
+
+
+def test_expired_assurance_reverifies_without_recreating_and_preserves_inputs():
+    case,store,login,create,_=setup(); calls=[]; now=[0]
+    cache=PreparationCache(freshness_seconds=10,clock=lambda:now[0])
+    first=attempt(case,store,[login,create],cache,calls)
+    second=deepcopy(case);second.id='TC_LATER_001'
+    snapshot=deepcopy((case,second,first.to_dict(),store.to_dict(),login,create))
+    now[0]=11
+    result=attempt(second,store,[login,create],cache,calls)
+    assert result.available and result.preparation_mode=='REVERIFIED'
+    assert calls==['create','verify','verify']
+    assert result.verification_attempted and not result.provisioning_attempted
+    assert result.reused_from_testcase==case.id
+    assert {'STALE','REUSED','REVERIFIED'} <= {s.status for s in result.stages}
+    assert snapshot==(case,second,first.to_dict(),store.to_dict(),login,create)
+    now[0]=12
+    reused=attempt(second,store,[login,create],cache,calls)
+    assert reused.available and reused.preparation_mode=='REUSED'
+    assert calls==['create','verify','verify']
+    encoded=json.dumps(result.to_dict())
+    assert all(s not in encoded for s in ('private@example.test','PRIVATE-PASSWORD','PRIVATE-RESPONSE-TOKEN'))
+
+
+@pytest.mark.parametrize('verifier',['missing','unsafe','failed','partial'])
+def test_expired_proof_without_successful_verifier_never_recreates(verifier):
+    case,store,login,create,acquired=setup();calls=[];now=[0]
+    if verifier=='missing': store.acquisition_config.pop('verification')
+    if verifier=='unsafe': store.acquisition_config['verification'][0]['policy']['approved']=False
+    if verifier=='partial': store.acquisition_config['verification'][0]['proves']={'account_exists':True}
+    cache=PreparationCache(freshness_seconds=10,clock=lambda:now[0])
+    # An authentic earlier receipt with the same current identity. Configuration
+    # remains unchanged between admission and expiry (no identity bypass).
+    original=prepare_test_data(case,fixture_store=store,endpoints=[login,create],base_url=BASE,
+        environment='test',allow_provisioning=True,provisioning_transport=created,
+        transport=verified)
+    if not original.available:
+        # Creation was authentic; absent/unsafe/partial proof cannot be AVAILABLE
+        # even before expiry. Retaining this event prevents duplicate creation.
+        assert original.provisioning.status.value=='PROVISIONED'
+    identity=preparation_identity(acquired,store,[login,create],BASE,'test',True)
+    cache._remember(identity,original,store,[login,create])
+    now[0]=11
+    result=prepare_test_data(case,fixture_store=store,endpoints=[login,create],base_url=BASE,
+        environment='test',allow_provisioning=True,preparation_cache=cache,
+        provisioning_transport=lambda *a:(calls.append('create') or created()),
+        transport=lambda *a:(calls.append('verify') or {'status':401,'body':{'success':False}}))
+    assert not result.available and 'create' not in calls
+    assert calls==(['verify'] if verifier in ('failed','partial') else [])
+    again=attempt(case,store,[login,create],cache,calls)
+    assert not again.available and 'create' not in calls
+
+
+def test_no_verifier_after_expiry_drops_even_creation_fact_proof():
+    from tests.test_test_data_provisioning import rule
+    case,store,login,create,_=setup(rule(False),verify=False);now=[0];calls=[]
+    cache=PreparationCache(freshness_seconds=10,clock=lambda:now[0])
+    first=attempt(case,store,[login,create],cache,calls)
+    assert first.available and first.verification is None
+    now[0]=11
+    result=attempt(case,store,[login,create],cache,calls)
+    assert not result.available and calls==['create']
+    assert result.provisioning.observation.facts=={}
+    assert result.preparation_mode=='UNVERIFIED'
+    assert 'STALE' in {s.status for s in result.stages}
+
+
+def test_operator_declarations_do_not_expire_as_live_assurance():
+    case,store,login,create,acquired=setup(); now=[0];calls=[]
+    # Existing trusted config declarations with no requirement for live proof.
+    store.acquisition_config['evidence']=[{
+        'fixture':'active_user','facts':dict(acquired.findings[0].requirement.facts),
+        'assurance':'DECLARED','source_ref':'reviewed-operator-declaration'}]
+    need=replace(acquired.findings[0].requirement,require_verified=False)
+    cache=PreparationCache(freshness_seconds=10,clock=lambda:now[0])
+    options=dict(fixture_store=store,endpoints=[login,create],requirements=[need],
+                 preparation_cache=cache,base_url=BASE,environment='test',
+                 transport=lambda *a:calls.append('verify'))
+    first=prepare_test_data(case,**options)
+    assert first.available and first.verification is None
+    now[0]=10000
+    result=prepare_test_data(case,**options)
+    assert result.available and result.preparation_mode=='REUSED' and not calls
+
+
+@pytest.mark.parametrize('seconds',[0,-1,True,float('inf'),float('nan'),'300'])
+def test_invalid_freshness_rejected(seconds):
+    with pytest.raises(ConfigError):PreparationCache(freshness_seconds=seconds)
+
+
+def test_expired_tampered_receipt_is_rejected_before_reverification():
+    case,store,login,create,_=setup();calls=[];now=[0]
+    cache=PreparationCache(freshness_seconds=10,clock=lambda:now[0])
+    first=attempt(case,store,[login,create],cache,calls)
+    entry=cache._entries[first.preparation_identity]
+    entry.result=replace(entry.result,verification=replace(entry.result.verification,_receipt=None))
+    now[0]=11
+    result=attempt(case,store,[login,create],cache,calls)
+    assert not result.available and result.preparation_mode=='REJECTED'
+    assert calls==['create','verify']
+
+
+def test_fresh_cache_does_not_import_another_runs_history():
+    case,store,login,create,_=setup();calls=[]
+    first=attempt(case,store,[login,create],PreparationCache(),calls)
+    second=attempt(case,store,[login,create],PreparationCache(),calls)
+    assert first.available and second.available
+    assert first.preparation_mode==second.preparation_mode=='EXECUTED'
+    assert calls==['create','verify','create','verify']
