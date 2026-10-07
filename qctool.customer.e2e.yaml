@@ -1,0 +1,138 @@
+# Customer smoke trên website thật: chỉ account có sẵn; không provisioning.
+# Facts role/account_state là khai báo operator, không phải kết quả live.
+# Xác nhận account env thực sự là customer; policy login KHÔNG chứng minh role.
+# --llm bật provider env tường minh. auth.manual tránh bootstrap IdP/SSO.
+feature: customer
+module: CUSTOMER
+generation:
+  profile: business
+docs_dir: ./samples/customer
+openapi: ./samples/customer/openapi.yaml
+web_url: https://salonhub-soe.vercel.app
+run:
+  base_url: https://salonhub-3cg8.onrender.com
+  timeout_seconds: 30
+  verify_ssl: true
+auth:
+  mode: manual
+llm:
+  enabled: false
+provisioning:
+  enabled: false
+  environment: production
+ui:
+  retry: 0
+  evidence: on-fail
+  trace: false
+out:
+  dir: ./artifacts/customer-e2e
+  skip_run: false
+  headless: false
+test_fixtures:
+  fixtures:
+    active_user:
+      email:
+        env: QCTOOL_USERNAME
+      password:
+        env: QCTOOL_PASSWORD
+      facts:
+        role: customer
+        account_state: active
+  bindings:
+    AC-customer-001-1:
+      email: active_user.email
+      password: active_user.password
+      correct_password: active_user.password
+    AC-customer-001-3:
+      email: active_user.email
+      password: active_user.password
+      correct_password: active_user.password
+    AC-customer-001-4:
+      email: active_user.email
+      password: active_user.password
+      correct_password: active_user.password
+    AC-customer-001-5:
+      email: active_user.email
+      password: active_user.password
+      correct_password: active_user.password
+    AC-customer-001-6:
+      email: active_user.email
+      password: active_user.password
+      correct_password: active_user.password
+  acquisition:
+    requirements:
+      AC-customer-001-1:
+      - fixture: active_user
+        aliases:
+        - active_user.email
+        - active_user.password
+        facts:
+          account_exists: true
+          password_valid: true
+          account_state: active
+        require_verified: true
+        source_ref: samples/customer/urd.md:AC-001-1
+      AC-customer-001-3:
+      - fixture: active_user
+        aliases:
+        - active_user.email
+        - active_user.password
+        facts:
+          account_exists: true
+          password_valid: true
+          account_state: active
+        require_verified: true
+        source_ref: samples/customer/urd.md:AC-001-3
+      AC-customer-001-4:
+      - fixture: active_user
+        aliases:
+        - active_user.email
+        - active_user.password
+        facts:
+          account_exists: true
+          password_valid: true
+          account_state: active
+        require_verified: true
+        source_ref: samples/customer/urd.md:AC-001-4
+      AC-customer-001-5:
+      - fixture: active_user
+        aliases:
+        - active_user.email
+        - active_user.password
+        facts:
+          account_exists: true
+          password_valid: true
+          account_state: active
+        require_verified: true
+        source_ref: samples/customer/urd.md:AC-001-5
+      AC-customer-001-6:
+      - fixture: active_user
+        aliases:
+        - active_user.email
+        - active_user.password
+        facts:
+          account_exists: true
+          password_valid: true
+          account_state: active
+        require_verified: true
+        source_ref: samples/customer/urd.md:AC-001-6
+    verification:
+    - fixture: active_user
+      operation_id: login
+      body_aliases:
+        email: active_user.email
+        password: active_user.password
+      expected:
+        status: 200
+        json:
+          $.success: true
+      proves:
+        account_exists: true
+        password_valid: true
+        account_state: active
+      policy:
+        approved: true
+        test_data_mutation: false
+        side_effects:
+        - session_creation
+      source_ref: SalonHub/backend/controllers/authController.js:login
