@@ -265,7 +265,8 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
                        for atom in change.expansion)
             or change.action or change.args or not (1 if allow_single else 2) <= len(change.expansion) <= 8):
         return "INVALID_EXPANSION"
-    if _resolve_references(change.evidence, context) is None:
+    parent_refs = _resolve_references(change.evidence, context)
+    if parent_refs is None:
         return "FABRICATED_EVIDENCE"
     captured_login = working is not None and any(
         item.action == "ui.click" and origins[item.seq] < step.seq
@@ -276,6 +277,8 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
                                   allow_captured_login=captured_login)
     if expected is None or len(expected) != len(change.expansion):
         return "EXPANSION_SEMANTICS_UNPROVEN"
+    workflow_state_required = (step.kind.value == "then" and any("hint" in m for m in expected)
+                               and any(s.get("validated_actions") for s in context.observations.get("page_states", [])))
     for atom, meaning in zip(change.expansion, expected):
         if atom.action not in ACTION_SPECS:
             return "UNKNOWN_ACTION"
@@ -288,6 +291,27 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
         refs = _resolve_references(atom.evidence, context)
         if refs is None:
             return "FABRICATED_EVIDENCE"
+        if "operation" in meaning:
+            # The expansion's contract reference is shared by the status/body
+            # atoms of the SAME explicit source operation. Never inherit UI
+            # observations or treat a contract as an observed response.
+            refs = [*refs, *[r for r in parent_refs if r[0] == "openapi"
+                            and (r[1].get("method"), r[1].get("path")) == meaning["operation"]]]
+        state_ids = {ref.ref["state_id"] for ref in atom.evidence
+                     if ref.source == "ui-map" and "state_id" in ref.ref}
+        if (atom.action in {"assert.visible", "assert.text", "assert.url_matches"}
+                and (state_ids or workflow_state_required)):
+            from .outcome_grounding import outcome_state
+            from .source_grounding import empty_login_requirement, source_clause, login_page
+            empty = empty_login_requirement(working, context) if working else None
+            legacy_page = login_page(context, empty) if empty else None
+            legacy_proof = (empty is not None and source_clause(step, empty) is not None
+                            and legacy_page is not None and len(state_ids) == 1
+                            and legacy_page.get("state_id") in state_ids)
+            if (working is None or len(state_ids) != 1 or
+                    not legacy_proof and
+                    outcome_state(step, working, context, next(iter(state_ids))) is None):
+                return "OUTCOME_STATE_UNPROVEN"
         if error := _fixture_fill_error(atom.action, atom.args, context, fixture_store):
             return error
         single = replace(change, action=atom.action, args=atom.args,
@@ -365,23 +389,21 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
         if "operation" in meaning:
             method, path = meaning["operation"]
             operations = [item for source, item, _ in refs if source == "openapi"]
-            if not any(item.get("method") == method and item.get("path") == path
+            candidates = [item for item in context.interface_contract.get("api_operations", [])
+                          if (item.get("method"), item.get("path")) == (method, path)]
+            if len(candidates) != 1 or not any(item is candidates[0]
                        and (atom.action != "assert.http_status" or
                             str(required["expected"]) in item.get("response_codes", []))
                        for item in operations):
                 return "API_EVIDENCE_NOT_FOUND"
             source_name = atom.args.get("source", "res")
-            requests = [item for item in working.steps
-                        if origins[item.seq] < step.seq and item.action == "http.request"
-                        and item.args.get("save_as", "res") == source_name]
-            captures = [item for item in working.steps
-                        if origins[item.seq] < step.seq and item.action == "ui.click"
-                        and item.args.get("capture_response", {}).get("save_as", "res") == source_name]
-            sources = sorted(requests + captures, key=lambda item: item.seq)
-            if not sources:
+            from .outcome_grounding import response_binding
+            if working is None:
                 return "MISSING_RESPONSE"
-            args = sources[-1].args.get("capture_response", sources[-1].args)
-            if (args.get("method", "").upper(), args.get("path")) != (method, path):
+            position = next((item.seq for item in working.steps if origins[item.seq] == step.seq), 0)
+            operation = next(item for item in operations
+                             if (item.get("method"), item.get("path")) == (method, path))
+            if not response_binding(working, position, method, path, operation, source_name):
                 return "MISSING_RESPONSE"
             if "source" in atom.args:
                 required["source"] = source_name

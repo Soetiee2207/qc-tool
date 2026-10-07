@@ -108,6 +108,9 @@ def resolve_deterministically(
         repaired, source_changes, source_origins = _source_clauses(repaired, context)
         changes.extend(source_changes)
         origins = {seq: origins.get(origin, origin) for seq, origin in source_origins.items()}
+        repaired, outcome_changes, outcome_origins = _outcome_clauses(repaired, context)
+        changes.extend(outcome_changes)
+        origins = {seq: origins.get(origin, origin) for seq, origin in outcome_origins.items()}
 
     # Match the applier's promotion boundary: manual because of unmapped steps,
     # with every blocker now gone. Never promote setup/manual-only cases blindly.
@@ -131,13 +134,11 @@ def resolve_deterministically(
 
 def _source_clauses(case, context):
     """Construct exact source proofs, then reuse the validator and safe applier."""
-    from .apply_resolution import apply_validated_resolution
-    from .llm_resolution import AtomicProposal, EvidenceReference, ProposedChange, ResolutionProposal
-    from .proposal_validation import validate_resolution_proposal
+    from .llm_resolution import AtomicProposal, EvidenceReference, ProposedChange
     from .resolution_context import build_resolution_context
     from .source_grounding import (empty_login_requirement, source_clause, login_page,
                                    unique_element, semantic_repair_arguments, observed_validation, empty_form_contract)
-    from .step_expansion import expected_expansion, candidate_with_changes
+    from .step_expansion import expected_expansion
 
     snapshot = build_resolution_context(case, ()).testcase
     context = replace(deepcopy(context), testcase=snapshot,
@@ -202,6 +203,95 @@ def _source_clauses(case, context):
         else:
             proposals.append(ProposedChange(step.seq, step.action, gaps, "", {},
                                             "Preserve all explicit source outcomes in order.", evidence, tuple(atoms)))
+    return _apply_source_proposals(case, context, proposals)
+
+
+def _outcome_clauses(case, context):
+    """Fill evidence for exact outcome atoms, never repair a model's payload.
+
+    API proof follows a configured runtime response writer. UI proof follows a
+    complete validated source action chain to its current final state. Unknown
+    meanings, stale states and ambiguous operations remain unmapped.
+    """
+    from .llm_resolution import AtomicProposal, EvidenceReference, ProposedChange
+    from .resolution_context import build_resolution_context
+    from .source_grounding import source_clause
+    from .outcome_grounding import outcome_requirement, outcome_state, response_binding
+    from .proposal_validation import _same_route
+    from .step_expansion import expected_expansion
+    context = replace(deepcopy(context), testcase=build_resolution_context(case, ()).testcase,
+                      gaps=analyze_executability(case, context=context).gaps)
+    proposals = []
+    for step in case.steps:
+        if step.action != "assert.unmapped":
+            continue
+        req = outcome_requirement(step, case, context)
+        meanings = expected_expansion(step, case.test_data)
+        if req is None or not meanings:
+            continue
+        actions = [s for s in case.steps if s.kind == StepKind.WHEN and source_clause(s, req) is not None]
+        if not actions or any(s.action in case.UNMAPPED_ACTIONS or s.seq >= step.seq for s in actions):
+            continue
+        state = outcome_state(step, case, context)
+        refs = (EvidenceReference("requirement", {"id": req["id"]}),
+                EvidenceReference("testcase-step", {"step_seq": step.seq, "action": step.action}))
+        atoms = []
+        for meaning in meanings:
+            args = deepcopy(meaning.get("args", {}))
+            evidence = refs
+            if "operation" in meaning:
+                method, path = meaning["operation"]
+                ops = [op for op in context.interface_contract.get("api_operations", [])
+                       if (op.get("method"), op.get("path")) == (method, path)]
+                if len(ops) != 1:
+                    break
+                bound = response_binding(case, step.seq, method, path, ops[0])
+                if not bound or bound[0] not in actions:
+                    break
+                args["source"] = bound[1]
+                evidence += (EvidenceReference("openapi", {"method": method, "path": path}),
+                             EvidenceReference("testcase-step", {"step_seq": bound[0].seq, "action": bound[0].action}))
+            elif "hint" in meaning:
+                if state is None:
+                    break
+                elements = [e for e in state["page"].get("elements", [])
+                            if e.get("name") == meaning["hint"] and e.get("test_id")]
+                if len(elements) != 1:
+                    break
+                args["target"] = elements[0]["test_id"]
+                evidence += (EvidenceReference("ui-map", {"page": state["page"]["url"],
+                             "state_id": state["state_id"], "test_id": args["target"]}),)
+            elif "route" in meaning:
+                if state:
+                    pages = [state["page"]]
+                else:
+                    # An observed UI message needs the same approved final state
+                    # for its URL sibling, not an unrelated initial route.
+                    if any("hint" in item for item in meanings):
+                        break
+                    pages = context.observations.get("ui_pages", [])
+                pages = [p for p in pages if _same_route(meaning["route"], p.get("url", ""))]
+                if len(pages) != 1:
+                    break
+                evidence += (EvidenceReference("ui-map", {"page": pages[0]["url"],
+                             **({"state_id": state["state_id"]} if state else {})}),)
+            else:
+                break
+            atoms.append(AtomicProposal(meaning["action"], args, evidence))
+        if len(atoms) == len(meanings):
+            gaps = tuple(g.code for g in context.gaps if g.step_seq == step.seq)
+            if gaps:
+                proposals.append(ProposedChange(step.seq, step.action, gaps, "", {},
+                    "Every exact source outcome grounded to its response writer or approved final state.", refs, tuple(atoms)))
+    return _apply_source_proposals(case, context, proposals)
+
+
+def _apply_source_proposals(case, context, proposals):
+    from .apply_resolution import apply_validated_resolution
+    from .llm_resolution import ResolutionProposal
+    from .proposal_validation import validate_resolution_proposal
+    from .step_expansion import candidate_with_changes
+    identity = {step.seq: step.seq for step in case.steps}
     validation = validate_resolution_proposal(ResolutionProposal(case.id, tuple(proposals), ()), context, case)
     applied = apply_validated_resolution(case, validation)
     if applied.issues:

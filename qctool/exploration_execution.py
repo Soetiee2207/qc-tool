@@ -61,6 +61,8 @@ def _enrich(observations: dict, result: ExplorationResult,
             entry = {**deepcopy(state), 'session': approved.request.session,
                      'testcase_id': approved.testcase_id,
                      'purposes': [asdict(p) for p in approved.purposes],
+                     'validated_actions': deepcopy([g for g in approved.grounding
+                                                   if g.get('source') == 'validated_action']),
                      'request': payload['request']}
             if not any(s['state_id'] == entry['state_id'] for s in history):
                 history.append(entry)

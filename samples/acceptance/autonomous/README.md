@@ -114,3 +114,25 @@ Mục tiêu acceptance tối thiểu đạt, nhưng executable coverage là 2/4 
 `generation_success=false`, `INCOMPLETE_COVERAGE`. Hai case chưa chạy không được
 tính Pass. Lượt offline dùng stub đạt cả bốn chỉ chứng minh đường cơ chế có thể
 chạy khi proposal hợp lệ; không phải bằng chứng model live đạt cả bốn.
+
+## Đóng gaps bằng operation/state provenance — 2026-10-07
+
+Lượt fresh `artifacts/autonomous-acceptance-outcome-proof` giữ nguyên docs/OAS,
+app, fixture policy và harness. DeepSeek thật gọi 8 lần: 5 resolution,
+3 exploration. Cả bốn testcase executable và runner Chromium **4 Pass**;
+coverage 4/4, `generation_success=true`, stop `COVERAGE_COMPLETE`.
+
+- API expansion được dùng contract reference ở cấp change cho các atoms của
+  đúng operation source. Response alias phải trỏ tới writer gần nhất đúng
+  method/path/origin; counter, writer bị overwrite hoặc operation sai bị reject.
+  Contract không được coi là response runtime đã quan sát.
+- Exploration giữ approved action bindings trong từng state. Assertion UI phải
+  theo đúng source clauses, toàn bộ actions, navigation chain và final current
+  `state_id`. Intermediate/stale/unrelated states không chứng minh outcome.
+- Resolver có thể tạo một proposal deterministic mới gồm toàn bộ outcome atoms
+  từ source và evidence. Proposal LLM thiếu exact text/broad URL regex vẫn reject;
+  không chỉnh sửa malformed model output để được chấp nhận.
+
+Cycles lần lượt: 2, 1, 1, 3. Case hai trang có invalid completion ở cycle 1 và
+assertion thiếu semantics ở cycle 2; cycle 3 hoàn tất bằng source/state proof.
+Đây là kết quả live của lượt này, không bảo đảm mọi completion tương lai hợp lệ.
