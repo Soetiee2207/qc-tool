@@ -132,7 +132,7 @@ def run_coverage_resolution_pass(
                 ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints),
                 base_url=base_url, storage_state=storage_state, fixture_store=fixture_store))
             # Recompute rather than accepting the loop's executable flag.
-            final_report = analyze_executability(candidate.case)
+            final_report = analyze_executability(candidate.case, context=candidate.context)
             working, resolution = deepcopy(candidate.case), candidate
         except Exception:
             issues.append(CoverageResolutionIssue(
@@ -142,7 +142,8 @@ def run_coverage_resolution_pass(
         if resolution is not None:
             for issue in resolution.issues:
                 issues.append(CoverageResolutionIssue(
-                    logical.id, "cycle", issue.code, issue.message, issue.cycle))
+                    logical.id, 'test_data_preparation' if issue.cycle == 0 else 'cycle',
+                    issue.code, issue.message, issue.cycle or None))
             for index, cycle in enumerate(resolution.cycles, 1):
                 for issue in cycle.issues:
                     issues.append(CoverageResolutionIssue(

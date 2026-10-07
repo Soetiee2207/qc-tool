@@ -5,7 +5,7 @@ complete unmodified evidence and audits remain available in the cycle history.
 """
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import hashlib
 import json
@@ -16,9 +16,10 @@ from .exploration_execution import _element_identity
 from .generate.from_openapi import Endpoint
 from .llm_exploration import ExplorationLLM
 from .llm_resolution import ResolutionLLM
-from .resolution_context import ResolutionContext
+from .resolution_context import ResolutionContext, build_resolution_context
 from .resolution_cycle import ResolutionCycleResult, run_resolution_cycle
 from .test_fixtures import FixtureStore
+from .test_data_preparation import TestDataPreparationResult, prepare_test_data
 from .testcase import TestCase
 from .ui.crawl import UIMap
 
@@ -54,6 +55,7 @@ class ResolutionLoopResult:
     cycles: tuple[ResolutionCycleResult, ...]
     stop_reason: ResolutionLoopStopReason
     issues: tuple[ResolutionLoopIssue, ...]
+    test_data_preparation: TestDataPreparationResult | None = None
 
     @property
     def cycle_count(self) -> int:
@@ -66,8 +68,11 @@ class ResolutionLoopResult:
 
     @property
     def audit(self) -> tuple[ResolutionLoopAuditEntry, ...]:
-        entries = [ResolutionLoopAuditEntry(index, event.stage, event.status)
-                   for index, result in enumerate(self.cycles, 1) for event in result.audit]
+        entries = [ResolutionLoopAuditEntry(0, 'test_data_' + event.stage, event.status)
+                   for event in self.test_data_preparation.stages] if (
+                       self.test_data_preparation and self.test_data_preparation.initial is not None) else []
+        entries.extend(ResolutionLoopAuditEntry(index, event.stage, event.status)
+                       for index, result in enumerate(self.cycles, 1) for event in result.audit)
         entries.extend(ResolutionLoopAuditEntry(issue.cycle, "cycle", "FAILED")
                        for issue in self.issues if issue.code == "CYCLE_FAILED")
         return tuple(entries)
@@ -152,20 +157,30 @@ def run_resolution_loop(
     if type(max_cycles) is not int or max_cycles < 1:
         raise ValueError("max_cycles must be a positive integer")
     working, packet = deepcopy(case), deepcopy(context)
-    if data_verification is not None:
-        from .test_data_acquisition import acquire_test_data
-        from dataclasses import replace
-        acquired = acquire_test_data(working, fixture_store=fixture_store,
-                                     endpoints=endpoints or (), verification=data_verification)
-        working = acquired.case
-        packet = replace(packet, data_acquisition=acquired.to_dict())
+    preparation = None
+    if packet.testcase.get('id') == case.id:
+        preparation = prepare_test_data(working, fixture_store=fixture_store,
+                                        endpoints=endpoints or (), base_url=base_url,
+                                        verification=data_verification)
+        working = preparation.case
+        if preparation.initial is not None:
+            packet = replace(packet, data_acquisition=preparation.context_data(),
+                             testcase=build_resolution_context(working, packet.gaps).testcase)
+        data_verification = preparation.verification
     trusted_ui, trusted_endpoints = deepcopy(ui_map), deepcopy(endpoints)
     report = analyze_executability(working, context=packet)
+    if preparation and preparation.initial is not None:
+        packet = replace(packet, gaps=report.gaps)
     history, issues = [], []
+    if preparation:
+        issues.extend(ResolutionLoopIssue(0, i['code'], i['message']) for i in preparation.blockers)
 
     def finish(reason):
         return deepcopy(ResolutionLoopResult(
-            working, packet, report, tuple(history), reason, tuple(issues)))
+            working, packet, report, tuple(history), reason, tuple(issues), preparation))
+
+    if preparation and not preparation.available:
+        return finish(ResolutionLoopStopReason.NO_MORE_WORK)
 
     if report.executable:
         return finish(ResolutionLoopStopReason.EXECUTABLE)

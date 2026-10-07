@@ -5,14 +5,16 @@ created: 2026-10-07
 updated: 2026-10-07
 lang: vi
 changelog:
+  - 2026-10-07 | codex | Nối preparation hữu hạn vào generation và resolution
   - 2026-10-07 | codex | Thêm verification có policy và receipt, không provisioning
 ---
 
 # Kiểm chứng dữ liệu test hiện có
 
 Acquisition chỉ đọc dữ liệu. Credential và facts trong config là khai báo,
-không phải bằng chứng backend. Verification là lời gọi riêng, được người vận
-hành chủ động cho phép; pipeline không tự chạy verification.
+không phải bằng chứng backend. Generation và resolution dùng preparation tự động,
+nhưng chỉ được gọi verification khi thiếu facts bắt buộc và có rule đã được
+người vận hành review/cho phép. Có credentials không tự kích hoạt lời gọi.
 
 ## Rule trong config
 
@@ -58,6 +60,14 @@ review riêng. Role/state trong config vẫn là `DECLARED`.
 ## API và trust boundary
 
 ```python
+prepared = prepare_test_data(
+    case, fixture_store=store, endpoints=endpoints, base_url=backend_url,
+)
+if not prepared.available:
+    # Inspect prepared.status / prepared.blockers; no provisioning or LLM guess.
+    return prepared
+
+# Các API dưới đây vẫn dùng được riêng cho chẩn đoán/replay:
 before = acquire_test_data(case, fixture_store=store, endpoints=endpoints)
 verification = verify_test_data(
     before, fixture_store=store, endpoints=endpoints, base_url=backend_url,
@@ -122,9 +132,48 @@ assurance; một fact verified không chứng minh sibling facts.
 Không thay đổi facts trong FixtureStore, business semantics, fixtures validator,
 hoặc tự provision dữ liệu. Mọi input vẫn nguyên vẹn.
 
+## Preparation trong generation/resolution
+
+`prepare_test_data()` trả case copy, acquisition ban đầu/cuối, verification
+receipt, attempted/reason, rule decisions, stages và blockers. Đường đi:
+
+1. Không có metadata/alias/source Given được hỗ trợ: `NO_DATA_REQUIRED`, bỏ qua
+   acquisition và verification; case không đổi.
+2. Acquisition phát hiện aliases/facts cần thiết. Nếu đã đủ assurance: `AVAILABLE`,
+   không gọi mạng. Receipt hợp lệ có thể được dùng lại; receipt fake/stale trả
+   `VERIFICATION_RECEIPT_REJECTED`, không thử gọi thay thế.
+3. Chỉ xét rule có implication cho fact còn thiếu và fixture có đủ giá trị.
+   Mỗi rule qua chung `validate_verification_rule()` trước execution. Rule unsafe,
+   operation ambiguous hoặc thiếu grounding không được chuyển cho verifier.
+4. Tối đa một verification phase (tối đa 3 calls). Reacquire bằng receipt thật;
+   facts không được chứng minh vẫn thiếu. Không retry hoặc provisioning.
+5. 401 tạo blocker `INVALID_TEST_DATA`, không biến thành `MISSING_FIXTURE` và không
+   kết luận sai password/locked. Phân biệt `UNVERIFIED_TEST_DATA`, `UNSAFE_TO_VERIFY`,
+   `AMBIGUOUS`, `PROVISIONABLE`, `UNSAFE_TO_PROVISION` và thiếu values.
+
+Base API lấy từ operation server OpenAPI khi có một lựa chọn chính xác; nếu
+không có server thì dùng `base_url`. Có nhiều server thì phải có base URL khớp;
+nhiều backend khác nhau trong cùng phase giữ unresolved, không đoán host.
+Server API không bị thay bằng URL frontend. Một alternative unsafe không chặn
+rule độc lập an toàn đã được duyệt.
+
+`run_resolution_loop()` prepare trước executable short-circuit và dùng lại
+receipt qua các cycle; không lặp verification theo cycle. Blocker dừng loop với
+`NO_MORE_WORK` trước LLM/Playwright. `run_resolution_cycle()` gọi riêng cũng có
+preparation. `run_generation()` prepare existing cases trước coverage; generated
+candidates đi qua coverage pass → resolution loop như trước. Blockers có trong
+generation audit/issues và context; coverage pass dùng contextual executability.
+
+Case copy có blocker được đánh `execution: manual`, để runner hoặc coverage
+không có context cũng không chấp nhận auto. Các source steps/expectations không
+bị sửa; caller original không đổi. Preparation không tự promote manual → auto.
+Không provision kể cả status `PROVISIONABLE`. Receipt audit JSON không thể dùng
+để nạp lại verified evidence.
+
 ## Chạy tests offline
 
 ```bash
 uv run python -m pytest tests/test_test_data_verification.py tests/test_test_data_acquisition.py -q
+uv run python -m pytest tests/test_test_data_preparation.py -q
 uv run python -m pytest tests/ -q -m 'not playwright'
 ```

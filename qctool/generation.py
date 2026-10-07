@@ -16,6 +16,7 @@ from .llm_resolution import ResolutionLLM
 from .model import Requirement
 from .resolution_context import ResolutionContext
 from .test_fixtures import FixtureStore
+from .test_data_preparation import TestDataPreparationResult, prepare_test_data
 from .testcase import TestCase
 from .ui.crawl import UIMap
 from .validate import Report, validate_batch
@@ -51,6 +52,7 @@ class GenerationResult:
     coverage_loop: CoverageLoopResult | None
     issues: tuple[GenerationIssue, ...]
     status: GenerationStatus
+    test_data_preparations: tuple[TestDataPreparationResult, ...] = ()
 
     @property
     def success(self) -> bool:
@@ -120,6 +122,18 @@ def run_generation(
                      for c in existing_cases)
     validation = validate_batch(list(original))
     issues = []
+    preparations = []
+    if validation.ok:
+        prepared = []
+        for case in original:
+            preparation = prepare_test_data(case, fixture_store=fixture_store,
+                                            endpoints=endpoints or (), base_url=base_url)
+            prepared.append(preparation.case)
+            if preparation.initial is not None:
+                preparations.append(preparation)
+                issues.extend(GenerationIssue('test_data_preparation', i['code'], i['message'], case.id)
+                              for i in preparation.blockers)
+        original = tuple(prepared)
     result = None
     failed = False
     if validation.ok:
@@ -184,4 +198,4 @@ def run_generation(
     return GenerationResult(
         deepcopy(inventory), deepcopy(executable), deepcopy(unresolved), deepcopy(generated),
         deepcopy(coverage), deepcopy(intent_coverage), deepcopy(validation), deepcopy(result),
-        tuple(issues), status)
+        tuple(issues), status, tuple(preparations))

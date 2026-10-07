@@ -193,7 +193,8 @@ def _once(method, url, body, timeout):
         conn.close()
 
 
-def _validate(rule, acquisition, store, endpoints, base_url):
+def validate_verification_rule(rule, acquisition, store, endpoints, base_url):
+    """Shared deterministic gate; never resolve aliases or contact a provider."""
     operations = [op for op in endpoints if op.operation_id == rule.operation_id]
     if len(operations) != 1:
         return None, 'AMBIGUOUS' if operations else 'OPERATION_NOT_FOUND'
@@ -239,7 +240,7 @@ def _validate(rule, acquisition, store, endpoints, base_url):
 
 
 def verify_test_data(acquisition, *, fixture_store, endpoints=(), base_url,
-                     timeout=MAX_TIMEOUT_SECONDS, transport=None):
+                     timeout=MAX_TIMEOUT_SECONDS, transport=None, rule_indices=None):
     """Validate configured rules, then resolve aliases and make <=3 calls, once each.
 
     No implicit invocation from acquisition/pipeline. ``transport`` is a trusted
@@ -248,6 +249,12 @@ def verify_test_data(acquisition, *, fixture_store, endpoints=(), base_url,
     if type(timeout) not in {int, float} or not 0 < timeout <= MAX_TIMEOUT_SECONDS:
         raise ConfigError('Verification timeout must be positive and at most ten seconds')
     rules = parse_verification_rules(fixture_store.acquisition_config.get('verification', []))
+    if rule_indices is not None:
+        if not isinstance(rule_indices, tuple) or len(rule_indices) > MAX_VERIFICATION_CALLS or any(
+            type(i) is not int or not 0 <= i < len(rules) for i in rule_indices
+        ) or len(set(rule_indices)) != len(rule_indices):
+            raise ConfigError('Verification selection requires bounded configured rule indices')
+        rules = tuple(rules[i] for i in rule_indices)
     # Prefer explicitly approved read-only operations; do not probe a write
     # operation again once all its implications have already been established.
     readonly = {op.operation_id for op in endpoints if op.method.upper() in {'GET', 'HEAD'}}
@@ -259,7 +266,7 @@ def verify_test_data(acquisition, *, fixture_store, endpoints=(), base_url,
     for rule in rules:
         source = {'type': 'live_verification', 'operation_id': rule.operation_id,
                   'policy_ref': rule.source_ref, 'observed_at': datetime.now(timezone.utc).isoformat()}
-        approved, error = _validate(rule, acquisition, fixture_store, endpoints, base_url)
+        approved, error = validate_verification_rule(rule, acquisition, fixture_store, endpoints, base_url)
         if error:
             outcome = VerificationStatus.AMBIGUOUS if error == 'AMBIGUOUS' else (VerificationStatus.UNVERIFIED if error in {'MISSING_FIXTURE', 'OPERATION_NOT_FOUND', 'UNRELATED_FACTS'} else VerificationStatus.UNSAFE_TO_VERIFY)
             records.append(VerificationObservation(rule.fixture, rule.operation_id, outcome, error, source=source))

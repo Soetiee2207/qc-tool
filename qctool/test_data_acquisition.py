@@ -209,6 +209,23 @@ def _source_needs(case):
     return needs
 
 
+def has_test_data_requirements(case, fixture_store=None):
+    """Cheap exact-signal gate; no binding, acquisition or network work."""
+    if case.test_data.get(DATA_REQUIREMENTS) or _source_needs(case):
+        return True
+    if any(is_alias(v) for v in case.test_data.values()) or any(
+        s.action == 'ui.fill' and is_alias(s.args.get('value')) for s in case.steps
+    ):
+        return True
+    if fixture_store:
+        sources = (*case.traces_to, case.id)
+        metadata = fixture_store.to_dict()
+        return any(metadata['bindings'].get(source) or
+                   fixture_store.acquisition_config.get('requirements', {}).get(source)
+                   for source in sources)
+    return False
+
+
 def acquire_test_data(case, *, fixture_store: FixtureStore | None = None,
                       requirements=None, sources: dict | None = None, endpoints=(),
                       verification=None):
@@ -243,7 +260,7 @@ def acquire_test_data(case, *, fixture_store: FixtureStore | None = None,
         return DataAcquisitionResult(bound, (), ({'code':'MISSING_TEST_DATA', 'message':'Data acquisition requirement budget exceeded.'},))
     if needs:
         # A later step expansion must not erase the original data obligation.
-        bound.test_data[DATA_REQUIREMENTS] = [asdict(n) for n in needs]
+        bound.test_data[DATA_REQUIREMENTS] = [{**asdict(n), 'aliases': list(n.aliases)} for n in needs]
     live_evidence = ()
     verification_audit = {}
     if verification is not None:

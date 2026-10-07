@@ -22,6 +22,7 @@ from .proposal_validation import ProposalValidationResult, validate_resolution_p
 from .resolution_context import ResolutionContext, build_resolution_context
 from .resolve import ResolutionResult, resolve_deterministically
 from .test_fixtures import FixtureStore
+from .test_data_preparation import TestDataPreparationResult, prepare_test_data
 from .testcase import TestCase
 from .ui.crawl import UIMap
 
@@ -56,6 +57,7 @@ class ResolutionCycleResult:
     exploration_execution: ExplorationExecutionResult | None
     issues: tuple[ResolutionCycleIssue, ...]
     audit: tuple[ResolutionCycleStage, ...]
+    test_data_preparation: TestDataPreparationResult | None = None
 
     @property
     def needs_another_cycle(self) -> bool:
@@ -115,29 +117,37 @@ def run_resolution_cycle(
     Manual/auto decisions belong solely to the resolver/applier and analyzer.
     """
     packet = deepcopy(context)
-    if fixture_store and (fixture_store.acquisition_config or data_verification is not None):
-        from .test_data_acquisition import acquire_test_data
-        acquired = acquire_test_data(case, fixture_store=fixture_store, endpoints=endpoints or (),
-                                     verification=data_verification)
-        working = acquired.case
-        packet = replace(packet, data_acquisition=acquired.to_dict())
-    else:
-        working = fixture_store.bind(case) if fixture_store else deepcopy(case)
+    preparation = None
+    working = deepcopy(case)
+    if packet.testcase.get('id') == case.id:
+        preparation = prepare_test_data(case, fixture_store=fixture_store,
+                                        endpoints=endpoints or (), base_url=base_url,
+                                        verification=data_verification)
+        working = preparation.case
+        if preparation.initial is not None:
+            packet = replace(packet, data_acquisition=preparation.context_data(),
+                             testcase=build_resolution_context(working, packet.gaps).testcase)
     if fixture_store:
         resolution_llm = fixture_store.guard_adapter(resolution_llm)
         exploration_llm = fixture_store.guard_adapter(exploration_llm)
     trusted_ui, trusted_endpoints = deepcopy(ui_map), deepcopy(endpoints)
     before = analyze_executability(working, context=packet)
+    if preparation and preparation.initial is not None:
+        packet = replace(packet, gaps=before.gaps)
     after = before
     issues = []
     audit = [ResolutionCycleStage("analysis", "COMPLETED")]
+    if preparation and preparation.initial is not None:
+        audit.insert(0, ResolutionCycleStage('test_data_preparation', preparation.status.value))
+        issues.extend(ResolutionCycleIssue('test_data_preparation', i['code'], i['message'])
+                      for i in preparation.blockers)
     deterministic = proposal = validation = application = None
     plan = plan_validation = execution = None
 
     def finish():
         return deepcopy(ResolutionCycleResult(
             working, packet, before, after, deterministic, proposal, validation,
-            application, plan, plan_validation, execution, tuple(issues), tuple(audit)))
+            application, plan, plan_validation, execution, tuple(issues), tuple(audit), preparation))
 
     def attempt(stage, operation):
         try:
@@ -179,6 +189,9 @@ def run_resolution_cycle(
                                           "Context belongs to another testcase."))
         audit.append(ResolutionCycleStage("context", "REJECTED"))
         return finish()
+
+    if preparation and not preparation.available:
+        return finish()  # Neither model nor browser can invent missing/invalid data.
 
     ok, deterministic = attempt("deterministic", lambda: resolve_deterministically(
         deepcopy(working), ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints),
