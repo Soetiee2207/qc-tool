@@ -6,6 +6,7 @@ created: 2026-10-07
 updated: 2026-10-07
 lang: vi
 changelog:
+  - 2026-10-07 | config | Tin cậy account operator xác nhận, bỏ verification probe
   - 2026-10-07 | source-review | Đối chiếu route, control và contract customer
 ---
 
@@ -68,7 +69,6 @@ không phải API tự phục vụ customer. Không đưa endpoint mutation/regi
 ## Ranh giới bằng chứng
 
 Source là cơ sở kỳ vọng. UIMap/Playwright là quan sát hiện tại để tìm controls và
-state; không sửa kỳ vọng nếu web đang sai. Không suy account active từ credentials.
-Login verification 200/success=true có thể chứng minh account tồn tại và password
-đúng, account không bị isActive=false; không chứng minh role customer. Người vận
-hành phải cung cấp đúng customer; AC-001-3 kiểm thêm badge customer ở runtime.
+state; không sửa kỳ vọng nếu web đang sai. Account được người dùng xác nhận customer hợp lệ và được ghi dưới assurance DECLARED
+trong config. Không probe login trước testcase. Không gắn nhãn VERIFIED cho khai
+báo này; AC-001-1 vẫn kiểm HTTP/URL, AC-001-3 kiểm badge customer ở runtime.

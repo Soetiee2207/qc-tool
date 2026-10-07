@@ -53,8 +53,33 @@ def test_customer_policy_uses_only_env_and_does_not_claim_role_verification():
     store = FixtureStore(policy['fixtures'], policy['bindings'], environ={},
                          acquisition=policy['acquisition'])
     assert not store.to_dict()['aliases']['active_user.password']['available']
-    rule, = policy['acquisition']['verification']
-    assert rule['proves'] == {'account_exists': True, 'password_valid': True, 'account_state': 'active'}
-    assert 'role' not in rule['proves']
-    assert rule['policy']['side_effects'] == ['session_creation']
+    assert not policy['acquisition'].get('verification')
+    assert all(not row['require_verified'] for rows in policy['acquisition']['requirements'].values()
+               for row in rows)
+    evidence, = policy['acquisition']['evidence']
+    assert evidence['assurance'] == 'DECLARED'
+    assert evidence['facts']['password_valid'] is True
     assert not policy['acquisition'].get('provisioning_rules')
+
+
+def test_confirmed_customer_is_available_without_verification(monkeypatch):
+    from qctool import test_data_preparation as preparation
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Operator-confirmed account must not trigger verification')
+
+    monkeypatch.setattr(preparation, 'verify_test_data', forbidden)
+    config = yaml.safe_load((ROOT / 'qctool.customer.e2e.yaml').read_text())['test_fixtures']
+    store = FixtureStore(config['fixtures'], config['bindings'],
+                         environ={'QCTOOL_USERNAME': 'customer@example.test',
+                                  'QCTOOL_PASSWORD': 'offline-secret-example'},
+                         acquisition=config['acquisition'])
+    data = ingest_feature(DOCS, feature='customer')
+    cases = plan_coverage(analyze_coverage(data['requirements'], ()), module='CUSTOMER').cases
+    for case in cases:
+        result = preparation.prepare_test_data(case, fixture_store=store)
+        assert result.available
+        assert not result.verification_attempted
+        assert result.to_dict()['executed_calls'] == 0
+        if case.traces_to != ['AC-customer-001-2'] and case.traces_to != ['AC-customer-001-7']:
+            assert all(f.status == 'DECLARED' for finding in result.final.findings for f in finding.facts)

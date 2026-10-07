@@ -6,6 +6,7 @@ created: 2026-10-07
 updated: 2026-10-07
 lang: vi
 changelog:
+  - 2026-10-07 | config | Tin cậy account operator xác nhận, bỏ verification probe
   - 2026-10-07 | source-review | Thêm bảy AC customer từ mã nguồn SalonHub
 ---
 
@@ -40,10 +41,11 @@ Bảy AC dưới đây là bảy intent độc lập; không yêu cầu sẵn đ
 
 AC-001-1/3/4/5/6 dùng cùng account customer có sẵn: alias `active_user.email`
 và `active_user.password`, lấy từ env, không có giá trị credential trong tài liệu.
-Không dùng account admin/staff thay customer. Có env không chứng minh account
-hợp lệ hoặc role đúng. Facts config là khai báo của người vận hành; verification
-login chỉ chứng minh những facts được policy ghi rõ, không chứng minh role.
-Nếu thiếu/sai account hoặc chưa chứng minh được điều kiện, giữ unresolved/Blocked.
+Không dùng account admin/staff thay customer. Người dùng xác nhận account trong env
+là customer hợp lệ, đang hoạt động và mật khẩu đúng; config tin cậy khai báo này
+(DECLARED), không bắt buộc live verification trước resolution. Khai báo không phải
+kết quả execution: testcase vẫn phải kiểm tra HTTP/URL/UI thật. Thiếu giá trị env
+thì giữ blocker; account bị từ chối lúc chạy không được đổi expected để coi là đạt.
 AC-001-2/7 không cần account. Mỗi testcase bắt đầu phiên riêng; không dựa vào case
 trước đã login. Expected outcome không thay đổi theo kết quả quan sát website.
 

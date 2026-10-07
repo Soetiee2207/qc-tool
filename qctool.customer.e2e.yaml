@@ -1,7 +1,6 @@
-# Customer smoke trên website thật: chỉ account có sẵn; không provisioning.
-# Facts role/account_state là khai báo operator, không phải kết quả live.
-# Xác nhận account env thực sự là customer; policy login KHÔNG chứng minh role.
-# --llm bật provider env tường minh. auth.manual tránh bootstrap IdP/SSO.
+# Account customer do người dùng xác nhận hợp lệ; tin cậy khai báo operator.
+# Không probe verification trước testcase; credential chỉ lấy từ env.
+# Testcase login vẫn kiểm tra HTTP/URL thật, không tự coi là Pass.
 feature: customer
 module: CUSTOMER
 generation:
@@ -70,7 +69,7 @@ test_fixtures:
           account_exists: true
           password_valid: true
           account_state: active
-        require_verified: true
+        require_verified: false
         source_ref: samples/customer/urd.md:AC-001-1
       AC-customer-001-3:
       - fixture: active_user
@@ -81,7 +80,7 @@ test_fixtures:
           account_exists: true
           password_valid: true
           account_state: active
-        require_verified: true
+        require_verified: false
         source_ref: samples/customer/urd.md:AC-001-3
       AC-customer-001-4:
       - fixture: active_user
@@ -92,7 +91,7 @@ test_fixtures:
           account_exists: true
           password_valid: true
           account_state: active
-        require_verified: true
+        require_verified: false
         source_ref: samples/customer/urd.md:AC-001-4
       AC-customer-001-5:
       - fixture: active_user
@@ -103,7 +102,7 @@ test_fixtures:
           account_exists: true
           password_valid: true
           account_state: active
-        require_verified: true
+        require_verified: false
         source_ref: samples/customer/urd.md:AC-001-5
       AC-customer-001-6:
       - fixture: active_user
@@ -114,25 +113,14 @@ test_fixtures:
           account_exists: true
           password_valid: true
           account_state: active
-        require_verified: true
+        require_verified: false
         source_ref: samples/customer/urd.md:AC-001-6
-    verification:
+    evidence:
     - fixture: active_user
-      operation_id: login
-      body_aliases:
-        email: active_user.email
-        password: active_user.password
-      expected:
-        status: 200
-        json:
-          $.success: true
-      proves:
+      facts:
         account_exists: true
         password_valid: true
         account_state: active
-      policy:
-        approved: true
-        test_data_mutation: false
-        side_effects:
-        - session_creation
-      source_ref: SalonHub/backend/controllers/authController.js:login
+        role: customer
+      assurance: DECLARED
+      source_ref: operator:confirmed-existing-customer-account

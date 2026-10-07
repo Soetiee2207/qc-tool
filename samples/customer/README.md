@@ -13,7 +13,7 @@ uv run qctool run --config qctool.customer.e2e.yaml --llm
 ```
 
 `validate` chỉ preflight offline, không browser/model/API. `run` chạy toàn bộ
-pipeline: ingest → crawl → business coverage/generation → preparation/verification
+pipeline: ingest → crawl → business coverage/generation → preparation dữ liệu tin cậy
 → resolution/exploration qua DeepSeek nếu cần → runner Chromium → XLSX/report.
 Không bảo đảm cả 7 ca map được: thiếu bằng chứng hoặc dữ liệu phải unresolved,
 không được coi là Pass. Web UI đang mở để xem trực tiếp (`headless: false`).
@@ -41,13 +41,13 @@ Trong `.env` gitignored, không paste giá trị vào terminal/log/issue:
 
 Config đã bind cả `email`, `password`, `correct_password` vào alias active_user
 cho AC-001-1/3/4/5/6. Không có fixture cho AC-001-2/7 vì không cần dữ liệu account.
-Facts `role: customer`, `account_state: active` là **khai báo operator**: chỉ giữ
-nếu đúng với account bạn cung cấp. Không phải live receipt. Login verification
-reviewed trong config có thể gọi POST /api/auth/login với account có sẵn và
-chỉ lưu proof account_exists/password_valid/account_state khi 200/success=true.
-Nó tạo phiên, không tạo account; không chứng minh role. Nếu account sai/bị khóa/
-backend không phản hồi, phải báo blocker; không sửa expected. Không bật provisioning
-trên website thật. Receipt reuse chỉ trong run và khi trust identity khớp.
+Account trong env đã được người dùng xác nhận hợp lệ. Config ghi facts dưới
+assurance **DECLARED**, đặt `require_verified: false`, không cấu hình verification
+probe. Vì vậy preparation không gọi login chỉ để kiểm lại account trước mỗi case.
+Đây là tin cậy input của operator, không phải gắn nhãn live VERIFIED hoặc Pass.
+Thiếu env vẫn là blocker; testcase login thực sự vẫn phải kiểm 200/success/URL.
+Nếu account bị từ chối lúc thực thi, giữ nguyên expected và báo kết quả thật.
+Provisioning luôn tắt trên website này.
 
 - `feature: customer`: namespace requirement IDs.
 - `generation.profile: business`: chạy obligation business, không cộng legacy seeds.
