@@ -148,11 +148,10 @@ def test_case_is_unchanged_after_proposal_generation():
 def test_prompt_separates_evidence_and_limits_model_authority():
     prompt = build_resolution_prompt(_context(_case()))
     headings = [
-        "SPECIFICATION — REQUIREMENTS", "INTERFACE CONTRACT — OPENAPI",
+        "ALLOWED ACTIONS — ACTION_SPECS", "STABLE PROJECT SPECIFICATION — REQUIREMENTS", "STABLE PROJECT INTERFACE CONTRACT — OPENAPI",
         "CURRENT UI OBSERVATION — UI MAP", "TESTCASE", "EXECUTION GAPS",
-        "ALLOWED ACTIONS — ACTION_SPECS",
     ]
-    positions = [prompt.index(heading) for heading in headings]
+    positions = [prompt.index(heading + "\n") for heading in headings]
     assert positions == sorted(positions)
     assert "Normal user can log in" in prompt
     assert "btn-login" in prompt

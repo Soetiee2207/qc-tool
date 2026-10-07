@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .resolution_context import ResolutionContext
-from .llm_prompt import MAX_PROMPT_TOKENS, check_prompt_budget, select_prompt_context, prompt_accounting
+from .llm_prompt import MAX_PROMPT_TOKENS, check_prompt_budget, select_prompt_context, prompt_accounting, assemble_cached_prompt
 
 
 class LLMResponseError(ValueError):
@@ -290,7 +290,7 @@ def build_resolution_prompt(context: ResolutionContext, *, max_prompt_tokens: in
     def section(name: str, value: object) -> str:
         return f"{name}\n{json.dumps(value, ensure_ascii=False, sort_keys=True)}"
 
-    prompt = "\n\n".join([
+    parts = [
         "You propose execution-gap repairs as JSON. You do not edit or execute a testcase.",
         "Rules: Resolve only the listed gaps. Use only ALLOWED ACTIONS and their arguments. "
         "Requirements define WHAT SHOULD happen; OpenAPI declares the interface; UI is observation. "
@@ -353,7 +353,14 @@ def build_resolution_prompt(context: ResolutionContext, *, max_prompt_tokens: in
             {"action": "assert.json_field", "args": {"path": "$.success", "expected": True, "source": "login_response"}, "evidence": catalog[:1]},
         ]),
         *([section("COMPACT LOGIN EXAMPLE — partial proposal from this context only", example)] if example else []),
-    ])
+    ]
+    schemas = [('STABLE OUTPUT CONTRACT — placeholders are not evidence', _OUTPUT_SHAPE)]
+    generic_expansion = json.loads(json.dumps(_OUTPUT_SHAPE['changes'][0]))
+    generic_expansion['proposed'] = {'steps': [
+        {'action': '<allowed action>', 'args': {}, 'evidence': []},
+        {'action': '<allowed action>', 'args': {}, 'evidence': []}]}
+    schemas.append(('STABLE EXPANSION CONTRACT', generic_expansion))
+    prompt = assemble_cached_prompt('resolution', parts, data, schemas).prompt
     return check_prompt_budget(prompt, max_prompt_tokens)
 
 

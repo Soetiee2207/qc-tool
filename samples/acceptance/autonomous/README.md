@@ -5,6 +5,7 @@ created: 2026-10-07
 updated: 2026-10-07
 lang: vi
 changelog:
+  - 2026-10-07 | codex | Ghi nhận hai lượt live cache reuse đạt 4/4 Pass
   - 2026-10-07 | codex | Thêm acceptance autonomous trên ứng dụng loopback mới
 ---
 
@@ -198,3 +199,51 @@ uv run python scripts/compare_llm_usage.py \
   artifacts/autonomous-acceptance-token-final/acceptance.json \
   --out artifacts/autonomous-acceptance-token-final/token-comparison.json
 ```
+
+## Prefix cache reuse — 2026-10-07
+
+Hai cache families độc lập: `resolution` và `exploration`, protocol version 2.
+Prompt đặt protocol/schema/safety trước, rồi semantic source/contract đã chọn,
+cuối cùng mới testcase/gaps/runtime states/fixtures và examples có identifiers.
+Maps serialize theo key; lists giữ thứ tự steps/actions/clauses/state chains.
+
+Timestamp, audit metadata, source provenance và server bindings không tham gia
+semantic project prefix; vẫn giữ nguyên trong dynamic tail. Evidence IDs cần
+validator không bị đổi/xóa. Thay đổi source/contract đã chọn làm đổi project suffix;
+protocol family vẫn ổn định. Không mở lại toàn bộ project để tạo prefix lớn hơn.
+
+Provider audit chỉ lưu family/version, SHA-256 fingerprints, byte counts và usage;
+không gửi hashes cho model, không lưu raw prompts. Không có response cache.
+Missing/malformed cache counts là unknown; hit ratio tổng là weighted hit/prompt,
+không phải trung bình các phần trăm call.
+
+```bash
+uv run python scripts/run_autonomous_acceptance.py --enable-llm \
+  --out artifacts/autonomous-acceptance-cache-run1
+uv run python scripts/run_autonomous_acceptance.py --enable-llm \
+  --out artifacts/autonomous-acceptance-cache-run2
+uv run python scripts/report_cache_usage.py \
+  artifacts/autonomous-acceptance-cache-run2/acceptance.json \
+  --out artifacts/autonomous-acceptance-cache-run2/cache-usage.json
+```
+
+Không đổi docs/OAS/app/policy/outcomes giữa hai lượt. Mỗi app instance vẫn dùng
+fresh database, random loopback port và runtime credentials riêng. Fingerprint
+stable prefix của cả 5 call tương ứng đều giống giữa run 1 và run 2.
+
+| Chỉ số thực do DeepSeek trả | Run 1 | Run 2 |
+| --- | ---: | ---: |
+| Calls (resolution + exploration) | 3 + 2 | 3 + 2 |
+| Prompt tokens | 29.797 | 29.756 |
+| Cache hit / miss | 5.376 / 24.421 | 10.752 / 19.004 |
+| Overall hit ratio | 18,04% | 36,13% |
+| Resolution hit ratio | 18,84% | 33,75% |
+| Exploration hit ratio | 15,62% | 43,38% |
+| Completion tokens | 9.266 | 7.232 |
+| Total tokens | 39.063 | 36.988 |
+| Executable / Chromium Pass | 4/4 / 4/4 | 4/4 / 4/4 |
+
+Cả hai có executable coverage 4/4 và generation SUCCESS. Run 2 hit ở cả 5
+calls; cache hits vẫn phụ thuộc provider, không được đảm bảo bởi client. Prefix
+schema clarification làm prompt tăng so với baseline 27.368; đây là tối ưu reuse,
+không phải khẳng định mọi call sẽ ít tokens hơn. Parser/validator/routing không đổi.

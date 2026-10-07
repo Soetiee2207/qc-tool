@@ -8,6 +8,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 import json
+import hashlib
+from dataclasses import dataclass
 import re
 from urllib.parse import urlsplit
 
@@ -35,8 +37,8 @@ def describe_prompt(prompt):
     parts = prompt.split('\n\n')
     for index, part in enumerate(parts):
         header, _, body = part.partition('\n')
-        group = ('requirement_source' if header.startswith('SPECIFICATION') else
-                 'openapi' if header.startswith('INTERFACE CONTRACT') else
+        group = ('requirement_source' if (header.startswith('SPECIFICATION') or header.startswith('STABLE PROJECT SPECIFICATION')) else
+                 'openapi' if (header.startswith('INTERFACE CONTRACT') or header.startswith('STABLE PROJECT INTERFACE CONTRACT')) else
                  'ui_state_evidence' if header.startswith('CURRENT UI OBSERVATION') else
                  'fixture_data_metadata' if header.startswith('TEST DATA EVIDENCE') else
                  'testcase_gap' if header in ('TESTCASE', 'EXECUTION GAPS', 'UNRESOLVED EXECUTION GAPS')
@@ -265,3 +267,99 @@ def select_prompt_context(context: ResolutionContext, *, gaps=None):
     if action_chains:
         observations['action_chains'] = action_chains
     return data
+
+
+PROTOCOL_VERSIONS = {'resolution': '2', 'exploration': '2'}
+DYNAMIC_MARKER = 'DYNAMIC TESTCASE / CYCLE EVIDENCE'
+
+
+def canonical_json(value):
+    """Sort maps only; lists preserve source/action/step/state chronology."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _project_authority(value):
+    """Move provenance/origin volatility to the full dynamic evidence, never drop it.
+
+    IDs identifying requirements/operations remain semantic. Runtime states and
+    fixtures never enter this prefix. Actual server origins remain in the tail.
+    """
+    if isinstance(value, dict):
+        return {k: _project_authority(v) for k, v in value.items() if k not in {
+            'source', 'evidence', 'servers', 'observed_at', 'crawled_at', 'created_at',
+            'updated_at', 'audit_id', 'request_id', 'generated_at'}}
+    if isinstance(value, list):
+        return [_project_authority(v) for v in value]
+    return value
+
+
+@dataclass(frozen=True)
+class PromptLayout:
+    cache_family: str
+    protocol_version: str
+    protocol: str
+    project: str
+    dynamic_tail: str
+
+    @property
+    def stable_prefix(self):
+        return self.protocol + '\n\n' + self.project + '\n\n'
+
+    @property
+    def prompt(self):
+        return self.stable_prefix + DYNAMIC_MARKER + '\n\n' + self.dynamic_tail
+
+    def diagnostics(self):
+        digest = lambda text: hashlib.sha256(text.encode('utf-8')).hexdigest()
+        return {'cache_family': self.cache_family, 'capability': self.cache_family,
+                'protocol_version': self.protocol_version,
+                'stable_prefix_fingerprint': digest(self.stable_prefix),
+                'dynamic_tail_fingerprint': digest(self.dynamic_tail),
+                'protocol_fingerprint': digest(self.protocol),
+                'stable_prefix_bytes': len(self.stable_prefix.encode('utf-8')),
+                'dynamic_tail_bytes': len(self.dynamic_tail.encode('utf-8'))}
+
+
+def assemble_cached_prompt(family, parts, data, schemas, *, protocol_version=None):
+    """No response cache: reorder existing instructions/evidence into a stable prefix.
+
+    Project authority is the already selected source/contract, not a new retrieval
+    of all repository data. Different selected authority legitimately changes the
+    project suffix; the preceding family protocol stays identical.
+    """
+    static_headers = ('ALLOWED ACTIONS', 'ALLOWED OBSERVATION INTENTS', 'SESSION MODES',
+                      'REQUEST BUDGET', 'CONSTRAINTS', 'CONTEXT CONSTRAINTS', 'EVIDENCE REFERENCE SCHEMA',
+                      'CAPTURE_RESPONSE JSON SHAPE')
+    protocol, dynamic = [], []
+    for part in parts:
+        header, separator, body = part.partition('\n')
+        if not separator or header.startswith(static_headers):
+            protocol.append(part)
+        else:
+            dynamic.append(part)
+    version = protocol_version or PROTOCOL_VERSIONS[family]
+    protocol.insert(0, 'QC ' + family.upper() + ' PROTOCOL v' + version)
+    for title, schema in schemas:
+        protocol.append(title + '\n' + canonical_json(schema))
+    project = '\n\n'.join([
+        'STABLE PROJECT SPECIFICATION — REQUIREMENTS\n' + canonical_json(_project_authority(data['specification'])),
+        'STABLE PROJECT INTERFACE CONTRACT — OPENAPI\n' + canonical_json(_project_authority(data['interface_contract'])),
+    ])
+    return PromptLayout(family, version, '\n\n'.join(protocol), project, '\n\n'.join(dynamic))
+
+
+def prompt_cache_diagnostics(prompt):
+    """Extract only hashes/counts from a constructed prompt, never persist text."""
+    prefix, marker, tail = prompt.partition(DYNAMIC_MARKER + '\n\n')
+    first = prompt.split('\n', 1)[0].split()
+    if not marker or len(first) != 4 or first[:1] != ['QC'] or first[2] != 'PROTOCOL':
+        return {}
+    family = first[1].lower()
+    if family not in PROTOCOL_VERSIONS:
+        return {}
+    protocol = prefix.split('\n\nSTABLE PROJECT SPECIFICATION', 1)[0]
+    digest = lambda text: hashlib.sha256(text.encode('utf-8')).hexdigest()
+    return {'capability': family, 'cache_family': family, 'protocol_version': first[3].removeprefix('v'),
+            'stable_prefix_fingerprint': digest(prefix), 'dynamic_tail_fingerprint': digest(tail),
+            'protocol_fingerprint': digest(protocol), 'stable_prefix_bytes': len(prefix.encode('utf-8')),
+            'dynamic_tail_bytes': len(tail.encode('utf-8'))}

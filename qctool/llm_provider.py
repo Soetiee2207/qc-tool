@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from .config import ConfigError, load_dotenv
 from .execute.runner import USER_AGENT
 from .llm_resolution import _reject_constant, _unique_keys
-from .llm_prompt import current_prompt_composition, describe_prompt
+from .llm_prompt import current_prompt_composition, describe_prompt, prompt_cache_diagnostics
 
 MAX_RESPONSE_BYTES = 1_048_576
 _ATTEMPTS = ContextVar("llm_provider_attempts", default=None)
@@ -103,6 +103,7 @@ class OpenAICompatibleLLM:
                         "finish_reason": None, "response_content_length": None, "usage": {}}
             if isinstance(prompt, str):
                 metadata["prompt_composition"] = current_prompt_composition() or describe_prompt(prompt)
+                metadata.update(prompt_cache_diagnostics(prompt))
             try:
                 content = self._complete_once(prompt, metadata)
             except LLMProviderError as exc:
@@ -122,6 +123,13 @@ class OpenAICompatibleLLM:
         if 'prompt_composition' in metadata:
             metadata['prompt_composition']['actual_prompt_tokens'] = metadata['usage'].get('prompt_tokens')
             metadata['prompt_composition']['actual_completion_tokens'] = metadata['usage'].get('completion_tokens')
+        usage = metadata['usage']
+        total, hit, miss = (usage.get(k) for k in ('prompt_tokens', 'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens'))
+        # Missing or inconsistent provider usage is unknown, never fabricated.
+        valid = (type(total) is int and total > 0 and type(hit) is int and 0 <= hit <= total
+                 and (miss is None or type(miss) is int and hit + miss == total))
+        metadata['cache_usage'] = {'prompt_tokens': total, 'hit_tokens': hit, 'miss_tokens': miss,
+                                   'hit_ratio': hit / total if valid else None}
         records = _ATTEMPTS.get()
         if records is not None:
             records.append(deepcopy(metadata))
@@ -170,7 +178,8 @@ class OpenAICompatibleLLM:
             usage = payload.get("usage")
             if isinstance(usage, dict):
                 metadata["usage"] = {name: usage[name] for name in
-                    ("prompt_tokens", "completion_tokens", "total_tokens")
+                    ("prompt_tokens", "completion_tokens", "total_tokens",
+                     "prompt_cache_hit_tokens", "prompt_cache_miss_tokens")
                     if type(usage.get(name)) is int and usage[name] >= 0}
             metadata["parser_failure"] = {"category": "ENVELOPE_SHAPE", "path": "choices"}
             choices = payload["choices"]

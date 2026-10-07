@@ -22,7 +22,7 @@ from .llm_resolution import (
     _reject_constant, _unique_keys,
 )
 from .resolution_context import ResolutionContext
-from .llm_prompt import MAX_PROMPT_TOKENS, check_prompt_budget, select_prompt_context, prompt_accounting
+from .llm_prompt import MAX_PROMPT_TOKENS, check_prompt_budget, select_prompt_context, prompt_accounting, assemble_cached_prompt
 from .ui.explore import ExplorationAction, SESSION_MODES
 
 
@@ -69,7 +69,7 @@ def build_exploration_prompt(
     def section(name: str, value: object) -> str:
         return f"{name}\n{json.dumps(value, ensure_ascii=False, sort_keys=True)}"
 
-    prompt = "\n\n".join([
+    parts = [
         "Propose an UNTRUSTED exploration plan as JSON. Do not execute or repair anything.",
         "Rules: Plan only observation for the listed unresolved gaps. Allowed intents "
         "are inspect_page and observe_network: navigate to the entry page, then inspect approved states. "
@@ -143,7 +143,9 @@ def build_exploration_prompt(
         "controls or transition evidence are insufficient. These optional fields are "
         "the only additions to the action schema above.",
         section("OUTPUT JSON SHAPE", output_shape),
-    ])
+    ]
+    schemas = [('STABLE OUTPUT CONTRACT — placeholders are not evidence', _OUTPUT_SHAPE)]
+    prompt = assemble_cached_prompt('exploration', parts, data, schemas).prompt
     return check_prompt_budget(prompt, max_prompt_tokens)
 
 
