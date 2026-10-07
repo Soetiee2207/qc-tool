@@ -55,6 +55,10 @@ class TestDataPreparationResult:
     provisioning: ProvisioningResult | None = field(default=None, repr=False)
     provisioning_reason: str = 'PROVISIONING_DISABLED'
 
+    preparation_mode: str = 'EXECUTED'
+    preparation_identity: str | None = None
+    reused_from_testcase: str | None = None
+
     @property
     def available(self):
         return self.status in {PreparationStatus.AVAILABLE, PreparationStatus.NO_DATA_REQUIRED}
@@ -77,7 +81,11 @@ class TestDataPreparationResult:
                 'rule_decisions': deepcopy(list(self.rule_decisions)),
                 'provisioning': self.provisioning.to_dict() if self.provisioning else None,
                 'provisioning_attempted': self.provisioning_attempted,
-                'provisioning_reason': self.provisioning_reason}
+                'provisioning_reason': self.provisioning_reason,
+                'preparation_mode': self.preparation_mode,
+                'executed_calls': (self.verification.to_dict()['calls'] if self.verification_attempted else 0) + int(self.provisioning_attempted),
+                'preparation_identity': self.preparation_identity,
+                'reused_from_testcase': self.reused_from_testcase}
 
     def context_data(self):
         if self.final is None:
@@ -113,7 +121,7 @@ def _status(acquisition, blockers):
     return PreparationStatus.UNVERIFIED_TEST_DATA
 
 
-def prepare_test_data(case, *, fixture_store=None, endpoints=(), base_url=None,
+def _prepare_test_data(case, *, fixture_store=None, endpoints=(), base_url=None,
                       requirements=None, verification=None, transport=None,
                       allow_provisioning=False, environment=None,
                       provisioning_transport=None, provisioning_receipt=None):
@@ -292,3 +300,32 @@ def prepare_test_data(case, *, fixture_store=None, endpoints=(), base_url=None,
     stages.append(PreparationStage('reacquisition', 'COMPLETED' if receipt else 'SKIPPED', status.value))
     return TestDataPreparationResult(working, status, initial, final, receipt, attempted, reason,
                                     blockers, tuple(stages), tuple(decisions), provision, provision_reason)
+
+
+def prepare_test_data(case, *, preparation_cache=None, **kwargs):
+    """Prepare once or reuse exact authenticated data proof within a run."""
+    from .preparation_cache import PreparationCache, preparation_identity
+    if preparation_cache is None:
+        return _prepare_test_data(case, **kwargs)
+    if not isinstance(preparation_cache, PreparationCache):
+        raise ConfigError('Preparation cache must be a runtime trusted container')
+    store, endpoints = kwargs.get('fixture_store'), kwargs.get('endpoints', ()) or ()
+    initial = acquire_test_data(case, fixture_store=store, endpoints=endpoints,
+                               requirements=kwargs.get('requirements'))
+    if not initial.findings or kwargs.get('verification') is not None or kwargs.get('provisioning_receipt') is not None:
+        return _prepare_test_data(case, **kwargs)
+    identity = preparation_identity(initial, store, endpoints, kwargs.get('base_url'),
+                                    kwargs.get('environment'), kwargs.get('allow_provisioning', False))
+    try:
+        reused = preparation_cache._reuse(identity, initial, store, endpoints)
+        if reused is not None:
+            return reused
+    except ConfigError:
+        blocked = deepcopy(initial.case)
+        blocked.execution = 'manual'
+        return TestDataPreparationResult(blocked, PreparationStatus.UNVERIFIED_TEST_DATA, initial, initial,
+            blockers=({'code':'PREPARATION_RECEIPT_REJECTED', 'message':'Preparation proof is stale or not authentic; no call made.'},),
+            preparation_mode='REJECTED', preparation_identity=identity)
+    result = replace(_prepare_test_data(case, **kwargs), preparation_identity=identity)
+    preparation_cache._remember(identity, result, store, endpoints)
+    return result

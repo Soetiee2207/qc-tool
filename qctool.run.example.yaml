@@ -3,6 +3,8 @@
 # URL/paths here are placeholders; supply your own application and documents.
 feature: smoke
 module: SMOKE
+generation:
+  profile: business # default primary run; legacy is explicit compatibility
 docs_dir: ./docs
 openapi: ./openapi.yaml
 web_url: https://app.example.com

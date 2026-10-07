@@ -48,7 +48,7 @@ def preflight(args, *, require_target=True):
     if args.config:
         path = Path(args.config).expanduser()
         data = _mapping_file(path)
-        for key in ('run','auth','out','ui','llm','provisioning'):
+        for key in ('run','auth','out','ui','llm','provisioning','generation'):
             if key in data and not isinstance(data[key], dict):
                 raise PreflightError('Các section cấu hình phải là YAML mappings.')
         for section, keys in {'llm':['enabled'], 'provisioning':['enabled'],
@@ -67,6 +67,9 @@ def preflight(args, *, require_target=True):
         env = config.load_config()
         cfg = pipeline.PipelineConfig(llm_enabled=config._flag('QCTOOL_LLM_ENABLED', False),
             username=env.username, password=env.password, bearer_token=env.bearer_token)
+    cfg.generation_profile = getattr(args, 'profile', None) or data.get('generation', {}).get('profile', 'business')
+    if cfg.generation_profile not in {'business', 'legacy'}:
+        raise PreflightError('generation.profile cần business hoặc legacy.')
     for arg, attr in [('docs','docs_dir'),('openapi','openapi'),('out','out_dir')]:
         if value := getattr(args,arg,None):
             setattr(cfg,attr,Path(value).expanduser().resolve())
@@ -212,17 +215,24 @@ def build_summary(result):
             row = {'testcase_id':case.id,'code':code,
                    'user_action':_ACTIONS.get(code,'Kiểm tra source/evidence và generation.json; không đoán expected outcome.')}
         rows.append({**row,'runtime_status':runtime.get(case.id,'Not Executed')})
+    scope_counts = {scope: {key:0 for key in counts} for scope in ('BUSINESS_COVERAGE','LEGACY_DIAGNOSTIC')}
+    for case in gen.cases if gen else ():
+        scope = result.case_scopes.get(case.id, 'BUSINESS_COVERAGE')
+        scope_counts[scope][runtime.get(case.id, 'Not Executed')] += 1
     if result.error or not result.ok:
         code,status = 2,'PIPELINE_ERROR'
     elif counts['Fail']:
-        code,status = 1,'EXECUTION_FAILED'
+        code,status = 1,('EXECUTION_FAILED' if scope_counts['BUSINESS_COVERAGE']['Fail'] else 'DIAGNOSTIC_EXECUTION_FAILED')
     elif not result.generation_success:
         code,status = 3,'GENERATION_INCOMPLETE'
     elif counts['Blocked'] or counts['Not Executed'] or result.run_result is None:
         code,status = 4,'EXECUTION_INCOMPLETE'
     else:
         code,status = 0,'SUCCESS'
-    return {'status':status,'exit_code':code,'pipeline_ok':result.ok,
+    return {'generation_profile':result.generation_profile,'case_scopes':result.case_scopes,
+            'business_counts':scope_counts['BUSINESS_COVERAGE'],
+            'diagnostic_counts':scope_counts['LEGACY_DIAGNOSTIC'],
+            'status':status,'exit_code':code,'pipeline_ok':result.ok,
             'generation_success':result.generation_success,'generation_status':result.generation_status,
             'requirements':requirements,'coverage_sources':sources,'obligations':len(obligations),
             'generated_testcases':result.total_cases,'new_coverage_testcases':len(gen.generated_cases) if gen else 0,
@@ -234,7 +244,8 @@ def build_summary(result):
                 'complete':bool(gen and gen.coverage_loop and gen.coverage_loop.executable_coverage_complete)},
             'unresolved_test_data':blockers,'unresolved_cases':rows,'execution_blockers':execution_blockers,
             'user_action_required':status != 'SUCCESS',
-            'artifacts':{'generation':str(result.generation_path) if result.generation_path else None,
+            'artifacts':{'legacy_testcases':str(result.legacy_testcases_path) if result.legacy_testcases_path else None,
+                         'generation':str(result.generation_path) if result.generation_path else None,
                          'testcases':str(result.testcases_path) if result.testcases_path else None,
                          'xlsx':str(result.xlsx_path) if result.xlsx_path else None,
                          'report':str(result.report_path) if result.report_path else None}}
@@ -265,6 +276,10 @@ def print_summary(summary,out):
     print(f"Generated: {summary['generated_testcases']} | Executable: {summary['executable_testcases']}")
     c=summary['counts']
     print(f"Pass: {c['Pass']} | Fail: {c['Fail']} | Blocked: {c['Blocked']} | Not Executed: {c['Not Executed']}")
+    if summary['generation_profile']=='legacy':
+        for scope,key in (('Business','business_counts'),('Legacy diagnostic','diagnostic_counts')):
+            values=summary[key]
+            print(scope+': '+ ' | '.join(f'{status}: {count}' for status,count in values.items()))
     if not summary['execution_performed']:
         print('Execution: chưa chạy')
     coverage=summary['executable_coverage']

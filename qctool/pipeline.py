@@ -62,6 +62,7 @@ class PipelineConfig:
     created_by: str = "qc-tool"
     fixture_store: FixtureStore | None = field(default=None, repr=False)
     llm_enabled: bool = False          # chỉ bật tường minh; không suy từ credential
+    generation_profile: str = "legacy" # direct/all callers retain compatibility
     allow_provisioning: bool = False   # opt-in, vẫn phải qua reviewed engine policy
     data_environment: str | None = None
 
@@ -89,6 +90,9 @@ class PipelineConfig:
         out = data.get("out", {}) or {}
         ui = data.get("ui", {}) or {}
         llm = data.get("llm", {}) or {}
+        generation_profile = (data.get("generation") or {}).get("profile", "legacy")
+        if generation_profile not in {"business", "legacy"}:
+            raise cfg_mod.ConfigError("generation.profile must be business or legacy.")
         provisioning = data.get("provisioning", {}) or {}
         allow_provisioning = provisioning.get("enabled", False)
         if type(allow_provisioning) is not bool:
@@ -133,6 +137,7 @@ class PipelineConfig:
             out_dir=resolve(out.get("dir")),
             created_by=out.get("created_by") or "qc-tool",
             llm_enabled=llm_enabled,
+            generation_profile=generation_profile,
             allow_provisioning=allow_provisioning,
             data_environment=provisioning.get("environment"),
             fixture_store=load_fixture_store(data.get("test_fixtures")),
@@ -191,6 +196,10 @@ class PipelineResult:
     generation_result: GenerationResult | None = None
     generation_path: Path | None = None
 
+    generation_profile: str = "legacy"
+    case_scopes: dict = field(default_factory=dict)
+    legacy_testcases_path: Path | None = None
+
     @property
     def generation_status(self) -> str | None:
         return self.generation_result.status.value if self.generation_result is not None else None
@@ -210,7 +219,10 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                  exploration_llm: ExplorationLLM | None = None) -> PipelineResult:
     """Chạy toàn bộ pipeline. Không bao giờ ném lỗi ra ngoài — trả về `error`."""
     progress = on_progress or _noop
-    result = PipelineResult(feature=cfg.feature)
+    result = PipelineResult(feature=cfg.feature, generation_profile=cfg.generation_profile)
+    if cfg.generation_profile not in {"business", "legacy"}:
+        result.error = "Unsupported generation profile"
+        return result
 
     def safe(message: str) -> str:
         return cfg.fixture_store.redact(message) if cfg.fixture_store else message
@@ -304,7 +316,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                 log(f"  Trace interface OpenAPI: {case.id} → openapi:{operation}")
         coverage_probe = analyze_coverage(
             source_data.get("requirements", []),
-            [case for case in cases if analyze_executability(case).executable],
+            [case for case in cases if cfg.generation_profile == "legacy" and analyze_executability(case).executable],
             flows=source_data.get("flows"))
         needs_ui_evidence = (any(c.needs_mapping for c in cases)
                              or bool(coverage_probe.missing_obligations))
@@ -443,9 +455,14 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
             except Exception:
                 log("  ⚠ Không đọc được UI map đã lưu — generation không dùng bản đồ này")
 
+        seed_ids = {case.id for case in cases}
+        result.legacy_testcases_path = out_dir / "legacy-testcases.yaml"
+        generate.write_cases(cases, result.legacy_testcases_path,
+                             {**meta, "case_scope": "LEGACY_DIAGNOSTIC"})
+        log(f"Generation profile: {cfg.generation_profile}; {len(cases)} legacy seeds retained separately")
         notify("generate", "Phân tích coverage và giải quyết testcase còn thiếu…")
         generation_result = run_generation(
-            source_data.get("requirements", []), existing_cases=cases,
+            source_data.get("requirements", []), existing_cases=cases if cfg.generation_profile == "legacy" else (),
             flows=source_data.get("flows"), ui_map=ui_map, endpoints=endpoints,
             base_url=cfg.web_url or _resolve_base_url(cfg, meta) or None,
             storage_state=state_path if state_path.is_file() else None,
@@ -455,7 +472,19 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
         )
         result.generation_result = generation_result
         generation_path = out_dir / "generation.json"
+        result.case_scopes = {case.id: ("LEGACY_DIAGNOSTIC" if cfg.generation_profile == "legacy" and case.id in seed_ids
+                                        else "BUSINESS_COVERAGE") for case in generation_result.cases}
+        (out_dir / "case-scopes.json").write_text(json.dumps({
+            "generation_profile": cfg.generation_profile,
+            "selected_cases": [{"testcase_id": case.id, "scope": result.case_scopes[case.id],
+                                "artifact": "testcases.yaml"} for case in generation_result.cases],
+            "retained_legacy": [{"testcase_id": case.id, "scope": "LEGACY_DIAGNOSTIC",
+                                 "artifact": "legacy-testcases.yaml",
+                                 "selected": cfg.generation_profile == "legacy"} for case in cases],
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
         generation_payload = generation_result.to_dict()
+        generation_payload["generation_profile"] = cfg.generation_profile
+        generation_payload["case_scopes"] = result.case_scopes
         if cfg.fixture_store:
             generation_payload = cfg.fixture_store.redact(generation_payload)
         generation_path.write_text(json.dumps(generation_payload,
@@ -485,7 +514,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
         result.generated_report = validation
 
         testcases_path = out_dir / "testcases.yaml"
-        generate.write_cases(cases, testcases_path, meta)
+        generate.write_cases(cases, testcases_path, {**meta, "generation_profile": cfg.generation_profile, "case_scopes": result.case_scopes})
         result.testcases_path = testcases_path
 
         xlsx_path = out_dir / "testcases.xlsx"

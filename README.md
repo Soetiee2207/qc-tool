@@ -73,7 +73,28 @@ uv run qctool run --config qctool.yaml
 CLI dùng chung `run_pipeline()` cho ingest, crawl/evidence, generation/resolution,
 Chromium/API execution và report. Mặc định output gọn; `summary.json` chứa số liệu,
 `pipeline.log` và `generation.json` giữ diagnostics/history chi tiết đã redact.
-Case manual/unresolved giữ trong testcase YAML/XLSX và reports, không tự thành Pass.
+Candidate business manual/unresolved giữ trong testcase YAML/XLSX và reports, không tự thành Pass.
+
+**Profile mặc định của `run`: `business`.** Requirements/flows tạo obligations;
+coverage planner sinh candidates từ obligations chưa phủ. Legacy API/UI seeds
+không tham gia coverage hoặc execution của profile này; vẫn được lưu trong
+`legacy-testcases.yaml`. `case-scopes.json` ghi `BUSINESS_COVERAGE` hoặc
+`LEGACY_DIAGNOSTIC` kèm artifact chứa từng case (ID có thể trùng giữa hai artifact).
+
+Dùng `--profile legacy` hoặc `generation.profile: legacy` để chạy đường tương thích
+cũ gồm legacy seeds. Summary tách `business_counts`/`diagnostic_counts`; diagnostic
+Fail không được trình bày như Fail của business obligation. Tổng execution counts
+vẫn khớp reports; diagnostic Fail vẫn trả exit 1 (`DIAGNOSTIC_EXECUTION_FAILED`
+khi chỉ diagnostic thất bại). `all` và caller trực tiếp giữ default legacy.
+OpenAPI-only không khai business obligations: dùng profile legacy để chạy API seeds;
+profile business không tự coi interface contract là requirement coverage hoàn tất.
+
+Preparation AVAILABLE được dùng lại trong cùng run chỉ khi toàn bộ data/trust
+identity khớp: fixture, aliases, facts, assurance, credentials/config, reviewed rules,
+policy, contract, backend và environment. Cache runtime tối đa 128 entries, TTL
+5 phút, không đọc proof từ JSON hoặc chia sẻ mặc định giữa runs. Audit ghi
+`preparation_mode: EXECUTED/REUSED`, `preparation_identity`, `reused_from_testcase`
+và `executed_calls`; receipt cũ chỉ là lịch sử proof, không phải call mới.
 
 **LLM mặc định OFF.** Có API key không tự bật model. Bật qua `llm.enabled: true`
 hoặc `--llm`, sau khi cấu hình `QCTOOL_LLM_BASE_URL`, `QCTOOL_LLM_MODEL`,

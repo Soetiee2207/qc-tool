@@ -11,7 +11,7 @@ from scripts.autonomous_acceptance_app import create_server
 pytestmark = pytest.mark.playwright
 
 
-def test_primary_cli_preserves_real_manual_source_and_accepted_execution(tmp_path,monkeypatch,capsys):
+def test_primary_cli_business_runs_accepted_cases_and_retains_manual_legacy_artifact(tmp_path,monkeypatch,capsys):
     import qctool.config as config
     import qctool.pipeline as pipeline
     monkeypatch.setattr(config,'load_dotenv',lambda *a:None)
@@ -37,16 +37,17 @@ def test_primary_cli_preserves_real_manual_source_and_accepted_execution(tmp_pat
     try:
         exit_code=main(['run','--docs',str(docs),'--url',base,'--out',str(out),'--no-llm'])
         summary=json.loads((out/'summary.json').read_text())
-        assert exit_code==4, summary  # legacy logical Given remains diagnostic/manual
+        assert exit_code==0, summary  # business profile excludes legacy manual seeds
         assert summary['generation_success'] and summary['executable_coverage']['complete']
         assert summary['counts']['Pass']>=1
         assert summary['counts']['Fail']==summary['counts']['Blocked']==0
-        assert summary['counts']['Not Executed']>=1
+        assert summary['counts']['Not Executed']==0
         results=json.loads(Path(summary['artifacts']['report']).with_name('results.json').read_text())
         assert all(r['steps'] for r in results['results'] if r['status']=='Pass')
-        assert any(r['status']=='Not Executed' for r in results['results'])
+        assert all(r['status']=='Pass' for r in results['results'])
+        assert (out/'legacy-testcases.yaml').is_file()
         assert not server.users and not any(c['method']=='POST' for c in server.calls)
-        assert 'QC: EXECUTION_INCOMPLETE' in capsys.readouterr().out
+        assert 'QC: SUCCESS' in capsys.readouterr().out
     finally:
         server.shutdown();server.server_close();thread.join(timeout=5)
 
@@ -72,7 +73,7 @@ def test_primary_cli_executed_flow_does_not_claim_unassessable_coverage(tmp_path
     server=create_server();thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     try:
         assert main(['run','--docs',str(docs),'--url',f'http://127.0.0.1:{server.server_port}',
-                     '--out',str(out),'--no-llm'])==3
+                     '--out',str(out),'--no-llm','--profile','legacy'])==3
         summary=json.loads((out/'summary.json').read_text())
         # The legacy flow is runnable, but its mapped assertion does not prove
         # exact intent coverage. Keep that existing engine distinction visible.

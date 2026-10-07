@@ -84,7 +84,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not args.testcases:
         return cmd_project(args)
     if any(getattr(args, key, None) is not None for key in
-           ('docs', 'openapi', 'url', 'config', 'out', 'llm', 'allow_provisioning', 'test_environment')):
+           ('docs', 'openapi', 'url', 'config', 'out', 'llm', 'allow_provisioning', 'test_environment', 'profile')):
         print('LỖI  Không trộn testcase YAML với project flags; dùng một trong hai chế độ.', file=sys.stderr)
         return 2
     return cmd_run_testcases(args)
@@ -509,6 +509,7 @@ def _project_flags(parser):
     parser.add_argument('--url', help='HTTP(S) URL ứng dụng')
     parser.add_argument('--config', help='YAML config; CLI flags ghi đè các giá trị đã chọn')
     parser.add_argument('--out', help='Thư mục artifacts')
+    parser.add_argument('--profile', choices=('business','legacy'), help='Business coverage (mặc định); legacy chạy thêm diagnostic seeds')
     parser.add_argument('--feature', help='Tên feature/namespace requirement')
     parser.add_argument('--module', help='Module testcase')
     parser.add_argument('--llm', action=argparse.BooleanOptionalAction, default=None,

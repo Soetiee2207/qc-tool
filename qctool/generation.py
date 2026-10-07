@@ -99,7 +99,7 @@ def run_generation(
     fixture_store: FixtureStore | None = None,
     allow_provisioning: bool = False, environment: str | None = None,
     max_passes: int = 3, max_cycles: int = 3, module: str = "COV",
-    contexts: Mapping[str, ResolutionContext] | None = None,
+    contexts: Mapping[str, ResolutionContext] | None = None, preparation_cache=None,
 ) -> GenerationResult:
     """Validate inputs, delegate once to the coverage loop, classify its results.
 
@@ -118,6 +118,8 @@ def run_generation(
         if flows is None:
             flows = requirements.get("flows")
         requirements = requirements.get("requirements", [])
+    from .preparation_cache import PreparationCache
+    preparation_cache = preparation_cache if preparation_cache is not None else PreparationCache()
     rows, source_flows = deepcopy(tuple(requirements)), deepcopy(flows)
     original = tuple(fixture_store.bind(c) if fixture_store else deepcopy(c)
                      for c in existing_cases)
@@ -128,7 +130,7 @@ def run_generation(
         prepared = []
         for case in original:
             preparation = prepare_test_data(case, fixture_store=fixture_store,
-                                            endpoints=endpoints or (), base_url=base_url,
+                                            endpoints=endpoints or (), base_url=base_url, preparation_cache=preparation_cache,
                                             allow_provisioning=allow_provisioning, environment=environment)
             prepared.append(preparation.case)
             if preparation.initial is not None:
@@ -147,7 +149,7 @@ def run_generation(
                 base_url=base_url, storage_state=storage_state,
                 max_passes=max_passes, max_cycles=max_cycles, module=module,
                 contexts=deepcopy(contexts), fixture_store=fixture_store,
-                allow_provisioning=allow_provisioning, environment=environment))
+                allow_provisioning=allow_provisioning, environment=environment, preparation_cache=preparation_cache))
         except Exception:
             failed = True
             issues.append(GenerationIssue("coverage_loop", "GENERATION_FAILED",

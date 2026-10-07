@@ -90,7 +90,7 @@ def run_coverage_resolution_pass(
     ui_map: UIMap | None = None, endpoints: list[Endpoint] | None = None,
     base_url: str | None = None, storage_state: Path | None = None,
     fixture_store: FixtureStore | None = None,
-    allow_provisioning: bool = False, environment: str | None = None,
+    allow_provisioning: bool = False, environment: str | None = None, preparation_cache=None,
 ) -> CoverageResolutionPassResult:
     """Plan once, then call the bounded resolution loop once per new candidate.
 
@@ -110,6 +110,8 @@ def run_coverage_resolution_pass(
                          reserved_case_ids=tuple(reserved_case_ids))
     trusted_requirements, trusted_ui, trusted_endpoints = deepcopy((requirements, ui_map, endpoints))
     trusted_contexts = deepcopy(dict(contexts or {}))
+    from .preparation_cache import PreparationCache
+    preparation_cache = preparation_cache if preparation_cache is not None else PreparationCache()
     if fixture_store is not None:
         from dataclasses import replace
         plan = replace(plan, cases=tuple(fixture_store.bind(c) for c in plan.cases))
@@ -132,7 +134,7 @@ def run_coverage_resolution_pass(
                 resolution_llm=resolution_llm, exploration_llm=exploration_llm,
                 ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints),
                 base_url=base_url, storage_state=storage_state, fixture_store=fixture_store,
-                allow_provisioning=allow_provisioning, environment=environment))
+                allow_provisioning=allow_provisioning, environment=environment, preparation_cache=preparation_cache))
             # Recompute rather than accepting the loop's executable flag.
             final_report = analyze_executability(candidate.case, context=candidate.context)
             working, resolution = deepcopy(candidate.case), candidate

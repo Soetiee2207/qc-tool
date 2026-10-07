@@ -93,7 +93,7 @@ def run_coverage_loop(
     ui_map: UIMap | None = None, endpoints: list[Endpoint] | None = None,
     base_url: str | None = None, storage_state: Path | None = None,
     fixture_store: FixtureStore | None = None,
-    allow_provisioning: bool = False, environment: str | None = None,
+    allow_provisioning: bool = False, environment: str | None = None, preparation_cache=None,
 ) -> CoverageLoopResult:
     """Reanalyse after each pass, add accepted cases only, never repair inputs.
 
@@ -113,6 +113,8 @@ def run_coverage_loop(
             flows = requirements.get("flows")
         requirements = requirements.get("requirements", [])
     rows, sources = deepcopy(tuple(requirements)), deepcopy(flows)
+    from .preparation_cache import PreparationCache
+    preparation_cache = preparation_cache if preparation_cache is not None else PreparationCache()
     working = [fixture_store.bind(c) if fixture_store else deepcopy(c) for c in cases]
     if len({case.id for case in working}) != len(working):
         raise ValueError("Testcase IDs must be unique")
@@ -155,7 +157,7 @@ def run_coverage_loop(
                 resolution_llm=resolution_llm, exploration_llm=exploration_llm,
                 contexts=deepcopy(trusted_contexts), requirements=deepcopy(rows),
                 ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints),
-                base_url=base_url, storage_state=storage_state, fixture_store=fixture_store, allow_provisioning=allow_provisioning, environment=environment))
+                base_url=base_url, storage_state=storage_state, fixture_store=fixture_store, allow_provisioning=allow_provisioning, environment=environment, preparation_cache=preparation_cache))
         except Exception:
             issues.append(CoverageLoopIssue(index, "PASS_FAILED",
                                           "Pass failed; previously accepted cases retained."))
