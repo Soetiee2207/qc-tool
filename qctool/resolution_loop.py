@@ -140,6 +140,7 @@ def run_resolution_loop(
     base_url: str | None = None, storage_state: Path | None = None,
     fixture_store: FixtureStore | None = None,
     ui_map: UIMap | None = None, endpoints: list[Endpoint] | None = None,
+    data_verification=None,
 ) -> ResolutionLoopResult:
     """Run at most max_cycles, passing each resulting case/context to the next.
 
@@ -151,6 +152,13 @@ def run_resolution_loop(
     if type(max_cycles) is not int or max_cycles < 1:
         raise ValueError("max_cycles must be a positive integer")
     working, packet = deepcopy(case), deepcopy(context)
+    if data_verification is not None:
+        from .test_data_acquisition import acquire_test_data
+        from dataclasses import replace
+        acquired = acquire_test_data(working, fixture_store=fixture_store,
+                                     endpoints=endpoints or (), verification=data_verification)
+        working = acquired.case
+        packet = replace(packet, data_acquisition=acquired.to_dict())
     trusted_ui, trusted_endpoints = deepcopy(ui_map), deepcopy(endpoints)
     report = analyze_executability(working, context=packet)
     history, issues = [], []
@@ -172,7 +180,8 @@ def run_resolution_loop(
             result = deepcopy(run_resolution_cycle(
                 deepcopy(working), deepcopy(packet), resolution_llm=resolution_llm,
                 exploration_llm=exploration_llm, base_url=base_url, storage_state=storage_state, fixture_store=fixture_store,
-                ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints)))
+                ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints),
+                **({'data_verification': data_verification} if data_verification is not None else {})))
             candidate_report = analyze_executability(result.case, context=result.context)
             candidate_facts = _evidence_facts(result.context)
             fingerprint = _fingerprint(result.case, result.context, candidate_report, candidate_facts)

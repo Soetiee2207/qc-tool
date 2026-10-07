@@ -1,7 +1,7 @@
 """Offline discovery of trusted test data and declared provisioning paths.
 
 No HTTP/browser/database access. Config/seed declarations never become live
-verification. V1 records declarations/literals only; it cannot establish live facts.
+verification. Only a separately validated runtime verification receipt proves facts.
 """
 from copy import deepcopy
 from dataclasses import dataclass, field, asdict
@@ -64,6 +64,7 @@ class DataAcquisitionResult:
     case: TestCase = field(repr=False)
     findings: tuple[DataFinding, ...] = ()
     issues: tuple[dict, ...] = ()
+    verification: dict = field(default_factory=dict)
 
     @property
     def status(self):
@@ -80,10 +81,13 @@ class DataAcquisitionResult:
 
     def to_dict(self):
         # Deliberately never serialize TestCase values or a runtime FixtureStore.
-        return {'testcase_id': self.case.id, 'status': self.status.value,
-                'live_verification_performed': False, 'provisioning_performed': False,
+        payload = {'testcase_id': self.case.id, 'status': self.status.value,
+                'live_verification_performed': bool(self.verification.get('calls')), 'provisioning_performed': False,
                 'findings': [asdict(item) for item in self.findings],
                 'issues': deepcopy(list(self.issues))}
+        if self.verification:
+            payload['verification'] = deepcopy(self.verification)
+        return payload
 
 
 def _facts(values):
@@ -101,8 +105,11 @@ def _facts(values):
 
 def validate_acquisition_config(config):
     """Strict public metadata only; no credentials, payloads, or commands."""
-    if not isinstance(config, dict) or set(config) - {'requirements', 'evidence', 'provisioning'}:
-        raise ConfigError('Acquisition config allows requirements, evidence and provisioning only')
+    if not isinstance(config, dict) or set(config) - {'requirements', 'evidence', 'provisioning', 'verification'}:
+        raise ConfigError('Acquisition config allows requirements, evidence, provisioning and verification only')
+    if 'verification' in config:
+        from .test_data_verification import parse_verification_rules
+        parse_verification_rules(config['verification'])
     if not isinstance(config.get('requirements', {}), dict) or any(not isinstance(config.get(k, []), list) for k in ('evidence','provisioning')):
         raise ConfigError('Acquisition requires a requirement mapping and evidence/provisioning lists')
     if len(config.get('evidence', []))>MAX_EVIDENCE_RECORDS or len(config.get('provisioning', []))>MAX_PROVISIONING_PATHS:
@@ -203,12 +210,14 @@ def _source_needs(case):
 
 
 def acquire_test_data(case, *, fixture_store: FixtureStore | None = None,
-                      requirements=None, sources: dict | None = None, endpoints=()):
+                      requirements=None, sources: dict | None = None, endpoints=(),
+                      verification=None):
     """Bind only existing config aliases into a detached copy, then inspect evidence.
 
     Explicit needs/config IDs take priority over narrow source Given extraction.
     Config/seed facts remain declarations, even if an operator labels them verified.
-    V1 cannot perform live verification. PROVISIONABLE never satisfies executability.
+    Verification is explicit and separate; this function never makes network calls.
+    PROVISIONABLE never satisfies executability.
     """
     config = validate_acquisition_config(sources if sources is not None else
                                          fixture_store.acquisition_config if fixture_store else {})
@@ -235,6 +244,14 @@ def acquire_test_data(case, *, fixture_store: FixtureStore | None = None,
     if needs:
         # A later step expansion must not erase the original data obligation.
         bound.test_data[DATA_REQUIREMENTS] = [asdict(n) for n in needs]
+    live_evidence = ()
+    verification_audit = {}
+    if verification is not None:
+        from .test_data_verification import VerificationResult
+        if not isinstance(verification, VerificationResult) or fixture_store is None:
+            raise ConfigError('Acquisition requires a runtime verification receipt')
+        live_evidence = verification.evidence_for(bound, fixture_store)
+        verification_audit = verification.to_dict()
     metadata = fixture_store.to_dict() if fixture_store else {'aliases':{}, 'facts':{}}
     findings, issues = [], []
     for need in needs:
@@ -250,6 +267,7 @@ def acquire_test_data(case, *, fixture_store: FixtureStore | None = None,
         evidence.extend({'facts':r['facts'], 'assurance':r['assurance'],
                          'source':{'type':'trusted_metadata', 'ref':r['source_ref']}}
                         for r in config.get('evidence', []) if r['fixture']==need.fixture)
+        evidence.extend(r for r in live_evidence if r['fixture'] == need.fixture)
         aliases = tuple({'alias':a, 'available':bool(fixture_store and metadata['aliases'].get(a, {}).get('available')),
                          'source':deepcopy(metadata['aliases'].get(a, {}).get('source', {'type':'missing-fixture'}))} for a in need.aliases)
         facts = []
@@ -261,12 +279,14 @@ def acquire_test_data(case, *, fixture_store: FixtureStore | None = None,
                 status = 'CONFLICT'
             elif name=='entity_id' and any(r['assurance']=='REQUIREMENT_LITERAL' for r in items):
                 status = 'LITERAL'
+            elif any(r['assurance']=='VERIFIED' for r in items):
+                status = 'VERIFIED'
             elif items:
                 status = 'DECLARED'
             else:
                 status = 'UNVERIFIED'
             facts.append(FactFinding(name, expected, status, items))
-        missing = [f for f in facts if f.status not in ({'LITERAL'} if need.require_verified else {'LITERAL','DECLARED'})]
+        missing = [f for f in facts if f.status not in ({'LITERAL','VERIFIED'} if need.require_verified else {'LITERAL','VERIFIED','DECLARED'})]
         paths = []
         for path in config.get('provisioning', []):
             if path['fixture'] != need.fixture or any(path['provides'].get(f.fact) != f.expected for f in missing):
@@ -283,7 +303,9 @@ def acquire_test_data(case, *, fixture_store: FixtureStore | None = None,
                           'provides':deepcopy(path['provides']), 'safe_candidate':not bool(unsafe),
                           'execution_allowed':False, 'source':{'type':'openapi', 'operation_id':op.operation_id},
                           'metadata_source':{'type':'config','fixture':need.fixture,'field':'acquisition.provisioning'}})
-        if any(f.status=='CONFLICT' for f in facts):
+        live_conflict = any(r['fixture'] == need.fixture and r['outcome'] == 'AMBIGUOUS'
+                            for r in verification_audit.get('observations', []))
+        if any(f.status=='CONFLICT' for f in facts) or live_conflict:
             status = DataStatus.AMBIGUOUS
         elif all(a['available'] for a in aliases) and not missing:
             status = DataStatus.AVAILABLE
@@ -299,7 +321,7 @@ def acquire_test_data(case, *, fixture_store: FixtureStore | None = None,
                 'UNVERIFIED_TEST_DATA' if missing and status==DataStatus.MISSING_TEST_DATA else status.value)
             issues.append({'code':code, 'fixture':need.fixture, 'step_seq':need.step_seq,
                            'message':'Data is not proven available; no provisioning performed.'})
-    result = DataAcquisitionResult(bound,tuple(findings),tuple(issues))
+    result = DataAcquisitionResult(bound,tuple(findings),tuple(issues),verification_audit)
     # All public facts/references must be independent of resolved credential values.
     if fixture_store and fixture_store.redact(result.to_dict()) != result.to_dict():
         raise ConfigError('Test-data evidence contains a fixture secret')

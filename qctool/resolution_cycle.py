@@ -104,6 +104,7 @@ def run_resolution_cycle(
     base_url: str | None = None, storage_state: Path | None = None,
     fixture_store: FixtureStore | None = None,
     ui_map: UIMap | None = None, endpoints: list[Endpoint] | None = None,
+    data_verification=None,
 ) -> ResolutionCycleResult:
     """Run resolution once, then collect evidence once if gaps remain.
 
@@ -114,9 +115,10 @@ def run_resolution_cycle(
     Manual/auto decisions belong solely to the resolver/applier and analyzer.
     """
     packet = deepcopy(context)
-    if fixture_store and fixture_store.acquisition_config:
+    if fixture_store and (fixture_store.acquisition_config or data_verification is not None):
         from .test_data_acquisition import acquire_test_data
-        acquired = acquire_test_data(case, fixture_store=fixture_store, endpoints=endpoints or ())
+        acquired = acquire_test_data(case, fixture_store=fixture_store, endpoints=endpoints or (),
+                                     verification=data_verification)
         working = acquired.case
         packet = replace(packet, data_acquisition=acquired.to_dict())
     else:
