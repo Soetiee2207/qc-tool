@@ -77,7 +77,7 @@ bình thường. Backend chỉ ghi method/path/status.
 `generation.json`, `testcases.yaml`, `testcases.xlsx`, `results.json`,
 `results.csv`, `junit.xml`, `report.md`, `acceptance.json`, `evidence/`.
 
-`acceptance.json` ghi prompts/completions đã redact, provider metadata, các
+`acceptance.json` ghi composition counts (không lưu raw prompt), completions đã redact, provider metadata, các
 kết quả runtime và số API calls đã sanitize. `generation.json` giữ obligation →
 logical testcase → data preparation → cycle → proposal/plan → validation →
 exploration → application history.
@@ -166,3 +166,35 @@ Lượt trước đó `artifacts/autonomous-acceptance-routed-proof` cũng có 5
 nhưng resolution cuối bị `INVALID_COMPLETION`: case hai trang **Not Executed**,
 3/4 Pass, coverage chưa đủ. Không retry/auto-correct completion ấy trong loop;
 lượt final là chạy mới cùng inputs. Model live vẫn có thể trả JSON không hợp lệ.
+
+## Prompt projection và usage — 2026-10-07
+
+Prompt dùng một view detached: giữ source clauses, relevant exact operations,
+controls cùng locator/name (kể cả conflicts), current state và ancestry cần cho
+proof. Action manifests lặp được tách thành `action_chains`; audit receipts và
+obsolete histories không gửi lại. Validator vẫn dùng context gốc đầy đủ.
+
+Composition diagnostics chỉ ghi bytes và estimate UTF-8 bytes/4 theo sáu section:
+protocol/schema, requirement/source, OpenAPI, UI/state, fixture/data, testcase/gaps.
+Đây không phải tokenizer DeepSeek. Usage tổng prompt/completion là số provider trả.
+Budget mặc định 12.000 estimated tokens (48.000 bytes); vượt budget trả
+`PROMPT_BUDGET_EXCEEDED` trước model call, không cắt source để vừa budget.
+
+Lượt fresh `artifacts/autonomous-acceptance-token-final`: cùng inputs, DeepSeek
+`deepseek-flash`, 5 calls (3 resolution + 2 exploration), 4/4 executable và 4/4
+Chromium Pass, coverage 4/4. Prompt 27.368, completion 10.269, tổng 37.637 tokens:
+giảm 28,2% so với 52.420 baseline. Cycles 2, 1, 1, 3.
+
+Lượt thử trước `autonomous-acceptance-token-proof` có 6 calls, 3 Pass và 1 Not
+Executed: thiếu plan `testcase_id` và sai vị trí `reason` đã bị parser reject.
+Prompt sau đó làm rõ hai field bắt buộc; parser/validator không auto-correct.
+Không coi lượt thử đó là thành công hay bỏ qua chi phí của nó.
+
+So sánh usage và breakdown an toàn, không xuất historical prompts:
+
+```bash
+uv run python scripts/compare_llm_usage.py \
+  artifacts/autonomous-acceptance-routed-final/acceptance.json \
+  artifacts/autonomous-acceptance-token-final/acceptance.json \
+  --out artifacts/autonomous-acceptance-token-final/token-comparison.json
+```

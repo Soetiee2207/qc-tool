@@ -8,6 +8,7 @@ does not navigate, validate safety, repair testcases, or supply a network provid
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import asdict
 from typing import Iterable, Protocol
 
@@ -21,6 +22,7 @@ from .llm_resolution import (
     _reject_constant, _unique_keys,
 )
 from .resolution_context import ResolutionContext
+from .llm_prompt import MAX_PROMPT_TOKENS, check_prompt_budget, select_prompt_context, prompt_accounting
 from .ui.explore import ExplorationAction, SESSION_MODES
 
 
@@ -52,19 +54,22 @@ _OUTPUT_SHAPE = {
 
 def build_exploration_prompt(
     context: ResolutionContext, *, gaps: Iterable[ExecutionGap] | None = None,
+    max_prompt_tokens: int = MAX_PROMPT_TOKENS,
 ) -> str:
     """Use only the supplied context and gaps (default: context.gaps).
 
     An explicit gaps iterable selects the unresolved work to present; this is not
     a safety check. The deterministic validator checks that purposes are current.
     """
-    data = context.to_dict()
     gap_items = context.gaps if gaps is None else tuple(gaps)
+    data = select_prompt_context(context, gaps=gap_items)
+    output_shape = deepcopy(_OUTPUT_SHAPE)
+    output_shape['testcase_id'] = data['testcase']['id']
 
     def section(name: str, value: object) -> str:
         return f"{name}\n{json.dumps(value, ensure_ascii=False, sort_keys=True)}"
 
-    return "\n\n".join([
+    prompt = "\n\n".join([
         "Propose an UNTRUSTED exploration plan as JSON. Do not execute or repair anything.",
         "Rules: Plan only observation for the listed unresolved gaps. Allowed intents "
         "are inspect_page and observe_network: navigate to the entry page, then inspect approved states. "
@@ -113,8 +118,12 @@ def build_exploration_prompt(
         "Do not invent credentials or login steps.",
         section("REQUEST BUDGET", {"maximum_requests": MAX_EXPLORATION_REQUESTS}),
         section("CONTEXT CONSTRAINTS", data["constraints"]),
+        "Be concise: reasons at most 10 words, structural only. Combine related purposes; "
+        "do not repeat evidence in reasons. action_chains holds shared exact validated_actions, "
+        "request and purposes; each state.action_chain is its zero-based index. "
         "Return one JSON object only, without prose or Markdown fences. Use exactly "
         "the fields below. The root object MUST have ONLY testcase_id and requests. "
+        "BOTH root fields are REQUIRED, including testcase_id copied exactly from TESTCASE.id, even for an empty plan. "
         "Never put actions, status, reason, evidence or unresolved at the root. "
         "actions is OPTIONAL and belongs INSIDE its request at requests[i].actions; "
         "omit it for page-only inspection. Every request has exactly target, session, "
@@ -133,8 +142,9 @@ def build_exploration_prompt(
         "redirects, foreign pages or ui.goto actions. Omit a workflow when destination "
         "controls or transition evidence are insufficient. These optional fields are "
         "the only additions to the action schema above.",
-        section("OUTPUT JSON SHAPE", _OUTPUT_SHAPE),
+        section("OUTPUT JSON SHAPE", output_shape),
     ])
+    return check_prompt_budget(prompt, max_prompt_tokens)
 
 
 def propose_exploration(
@@ -142,7 +152,9 @@ def propose_exploration(
     gaps: Iterable[ExecutionGap] | None = None,
 ) -> ExplorationPlan:
     """Return an untrusted plan from an injected adapter; never execute it."""
-    plan = parse_exploration_plan(adapter.complete(build_exploration_prompt(context, gaps=gaps)))
+    prompt = build_exploration_prompt(context, gaps=gaps)
+    with prompt_accounting(prompt):
+        plan = parse_exploration_plan(adapter.complete(prompt))
     if plan.testcase_id != context.testcase["id"]:
         raise LLMResponseError("testcase_id does not match the supplied context")
     return plan

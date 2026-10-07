@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 from .config import ConfigError, load_dotenv
 from .execute.runner import USER_AGENT
 from .llm_resolution import _reject_constant, _unique_keys
+from .llm_prompt import current_prompt_composition, describe_prompt
 
 MAX_RESPONSE_BYTES = 1_048_576
 _ATTEMPTS = ContextVar("llm_provider_attempts", default=None)
@@ -100,6 +101,8 @@ class OpenAICompatibleLLM:
         for number in (1, 2):
             metadata = {"attempt": number, "http_status": None, "transport_category": None,
                         "finish_reason": None, "response_content_length": None, "usage": {}}
+            if isinstance(prompt, str):
+                metadata["prompt_composition"] = current_prompt_composition() or describe_prompt(prompt)
             try:
                 content = self._complete_once(prompt, metadata)
             except LLMProviderError as exc:
@@ -116,6 +119,9 @@ class OpenAICompatibleLLM:
         raise AssertionError("Unreachable bounded provider attempt")
 
     def _record(self, metadata):
+        if 'prompt_composition' in metadata:
+            metadata['prompt_composition']['actual_prompt_tokens'] = metadata['usage'].get('prompt_tokens')
+            metadata['prompt_composition']['actual_completion_tokens'] = metadata['usage'].get('completion_tokens')
         records = _ATTEMPTS.get()
         if records is not None:
             records.append(deepcopy(metadata))

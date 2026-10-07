@@ -35,7 +35,8 @@ class AuditedAdapter:
     def __init__(self, provider, stage, calls, persist, store):
         self.provider,self.stage,self.calls,self.persist,self.store=provider,stage,calls,persist,store
     def complete(self,prompt):
-        record={'stage':self.stage,'status':'STARTED','prompt':self.store.redact(prompt)}
+        from qctool.llm_prompt import describe_prompt
+        record={'stage':self.stage,'status':'STARTED','prompt_composition':describe_prompt(prompt)}
         self.calls.append(record);self.persist()
         started=time.monotonic()
         client=replace(self.provider,on_response_metadata=lambda item:record.update(item))

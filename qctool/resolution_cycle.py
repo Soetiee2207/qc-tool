@@ -19,6 +19,7 @@ from .generate.from_openapi import Endpoint
 from .llm_exploration import ExplorationLLM, propose_exploration
 from .llm_resolution import LLMResponseError, ResolutionLLM, ResolutionProposal, propose_resolution
 from .llm_provider import LLMProviderError, capture_provider_attempts
+from .llm_prompt import PromptBudgetError
 from .proposal_validation import ProposalValidationResult, validate_resolution_proposal
 from .resolution_context import ResolutionContext, build_resolution_context
 from .resolve import ResolutionResult, resolve_deterministically
@@ -168,7 +169,9 @@ def run_resolution_cycle(
                     "INVALID_RESPONSE", "EMPTY_RESPONSE", "INVALID_COMPLETION",
                 } else "LLM_PROVIDER_ERROR"
                 message = f"{stage}: {exc.safe_message} Earlier progress retained."
-            diagnostics = exc.diagnostics if isinstance(exc, LLMResponseError) else None
+            if isinstance(exc, PromptBudgetError):
+                code, message = exc.code, str(exc)
+            diagnostics = exc.diagnostics if isinstance(exc, (LLMResponseError, PromptBudgetError)) else None
             if diagnostics is not None and provider_attempts:
                 provider_attempts[-1]["parser_failure"] = diagnostics
             issues.append(ResolutionCycleIssue(stage, code, message, diagnostics))

@@ -222,7 +222,7 @@ def test_prompt_catalog_has_only_selected_identifiers_and_exact_schema():
         "EVIDENCE REFERENCES — identifiers present in this context only\n", 1
     )[1].split("\n\n", 1)[0])
     assert {"source": "ui-map", "ref": {
-        "page": "https://portal.test/login", "test_id": "btn-login", "role": "button", "name": "Login",
+        "page": "https://portal.test/login", "test_id": "btn-login",
     }} in catalog
     assert {"source": "testcase-step", "ref": {"step_seq": 2, "action": "perform.unmapped"}} in catalog
     assert {"source": "requirement", "ref": {"id": "FR-LOGIN-001"}} in catalog
