@@ -5,6 +5,7 @@ created: 2026-10-07
 updated: 2026-10-07
 lang: vi
 changelog:
+  - 2026-10-07 | codex | Liên kết provisioning opt-in, giữ verification độc lập
   - 2026-10-07 | codex | Nối preparation hữu hạn vào generation và resolution
   - 2026-10-07 | codex | Thêm verification có policy và receipt, không provisioning
 ---
@@ -131,6 +132,10 @@ assurance; một fact verified không chứng minh sibling facts.
 `data_verification=` của cycle/loop đưa audit vào `ResolutionContext.data_acquisition`.
 Không thay đổi facts trong FixtureStore, business semantics, fixtures validator,
 hoặc tự provision dữ liệu. Mọi input vẫn nguyên vẹn.
+
+Provisioning có thể được bật riêng qua `prepare_test_data(allow_provisioning=True,
+environment=...)`; xem [gate và schema provisioning](test-data-provisioning.md).
+Mặc định vẫn OFF; policy verification không tự cho phép creation/mutation.
 
 ## Preparation trong generation/resolution
 

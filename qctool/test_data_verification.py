@@ -117,6 +117,10 @@ class _Receipt:
     def __repr__(self):
         return '<private verification receipt>'
 
+    def validate(self, case, store, observations):
+        if self.seal is not _SEAL or self.store is not store or self.case_id != case.id or self.requirements != case.test_data.get('_data_requirements', []) or self.metadata != store.to_dict() or self.stamp != _stamp(store) or self.observations != observations:
+            raise ConfigError('Runtime receipt is stale or belongs to different data')
+
 
 @dataclass(frozen=True)
 class VerificationResult:
@@ -139,8 +143,9 @@ class VerificationResult:
 
     def evidence_for(self, case, store):
         receipt = self._receipt
-        if not isinstance(receipt, _Receipt) or receipt.seal is not _SEAL or receipt.store is not store or receipt.case_id != case.id or receipt.requirements != case.test_data.get('_data_requirements', []) or receipt.metadata != store.to_dict() or receipt.stamp != _stamp(store) or receipt.observations != self.observations:
+        if not isinstance(receipt, _Receipt):
             raise ConfigError('Verification receipt is absent, stale or belongs to different data')
+        receipt.validate(case, store, self.observations)
         return tuple({'fixture': r.fixture, 'facts': deepcopy(r.facts),
                       'assurance': 'VERIFIED', 'source': deepcopy(r.source)}
                      for r in self.observations if r.outcome in {VerificationStatus.VERIFIED, VerificationStatus.AMBIGUOUS} and r.facts)
