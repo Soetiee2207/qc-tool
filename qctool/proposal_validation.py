@@ -270,7 +270,6 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
     captured_login = working is not None and any(
         item.action == "ui.click" and origins[item.seq] < step.seq
         and item.args.get("capture_response", {}).get("method") == "POST"
-        and item.args.get("capture_response", {}).get("path") == "/api/auth/login"
         for item in working.steps)
     expected = expected_expansion(step, context.testcase.get("test_data", {}),
                                   min_atoms=1 if allow_single else 2, fixture_store=fixture_store,
@@ -329,11 +328,11 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
             # Still prove the selected element matches the exact source meaning.
             stable_click = (atom.action == "ui.click" and bool(element.get("test_id"))
                             and atom.args.get("target") == element["test_id"])
-            from .source_grounding import empty_login_requirement, observed_validation, source_clause
+            from .source_grounding import empty_login_requirement, observed_validation, source_clause, empty_form_contract
             requirement = empty_login_requirement(working, context) if working else None
             stable_alert = (requirement is not None and
-                            source_clause(step, requirement) == "Hiển thị Vui lòng điền đầy đủ thông tin" and
-                            observed_validation(context, requirement) is element and
+                            source_clause(step, requirement) == "Hiển thị " + empty_form_contract(requirement)["message"] and
+                            observed_validation(context, requirement) == element and
                             atom.action in {"assert.visible", "assert.text"})
             if (not matches_hint(element) or
                     not (stable_click or stable_alert) and (len(matches) != 1 or matches[0] is not element)):
@@ -615,8 +614,8 @@ def _check_semantics(step: Step, change: ProposedChange,
     if proof is not None:
         requirement = empty_login_requirement(working, context)
         return None if change.args == proof and any(source == "requirement" and item.get("id") == requirement["id"] for source, item, _ in refs) else "SEMANTICS_UNPROVEN"
-    if (step.action == "perform.unmapped" and step.args.get("description") == "Phiên anonymous ở /login"
-            or step.action == "assert.unmapped" and step.args.get("expected") == "không gửi POST /api/auth/login"):
+    if (step.action == "perform.unmapped" and re.fullmatch(r"Phiên anonymous ở /[A-Za-z0-9_./-]*", str(step.args.get("description", "")))
+            or step.action == "assert.unmapped" and re.fullmatch(r"không gửi POST /[A-Za-z0-9_./-]+", str(step.args.get("expected", "")))):
         return _validate_expansion(step, replace(change, action="", args={}, expansion=(
             AtomicProposal(change.action, change.args, change.evidence),)), context, working, origins or {}, allow_single=True, fixture_store=fixture_store)
     if step.action == "ui.goto" and not step.args.get("url"):

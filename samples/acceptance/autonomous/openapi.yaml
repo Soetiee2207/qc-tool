@@ -1,0 +1,51 @@
+openapi: 3.0.3
+info: {title: Local autonomous acceptance, version: '1.0'}
+paths:
+  /api/customers:
+    post:
+      operationId: createCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, role]
+              properties:
+                email: {type: string}
+                password: {type: string}
+                role: {type: string, enum: [customer]}
+      responses:
+        '201': {description: Created}
+        '409': {description: Already exists}
+  /api/session:
+    post:
+      operationId: establishSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: {type: string}
+                password: {type: string}
+      responses:
+        '200':
+          description: Valid active customer and matching password
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success]
+                properties:
+                  success: {type: boolean}
+        '401':
+          description: Invalid credentials; does not disclose account state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: {type: boolean}

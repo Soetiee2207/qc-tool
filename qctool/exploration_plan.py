@@ -180,16 +180,12 @@ def _click_grounding(item, target, context, case, base_url):
     general-purpose/destructive controls have no approval rule here.
     """
     bindings = []
-    if item.session != "anonymous" or urlsplit(target).path != "/login":
-        raise ValueError("Only anonymous empty-login inspection is supported")
-    requirements = context.specification.get("requirements", [])
-    empty = "cả hai ô email và mật khẩu trống"
-    requirements = [req for req in requirements
-                    if empty in [clause.strip() for clause in req.get("given", "").split(";")]
-                    and "không gửi POST /api/auth/login" in [
-                        clause.strip() for clause in req.get("then", "").split(";")]]
-    if not requirements:
-        raise ValueError("No exact source empty-credential precondition")
+    from .source_grounding import empty_login_requirement, empty_form_contract
+    requirement = empty_login_requirement(case, context)
+    contract = empty_form_contract(requirement) if requirement else None
+    if item.session != "anonymous" or contract is None or urlsplit(target).path != contract["route"]:
+        raise ValueError("Only exact anonymous empty-form source inspection is supported")
+    requirements = [requirement]
     pages = [p for p in context.observations.get("ui_pages", [])
              if _normalized_target(p.get("url", ""), base_url) == target]
     # Deduplicate identical snapshots, but conflicting metadata stays ambiguous.
@@ -202,6 +198,9 @@ def _click_grounding(item, target, context, case, base_url):
             if element not in elements:
                 elements.append(element)
     for index, action in enumerate(item.actions):
+        if any(value is not None and _normalized_target(value, base_url) != target
+               for value in (action.page, action.expected_url)):
+            raise ValueError("Empty-form observation cannot change pages")
         if not isinstance(action, ExplorationAction) or action.action != "ui.click":
             raise ValueError("Only ui.click is supported")
         if type(action.step_seq) is not int or not isinstance(action.target, str):
@@ -213,15 +212,15 @@ def _click_grounding(item, target, context, case, base_url):
         if len(matches) != 1:
             raise ValueError("Stable target absent, ambiguous or on another page")
         element = matches[0]
-        if element.get("role") != "button" or element.get("name") not in {"Đăng nhập", "Login", "Sign in"}:
+        if element.get("role") != "button" or element.get("name") != contract["button"]:
             raise ValueError("Control is not an allowed empty-login submit")
         clause = f"Bấm {element['name']}"
         source_requirements = [req for req in requirements if req.get("when") == clause]
         justified = len(steps) == 1 and (
             steps[0].action == "perform.unmapped" and steps[0].args.get("description") == clause
             or steps[0].action == "assert.unmapped" and
-            steps[0].args.get("expected") in {"không gửi POST /api/auth/login",
-                                                   "Hiển thị Vui lòng điền đầy đủ thông tin"}
+            steps[0].args.get("expected") in {f"không gửi {contract['method']} {contract['path']}",
+                                                   "Hiển thị " + contract["message"], requirement["then"]}
         )
         if not justified or not source_requirements:
             raise ValueError("Full source clause does not justify this submit")
@@ -236,7 +235,7 @@ def _click_grounding(item, target, context, case, base_url):
                 raise ValueError("Exact credential controls are missing or ambiguous")
             fields.append(candidates[0]["test_id"])
         operations = [op for op in context.interface_contract.get("api_operations", [])
-                      if op.get("method") == "POST" and op.get("path") == "/api/auth/login"]
+                      if op.get("method") == contract["method"] and op.get("path") == contract["path"]]
         selectors = []
         for operation in operations:
             for server in operation.get("servers", []):
@@ -347,7 +346,7 @@ def validate_exploration_plan(
         action_grounding = []
         if not failures and item.actions:
             try:
-                if all(a.action == "ui.click" and a.value is None and a.page is None and a.expected_url is None for a in item.actions):
+                if all(a.action == "ui.click" and a.value is None for a in item.actions):
                     try:
                         action_grounding = _click_grounding(item, target, context, case, base_url)
                     except (ValueError, TypeError, KeyError):

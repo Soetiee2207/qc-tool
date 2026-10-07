@@ -102,6 +102,27 @@ def _enrich(observations: dict, result: ExplorationResult,
     if payload.get("action_observations"):
         provenance["action_observations"] = payload["action_observations"]
     pages = observations.setdefault("ui_pages", [])
+    legacy_state = None
+    if approved.request.actions and payload.get("action_observations") and result.explored:
+        # V1 click observations predate workflow states. Preserve the completed
+        # action snapshot in the SAME state vocabulary so later fresh-context
+        # inspection cannot erase its grounded controls or fabricate ambiguity.
+        action = payload["action_observations"][-1]
+        binding = next((g for g in approved.grounding if g.get("source") == "validated_click"
+                        and g.get("action_index") == action.get("action_index")), None)
+        if binding is not None:
+            state_id = payload["source"]["observed_at"] + ":click:" + str(action.get("action_index", 0))
+            legacy_state = {"state_id": state_id, "valid": True, "page": deepcopy(page),
+                            "triggering_action": action.get("action_index", 0),
+                            "source_clause": binding["source_clause"], "source": payload["source"],
+                            "network": payload["network"], "session": approved.request.session,
+                            "testcase_id": approved.testcase_id, "request": payload["request"],
+                            "purposes": [asdict(p) for p in approved.purposes]}
+            history = observations.setdefault("page_states", [])
+            if not any(state.get("state_id") == state_id for state in history):
+                history.append(legacy_state)
+            provenance["state_id"] = state_id
+            observations["current_state_id"] = state_id
     if approved.request.actions and payload.get("action_observations"):
         matching = [p for p in pages if p.get("url") == page["url"]
                     and p.get("session") in (None, approved.request.session)]
@@ -118,6 +139,8 @@ def _enrich(observations: dict, result: ExplorationResult,
             existing.update(deepcopy(page))
             existing["session"] = approved.request.session
             existing["evidence"] = payload["source"]
+            if legacy_state:
+                existing["state_id"] = legacy_state["state_id"]
             return
     # Deduplicate matching page snapshots, not merely URLs. Session-specific or
     # changed states remain separate; old observations are never contradicted away.
@@ -136,7 +159,8 @@ def _enrich(observations: dict, result: ExplorationResult,
                 sources.append(provenance)
             return
     pages.append({**page, "session": approved.request.session,
-                  "evidence": payload["source"], "explorations": [provenance]})
+                  "evidence": payload["source"], "explorations": [provenance],
+                  **({"state_id": legacy_state["state_id"]} if legacy_state else {})})
 
 
 def execute_validated_exploration(

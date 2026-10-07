@@ -20,15 +20,15 @@ def expected_expansion(step: Step, test_data: dict, *, min_atoms: int = 2,
     if not isinstance(text, str) or not text.strip():
         return None
     if step.action == "perform.unmapped" and step.kind == StepKind.GIVEN:
-        if text.strip() == "Phiên anonymous ở /login" and min_atoms == 1:
-            return [{"action": "ui.goto", "args": {"url": "/login"},
-                     "precondition_route": "/login", "requires_anonymous_session": True}]
+        if (match := re.fullmatch(r"Phiên anonymous ở (/[A-Za-z0-9_./-]*)", text.strip())) and min_atoms == 1:
+            return [{"action": "ui.goto", "args": {"url": match[1]},
+                     "precondition_route": match[1], "requires_anonymous_session": True}]
         if text.strip() == "cả hai ô email và mật khẩu trống":
             return [{"action": "assert.value", "hint": "email", "empty_input": True,
                      "args": {"expected": "^$", "operator": "matches"}},
                     {"action": "assert.value", "hint": "password", "empty_input": True,
                      "args": {"expected": "^$", "operator": "matches"}}]
-        empty = re.fullmatch(r"Phiên anonymous ở (/login); cả hai ô email và mật khẩu trống", text.strip())
+        empty = re.fullmatch(r"Phiên anonymous ở (/[A-Za-z0-9_./-]*); cả hai ô email và mật khẩu trống", text.strip())
         if empty:
             return [{"action": "ui.session", "args": {"mode": "anonymous"}},
                     {"action": "ui.goto", "args": {"url": empty[1]}, "precondition_route": empty[1]},
@@ -36,7 +36,7 @@ def expected_expansion(step: Step, test_data: dict, *, min_atoms: int = 2,
                      "args": {"expected": "^$", "operator": "matches"}},
                     {"action": "assert.value", "hint": "password", "empty_input": True,
                      "args": {"expected": "^$", "operator": "matches"}}]
-        # Exact SalonHub source form only. Every non-runtime clause must be
+        # Exact source grammar only. Every non-runtime clause must be
         # proven against config facts and provisioned aliases, never discarded.
         precondition = re.fullmatch(
             r"Phiên anonymous ở (/[A-Za-z0-9_./?=&-]*); tài khoản customer đang hoạt động "
@@ -49,14 +49,14 @@ def expected_expansion(step: Step, test_data: dict, *, min_atoms: int = 2,
                      {"action": "ui.goto", "args": {"url": precondition[1]},
                       "precondition_route": precondition[1]}]
             return atoms if min_atoms <= len(atoms) <= 8 else None
-    if (allow_captured_login and step.action == "assert.unmapped" and text.strip() ==
-            "Đăng nhập thành công; URL chuyển tới /; POST /api/auth/login trả 200 với success=true"):
+    if (allow_captured_login and step.action == "assert.unmapped" and
+            (captured := re.fullmatch(r"Đăng nhập thành công; URL chuyển tới (/[A-Za-z0-9_./-]*); POST (/[A-Za-z0-9_./-]+) trả 200 với success=true", text.strip()))):
         # This exact contract expresses success with ALL explicit outcomes.
         # Conjunctive checks have no intervening actions; no clause is dropped.
-        operation = ("POST", "/api/auth/login")
+        operation = ("POST", captured[2])
         return [{"action": "assert.http_status", "args": {"expected": 200}, "operation": operation},
                 {"action": "assert.json_field", "args": {"path": "$.success", "expected": True}, "operation": operation},
-                {"action": "assert.url_matches", "args": {"pattern": "/$"}, "route": "/"}]
+                {"action": "assert.url_matches", "args": {"pattern": re.escape(captured[1]) + "$"}, "route": captured[1]}]
     clauses = [part.strip() for part in text.split(";")]
     if re.fullmatch(r"fill email,\s*fill password,\s*click .+", text, re.I):
         clauses = [part.strip() for part in text.split(",")]
@@ -88,7 +88,7 @@ def expected_expansion(step: Step, test_data: dict, *, min_atoms: int = 2,
             if match := re.fullmatch(r"URL\s+(?:chuyển tới|vẫn ở|==)\s+(/\S*)", clause, re.I):
                 result.append({"action": "assert.url_matches", "args": {
                     "pattern": re.escape(match[1]) + "$"}, "route": match[1]})
-            elif match := re.fullmatch(r"không gửi (POST) (/api/auth/login)", clause):
+            elif match := re.fullmatch(r"không gửi (POST) (/[A-Za-z0-9_./-]+)", clause):
                 result.append({"action": "assert.json_field", "args": {
                     "path": "$.request_count", "expected": 0}, "no_request": (match[1], match[2])})
             elif match := re.fullmatch(r"(GET|POST|PUT|PATCH|DELETE)\s+(/\S+)\s+trả\s+([1-5]\d\d)(?:\s+với\s+success=(true|false))?", clause, re.I):

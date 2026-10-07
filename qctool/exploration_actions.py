@@ -135,11 +135,14 @@ def ground_actions(item, target, context, case, base_url, store):
             if _norm(element['name']) in {'login', 'sign in', 'dang nhap', 'đăng nhập'}:
                 from .response_capture import origin_of
                 operations = [op for op in context.interface_contract.get('api_operations', [])
-                              if (op.get('method'), op.get('path')) == ('POST', '/api/auth/login')]
+                              if op.get('method') == 'POST' and any(
+                                  re.search(r'(?<!\w)POST\s+' + re.escape(op.get('path', '')) + r'(?=\s|;|$)', r.get('then', ''))
+                                  for r in requirements)]
                 origins = {origin_of(server) for op in operations for server in op.get('servers', [])}
-                if len(operations) != 1 or len(origins) != 1:
-                    raise ValueError('Ambiguous login contract')
-                binding['capture_requests'] = {'method': 'POST', 'path': '/api/auth/login', 'origin': origins.pop(), 'timeout_ms': 2000}
+                if operations:
+                    if len(operations) != 1 or len(origins) != 1 or forbidden(operations[0]["path"]):
+                        raise ValueError('Ambiguous source request contract')
+                    binding['capture_requests'] = {'method': 'POST', 'path': operations[0]['path'], 'origin': origins.pop(), 'timeout_ms': 2000}
         destination = current_page
         if action.expected_url is not None:
             destination = _normalized_target(action.expected_url, base_url)

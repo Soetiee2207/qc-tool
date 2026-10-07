@@ -97,6 +97,7 @@ def run_generation(
     exploration_llm: ExplorationLLM | None = None,
     base_url: str | None = None, storage_state: Path | None = None,
     fixture_store: FixtureStore | None = None,
+    allow_provisioning: bool = False, environment: str | None = None,
     max_passes: int = 3, max_cycles: int = 3, module: str = "COV",
     contexts: Mapping[str, ResolutionContext] | None = None,
 ) -> GenerationResult:
@@ -127,7 +128,8 @@ def run_generation(
         prepared = []
         for case in original:
             preparation = prepare_test_data(case, fixture_store=fixture_store,
-                                            endpoints=endpoints or (), base_url=base_url)
+                                            endpoints=endpoints or (), base_url=base_url,
+                                            allow_provisioning=allow_provisioning, environment=environment)
             prepared.append(preparation.case)
             if preparation.initial is not None:
                 preparations.append(preparation)
@@ -144,7 +146,8 @@ def run_generation(
                 resolution_llm=resolution_llm, exploration_llm=exploration_llm,
                 base_url=base_url, storage_state=storage_state,
                 max_passes=max_passes, max_cycles=max_cycles, module=module,
-                contexts=deepcopy(contexts), fixture_store=fixture_store))
+                contexts=deepcopy(contexts), fixture_store=fixture_store,
+                allow_provisioning=allow_provisioning, environment=environment))
         except Exception:
             failed = True
             issues.append(GenerationIssue("coverage_loop", "GENERATION_FAILED",

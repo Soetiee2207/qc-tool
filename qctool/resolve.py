@@ -136,20 +136,21 @@ def _source_clauses(case, context):
     from .proposal_validation import validate_resolution_proposal
     from .resolution_context import build_resolution_context
     from .source_grounding import (empty_login_requirement, source_clause, login_page,
-                                   unique_element, semantic_repair_arguments, observed_validation)
+                                   unique_element, semantic_repair_arguments, observed_validation, empty_form_contract)
     from .step_expansion import expected_expansion, candidate_with_changes
 
     snapshot = build_resolution_context(case, ()).testcase
     context = replace(deepcopy(context), testcase=snapshot,
                       gaps=analyze_executability(case, context=context).gaps)
     requirement = empty_login_requirement(case, context)
-    page = login_page(context)
+    page = login_page(context, requirement)
     identity = {step.seq: step.seq for step in case.steps}
     if requirement is None or page is None:
         return case, [], identity
     requirement_ref = EvidenceReference("requirement", {"id": requirement["id"]})
-    page_ref = EvidenceReference("ui-map", {"page": page["url"]})
-    operation_ref = EvidenceReference("openapi", {"method": "POST", "path": "/api/auth/login"})
+    state_ref = {"state_id": page["state_id"]} if page.get("state_id") else {}
+    page_ref = EvidenceReference("ui-map", {"page": page["url"], **state_ref})
+    operation_ref = EvidenceReference("openapi", {"method": empty_form_contract(requirement)["method"], "path": empty_form_contract(requirement)["path"]})
     proposals = []
     for step in case.steps:
         clause = source_clause(step, requirement)
@@ -163,9 +164,9 @@ def _source_clauses(case, context):
         canonical = semantic_repair_arguments(step, case, context)
         if canonical is not None:
             refs = evidence
-            if step.action == "ui.click":
-                refs += (EvidenceReference("ui-map", {"page": page["url"], "test_id": canonical["target"]}), operation_ref)
-            proposals.append(ProposedChange(step.seq, step.action, gaps, step.action, canonical,
+            if step.action in {"ui.click", "perform.unmapped"}:
+                refs += (EvidenceReference("ui-map", {"page": page["url"], "test_id": canonical["target"], **state_ref}), operation_ref)
+            proposals.append(ProposedChange(step.seq, step.action, gaps, "ui.click" if step.action == "perform.unmapped" else step.action, canonical,
                                             "Exact preserved source clause and trusted evidence.", refs))
             continue
         if step.action not in case.UNMAPPED_ACTIONS:
@@ -187,7 +188,7 @@ def _source_clauses(case, context):
                 if element is None:
                     break
                 args["target"] = element["test_id"]
-                refs += (EvidenceReference("ui-map", {"page": page["url"], "test_id": element["test_id"]}),)
+                refs += (EvidenceReference("ui-map", {"page": page["url"], "test_id": element["test_id"], **state_ref}),)
             if "no_request" in meaning:
                 args["source"] = "login_requests"
                 refs += (operation_ref,)

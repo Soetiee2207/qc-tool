@@ -90,6 +90,7 @@ def run_coverage_resolution_pass(
     ui_map: UIMap | None = None, endpoints: list[Endpoint] | None = None,
     base_url: str | None = None, storage_state: Path | None = None,
     fixture_store: FixtureStore | None = None,
+    allow_provisioning: bool = False, environment: str | None = None,
 ) -> CoverageResolutionPassResult:
     """Plan once, then call the bounded resolution loop once per new candidate.
 
@@ -130,7 +131,8 @@ def run_coverage_resolution_pass(
                 deepcopy(working), deepcopy(context), max_cycles=max_cycles,
                 resolution_llm=resolution_llm, exploration_llm=exploration_llm,
                 ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints),
-                base_url=base_url, storage_state=storage_state, fixture_store=fixture_store))
+                base_url=base_url, storage_state=storage_state, fixture_store=fixture_store,
+                allow_provisioning=allow_provisioning, environment=environment))
             # Recompute rather than accepting the loop's executable flag.
             final_report = analyze_executability(candidate.case, context=candidate.context)
             working, resolution = deepcopy(candidate.case), candidate

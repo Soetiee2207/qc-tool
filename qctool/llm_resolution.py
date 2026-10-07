@@ -181,67 +181,85 @@ def _login_capture_example(data: dict, catalog: list[dict]) -> dict | None:
     This is model guidance, never a repair or a substitute for validation.
     Omit it when the complete example cannot be grounded in the supplied packet.
     """
-    steps = data["testcase"].get("steps", [])
-    when = [s for s in steps if s["action"] == "perform.unmapped" and
-            s.get("args", {}).get("description") == "Nhập email và mật khẩu đúng; bấm Đăng nhập"]
-    then = [s for s in steps if s["action"] == "assert.unmapped" and
-            s.get("args", {}).get("expected") ==
-            "Đăng nhập thành công; URL chuyển tới /; POST /api/auth/login trả 200 với success=true"]
-    operations = [o for o in data["interface_contract"].get("api_operations", [])
-                  if o.get("method") == "POST" and o.get("path") == "/api/auth/login"]
-    test_data = data["testcase"].get("test_data", {})
-    refs = test_data.get("_fixture_refs", {})
-    aliases = [test_data.get(key) for key in ("email", "correct_password")]
-    if (len(when) != 1 or len(then) != 1 or len(operations) != 1 or
-            not all(isinstance(a, str) and refs.get(a, {}).get("available") for a in aliases)):
-        return None
-    servers = operations[0].get("servers", [])
-    if len(servers) != 1:
-        return None
+    from .step_expansion import expected_expansion
+    from .testcase import Step, StepKind
     from .response_capture import origin_of
-    origin = origin_of(servers[0])
-    if not origin:
-        return None
-    def unique(source, predicate):
-        items = [r for r in catalog if r["source"] == source and predicate(r["ref"])]
-        return items[0] if len(items) == 1 else None
-    email = unique("ui-map", lambda r: r.get("test_id") and r.get("name") == "Email hoặc Số điện thoại")
-    password = unique("ui-map", lambda r: r.get("test_id") and r.get("name") == "Nhập mật khẩu")
-    button = unique("ui-map", lambda r: r.get("test_id") and r.get("role") == "button" and r.get("name") == "Đăng nhập")
-    api = unique("openapi", lambda r: r.get("method") == "POST" and r.get("path") == "/api/auth/login")
-    if not all((email, password, button, api)):
-        return None
     from urllib.parse import urlsplit
-    root = unique("ui-map", lambda r: set(r) == {"page"} and
-                  urlsplit(r["page"]).path == "/" and origin_of(r["page"]) == origin_of(button["ref"]["page"]))
-    if not root:
+    from .ui.crawl import _norm
+
+    steps = data["testcase"].get("steps", [])
+    test_data = data["testcase"].get("test_data", {})
+    meanings = {}
+    for step in steps:
+        if step["action"] not in {"perform.unmapped", "assert.unmapped"}:
+            continue
+        atoms = expected_expansion(Step(step["seq"], StepKind(step["kind"]), step["action"], step["args"]),
+                                   test_data, allow_captured_login=True)
+        if atoms:
+            meanings[step["seq"]] = atoms
+    when = [s for s in steps if [a["action"] for a in meanings.get(s["seq"], [])]
+            == ["ui.fill", "ui.fill", "ui.click"]]
+    then = [s for s in steps if [a["action"] for a in meanings.get(s["seq"], [])]
+            == ["assert.http_status", "assert.json_field", "assert.url_matches"]]
+    if len(when) != 1 or len(then) != 1 or when[0]["seq"] >= then[0]["seq"]:
         return None
-    def atom(action, args, evidence):
-        return {"action": action, "args": args, "evidence": evidence}
+    actions, outcomes = meanings[when[0]["seq"]], meanings[then[0]["seq"]]
+    operation = outcomes[0].get("operation")
+    operations = [o for o in data["interface_contract"].get("api_operations", [])
+                  if operation == (o.get("method"), o.get("path"))]
+    if len(operations) != 1 or len(operations[0].get("servers", [])) != 1:
+        return None
+    origin = origin_of(operations[0]["servers"][0])
+    pages = data["observations"].get("ui_pages", [])
+    def element_reference(meaning):
+        candidates = []
+        for page in pages:
+            for element in page.get("elements", []):
+                hint = meaning.get("hint", "")
+                match = (_norm(element.get("name", "")) == _norm(hint))
+                if hint in {"email", "password"} and meaning["action"] == "ui.fill":
+                    match = element.get("input_type") == hint or (hint == "email" and element.get("role") in {"input", "textbox"}
+                              and "email" in _norm(element.get("name", "")).split())
+                if match and element.get("test_id"):
+                    candidates += [r for r in catalog if r["source"] == "ui-map"
+                                   and r["ref"].get("page") == page["url"]
+                                   and r["ref"].get("test_id") == element["test_id"]]
+        return candidates[0] if len(candidates) == 1 else None
+    refs = [element_reference(a) for a in actions]
+    if not all(refs):
+        return None
+    registry = test_data.get("_fixture_refs", {})
+    if not all(registry.get(a.get("value"), {}).get("available") for a in actions[:2]):
+        return None
+    api = [r for r in catalog if r["source"] == "openapi" and
+           (r["ref"].get("method"), r["ref"].get("path")) == operation]
+    routes = [r for r in catalog if r["source"] == "ui-map" and set(r["ref"]) == {"page"}
+              and urlsplit(r["ref"]["page"]).path == outcomes[2].get("route")]
+    if len(api) != 1 or len(routes) != 1:
+        return None
+    atoms = [{"action": a["action"], "args": {"target": ref["ref"]["test_id"],
+              **({"value": a["value"]} if "value" in a else {})}, "evidence": [ref]}
+             for a, ref in zip(actions, refs)]
+    atoms[-1]["args"]["capture_response"] = {"method": operation[0], "path": operation[1],
+                                            "origin": origin, "save_as": "login_response", "timeout_ms": 10000}
+    atoms[-1]["evidence"].extend(api)
+    assertions = [{"action": a["action"], "args": {**a["args"],
+                   **({"source": "login_response"} if a.get("operation") else {})},
+                   "evidence": api if a.get("operation") else routes} for a in outcomes]
     changes = []
-    for step, atoms in [
-        (when[0], [atom("ui.fill", {"target": email["ref"]["test_id"], "value": aliases[0]}, [email]),
-                   atom("ui.fill", {"target": password["ref"]["test_id"], "value": aliases[1]}, [password]),
-                   atom("ui.click", {"target": button["ref"]["test_id"], "capture_response": {
-                       "method": "POST", "path": "/api/auth/login", "origin": origin,
-                       "save_as": "login_response", "timeout_ms": 10000}}, [button, api])]),
-        (then[0], [atom("assert.http_status", {"expected": 200, "source": "login_response"}, [api]),
-                   atom("assert.json_field", {"path": "$.success", "expected": True, "source": "login_response"}, [api]),
-                   atom("assert.url_matches", {"pattern": "/$"}, [root])]),
-    ]:
-        gap_codes = [g["code"] for g in data["gaps"] if g.get("step_seq") == step["seq"]]
-        if not gap_codes:
+    for step, replacement in ((when[0], atoms), (then[0], assertions)):
+        gaps = [g["code"] for g in data["gaps"] if g.get("step_seq") == step["seq"]]
+        if not gaps:
             return None
-        changes.append({"step_seq": step["seq"], "from_action": step["action"],
-                        "gap_codes": gap_codes, "proposed": {"steps": atoms},
-                        "reason": "Preserve every explicit source clause using supplied evidence and aliases.",
+        changes.append({"step_seq": step["seq"], "from_action": step["action"], "gap_codes": gaps,
+                        "proposed": {"steps": replacement}, "reason": "Exact source grammar and supplied evidence only.",
                         "evidence": [{"source": "testcase-step", "ref": {"step_seq": step["seq"], "action": step["action"]}},
                                      *[r for r in catalog if r["source"] == "requirement"]]})
-    selected = {when[0]["seq"], then[0]["seq"]}
+    selected = {s["step_seq"] for s in changes}
     return {"testcase_id": data["testcase"]["id"], "changes": changes,
             "unresolved": [{"code": g["code"], "step_seq": g.get("step_seq"),
-                            "reason": "Not resolved by this partial syntax example."}
-                           for g in data["gaps"] if g.get("step_seq") not in selected]}
+                            "reason": "Outside this partial syntax example."}
+                           for g in data["gaps"] if g.get("step_seq") is not None and g.get("step_seq") not in selected]}
 
 
 def build_resolution_prompt(context: ResolutionContext) -> str:
@@ -290,6 +308,9 @@ def build_resolution_prompt(context: ResolutionContext) -> str:
         "Each evidence entry is exactly {\"source\": <source>, \"ref\": <object>}. "
         "Copy references from EVIDENCE REFERENCES. Use page, never url, in UI refs; "
         "use step_seq, never seq, in step refs. UI element refs require page. "
+        "For any UI action/assertion, when the cited element has test_id, args.target "
+        "MUST copy that exact test_id, never its display name or role. Use by_name "
+        "only as optional descriptive metadata, not as a replacement for the stable target. "
         "Do not include session, text, quote, or other extra reference fields. "
         "At most one change per step_seq. A change replaces one step with one action, "
         "for a normal replacement. Do not split a step into duplicate changes. Preserve the entire "
@@ -323,11 +344,15 @@ def build_resolution_prompt(context: ResolutionContext) -> str:
         "(optional, 100–30000)}. Use exact documented method/path and origin from contract servers, "
         "cite that operation, and only capture an operation explicitly expected by a later source outcome. "
         "Capture observes the triggering click, never sends an extra request. Captured body exposes only "
-        "boolean $.success; headers, tokens and raw payload are not retained. A captured login response "
-        "permits the EXACT outcome 'Đăng nhập thành công; URL chuyển tới /; POST /api/auth/login trả 200 "
-        "với success=true' to expand into assert.http_status(200), assert.json_field($.success, true), "
-        "assert.url_matches(/$), with matching source names and API/UI evidence. Preserve every outcome. "
-        "Do not add a request solely to manufacture a response. "
+        "boolean $.success; headers, tokens and raw payload are not retained. Expand an "
+        "explicit 'METHOD /path trả STATUS với success=true|false; URL chuyển tới /route' "
+        "source into status, success and URL assertions, citing the exact supplied operation/page. "
+        "The URL atom must use the literal route escaped as a regex and terminated with $, "
+        "not an unanchored or broad regex. Do not add a request to manufacture a response. "
+        "For an explicit 'không gửi METHOD /path' outcome, ui.click may instead use "
+        "capture_requests with the same selector fields as capture_response, never both. "
+        "It records a bounded count, consumed by assert.json_field with path $.request_count, "
+        "expected 0, source matching capture_requests.save_as. No request headers/body are saved. "
         "Runtime UI evidence never establishes the expected business outcome.",
         "EXACT ENVELOPES: Top level has ONLY testcase_id, changes, unresolved (no status). "
         "Every change has EXACTLY step_seq, from_action, gap_codes, proposed, reason, evidence. "

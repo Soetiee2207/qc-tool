@@ -71,7 +71,8 @@ def inputs(base='https://app.test', login=False, fill=False):
               'click Search; fill "public@example.test" into Email; click Validate' if fill else
               'click Search; click Validate')
     req = {'id':'AC-WORKFLOW', 'kind':'acceptance_criterion', 'given':'Open /a',
-           'when':source, 'then':'URL /b; validation appears'}
+           'when':source, 'then':('POST /api/auth/login trả 200 với success=true; URL /b; validation appears'
+                                 if login else 'URL /b; validation appears')}
     case = generate_from_acceptance([req], IdAllocator(), 'WORKFLOW').cases[0]
     store = FixtureStore({'active_user': {'email': {'env':'EMAIL'}}},
                          {'AC-WORKFLOW': {'email':'active_user.email'}},

@@ -145,7 +145,7 @@ def run_resolution_loop(
     base_url: str | None = None, storage_state: Path | None = None,
     fixture_store: FixtureStore | None = None,
     ui_map: UIMap | None = None, endpoints: list[Endpoint] | None = None,
-    data_verification=None,
+    data_verification=None, allow_provisioning: bool = False, environment: str | None = None,
 ) -> ResolutionLoopResult:
     """Run at most max_cycles, passing each resulting case/context to the next.
 
@@ -161,7 +161,7 @@ def run_resolution_loop(
     if packet.testcase.get('id') == case.id:
         preparation = prepare_test_data(working, fixture_store=fixture_store,
                                         endpoints=endpoints or (), base_url=base_url,
-                                        verification=data_verification)
+                                        verification=data_verification, allow_provisioning=allow_provisioning, environment=environment)
         working = preparation.case
         if preparation.initial is not None:
             packet = replace(packet, data_acquisition=preparation.context_data(),
