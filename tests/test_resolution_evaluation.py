@@ -65,10 +65,11 @@ def test_sample_before_after_distributions_semantics_and_history():
     assert summary["replay_errors"] == 0
     case = report.to_dict()["cases"][0]
     assert len(case["loop"]["cycles"]) == 2
-    assert case["loop"]["cycles"][0]["proposal"]["status"] == "unresolved"
+    assert case["loop"]["cycles"][0]["proposal"] is None
+    assert case["loop"]["cycles"][0]["decisions"][0]["selected_capability"] == "exploration"
     assert case["loop"]["cycles"][1]["application"]["applied_changes"]
     assert case["audit"][-1]["cycle"] == 2
-    assert len(case["replay"]["resolution_calls"]) == 2
+    assert len(case["replay"]["resolution_calls"]) == 1
     assert case["labels_after"] == [{"step_seq": 2, "status": "correct", "unsafe": None}]
     assert case["ground_truth"][0]["allowed"] == [CLICK]
 
@@ -257,9 +258,9 @@ def test_cli_writes_json_report_without_network(tmp_path):
 
 
 def test_cli_reports_replay_errors_and_invalid_suite(tmp_path, capsys):
-    case, _, _ = _inputs()
+    case, context, _ = _inputs()
     path = tmp_path / "suite.json"
-    path.write_text(json.dumps({"cases": [{"case": case.to_dict()}]}))
+    path.write_text(json.dumps({"cases": [{"case": case.to_dict(), "context": context.to_dict()}]}))
     assert main([str(path)]) == 1
     assert json.loads(capsys.readouterr().out)["summary"]["replay_errors"] == 1
     path.write_text("not a suite")

@@ -32,10 +32,6 @@ cases:
           - {action: ui.click, args: {target: btn-login}}
     resolution_responses:
       - testcase_id: TC_LOGIN_001
-        changes: []
-        unresolved:
-          - {code: UNMAPPED_ACTION, step_seq: 2, reason: Need login control evidence}
-      - testcase_id: TC_LOGIN_001
         changes:
           - step_seq: 2
             from_action: perform.unmapped

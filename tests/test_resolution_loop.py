@@ -51,7 +51,7 @@ def test_already_executable_runs_zero_cycles(monkeypatch):
 
 def test_exploration_enables_second_cycle_repair_and_preserves_history(monkeypatch):
     case, context, _ = _inputs(evidence=False)
-    resolution = SequenceLLM(_unresolved(), _proposal())
+    resolution = SequenceLLM(_proposal())
     exploration = SequenceLLM(_plan())
     monkeypatch.setattr(execution, "explore_page", _fake_explorer)
     result = loop.run_resolution_loop(case, context, resolution_llm=resolution,
@@ -63,9 +63,8 @@ def test_exploration_enables_second_cycle_repair_and_preserves_history(monkeypat
     assert first.exploration_execution.successful_requests
     assert second.case.steps[1].action == "ui.click"
     assert first.context.observations["ui_pages"][0]["url"] == BASE + "/login"
-    assert "btn-login" not in resolution.prompts[0]
-    assert "btn-login" in resolution.prompts[1]
-    assert len(exploration.prompts) == 1 and len(resolution.prompts) == 2
+    assert "btn-login" in resolution.prompts[0]
+    assert len(exploration.prompts) == len(resolution.prompts) == 1
     assert [(event.cycle, event.stage, event.status) for event in result.audit] == [
         (index, event.stage, event.status)
         for index, cycle in enumerate(result.cycles, 1) for event in cycle.audit]
@@ -92,30 +91,27 @@ def test_repeated_evidence_with_new_timestamp_is_not_progress(monkeypatch):
                                       resolution_llm=FakeLLM(_unresolved()),
                                       exploration_llm=FakeLLM(_plan()), base_url=BASE)
     assert result.stop_reason == "REPEATED_STATE" and result.cycle_count == 2
-    assert len(observations) == 2
+    assert len(observations) == 1
     assert len(result.context.observations["ui_pages"]) == 1
-    # Preserve both provenance records even though the evidence did not advance.
-    assert len(result.context.observations["ui_pages"][0]["explorations"]) == 2
+    # Once selected evidence exists, repeated exploration is skipped.
+    assert len(result.context.observations["ui_pages"][0]["explorations"]) == 1
 
 
 def test_budget_caps_cycles_even_when_new_evidence_keeps_arriving(monkeypatch):
     case, context, _ = _inputs(evidence=False)
-    observed = []
+    template = run_resolution_cycle(case, context)
+    count = []
 
-    def inspect(request, **kwargs):
-        result = _fake_explorer(request)
-        result.page.text.append(f"New text {len(observed)}")
-        observed.append(result)
-        return result
+    def run(candidate, packet, **kwargs):
+        count.append(1)
+        packet.observations['ui_pages'].append({
+            'url': BASE + '/login', 'text': [f'New text {len(count)}'], 'elements': []})
+        return replace(template, case=candidate, context=packet)
 
-    monkeypatch.setattr(execution, "explore_page", inspect)
-    resolution, exploration = FakeLLM(_unresolved()), FakeLLM(_plan())
-    result = loop.run_resolution_loop(case, context, max_cycles=3,
-                                      resolution_llm=resolution, exploration_llm=exploration,
-                                      base_url=BASE)
-    assert result.stop_reason == "MAX_CYCLES" and result.cycle_count == 3
-    assert not result.executable
-    assert len(observed) == len(resolution.prompts) == len(exploration.prompts) == 3
+    monkeypatch.setattr(loop, 'run_resolution_cycle', run)
+    result = loop.run_resolution_loop(case, context, max_cycles=3)
+    assert result.stop_reason == 'MAX_CYCLES' and result.cycle_count == 3
+    assert not result.executable and len(count) == 3
 
 
 def test_partial_repairs_progress_across_cycles_without_exploration():
@@ -224,7 +220,7 @@ def test_originals_and_earlier_history_remain_detached(monkeypatch):
     case, context, ui_map = _inputs(evidence=False)
     originals = deepcopy((case, context, ui_map))
     monkeypatch.setattr(execution, "explore_page", _fake_explorer)
-    result = loop.run_resolution_loop(case, context, resolution_llm=SequenceLLM(_unresolved(), _proposal()),
+    result = loop.run_resolution_loop(case, context, resolution_llm=SequenceLLM(_proposal()),
                                       exploration_llm=SequenceLLM(_plan()), base_url=BASE)
     assert (case, context, ui_map) == originals
     result.case.steps[1].args["target"] = "changed"

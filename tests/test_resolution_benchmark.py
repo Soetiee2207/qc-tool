@@ -119,7 +119,7 @@ def test_exploration_enables_only_the_grounded_next_cycle(benchmark):
         assert not case.loop.cycles[0].after.executable
         assert case.loop.cycles[0].exploration_execution.successful_requests
         assert case.loop.cycles[1].after.executable
-        assert len(case.replay["resolution_calls"]) == 2
+        assert len(case.replay["resolution_calls"]) == 1
         assert len(case.replay["exploration_calls"]) == 1
     repeated = report.cases[12]
     assert repeated.loop.cycle_count == 2 and not repeated.after.executable

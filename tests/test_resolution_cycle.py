@@ -124,7 +124,8 @@ def test_unresolved_explores_and_stops_without_second_llm_call(monkeypatch):
     assert result.case == case
     assert result.before == result.after
     assert result.needs_another_cycle
-    assert len(resolution.prompts) == len(exploration.prompts) == len(calls) == 1
+    assert not resolution.prompts
+    assert len(exploration.prompts) == len(calls) == 1
     assert result.context.observations["ui_pages"][0]["elements"][0]["test_id"] == "btn-login"
     assert result.context.specification == context.specification
     assert result.context.interface_contract == context.interface_contract
@@ -143,7 +144,7 @@ def test_invalid_proposal_not_applied():
 
 
 def test_invalid_exploration_plan_never_executed(monkeypatch):
-    case, context, _ = _inputs()
+    case, context, _ = _inputs(evidence=False)
     monkeypatch.setattr(execution, "explore_page", lambda *a, **kw: pytest.fail("Unsafe plan"))
     result = cycle.run_resolution_cycle(case, context, resolution_llm=FakeLLM(_unresolved()),
                                        exploration_llm=FakeLLM(_plan(target="https://evil.test")),
@@ -165,6 +166,12 @@ def test_invalid_exploration_plan_never_executed(monkeypatch):
 def test_stage_failure_retains_prior_progress(monkeypatch, stage, function):
     case, context, ui_map = _inputs(missing_locator=True, extra_step=True)
 
+    if stage.startswith('exploration'):
+        # Keep the deterministic locator repair but remove the other control's
+        # evidence, so the remaining gap actually needs inspection.
+        ui_map.pages[0].elements = ui_map.pages[0].elements[:1]
+        context.observations['ui_pages'][0]['elements'] = context.observations['ui_pages'][0]['elements'][:1]
+
     def fail(*args, **kwargs):
         raise RuntimeError("password=PRIVATE")
 
@@ -181,13 +188,13 @@ def test_stage_failure_retains_prior_progress(monkeypatch, stage, function):
     assert result.context.testcase["steps"][1]["args"]["target"] == "btn-login"
 
 
-def test_malformed_llm_can_still_collect_evidence(monkeypatch):
-    case, context, _ = _inputs(evidence=False)
+def test_malformed_resolution_does_not_trigger_redundant_exploration(monkeypatch):
+    case, context, _ = _inputs()
     monkeypatch.setattr(execution, "explore_page", _fake_explorer)
     result = cycle.run_resolution_cycle(case, context, resolution_llm=FakeLLM("not JSON"),
                                        exploration_llm=FakeLLM(_plan()), base_url=BASE)
     assert any(issue.code == "LLM_RESPONSE_ERROR" for issue in result.issues)
-    assert result.exploration_execution.successful_requests
+    assert result.exploration_execution is None
     assert result.needs_another_cycle
 
 
@@ -266,7 +273,7 @@ def test_already_executable_needs_no_further_cycle():
 
 
 def test_empty_exploration_plan_does_not_execute(monkeypatch):
-    case, context, _ = _inputs()
+    case, context, _ = _inputs(evidence=False)
     monkeypatch.setattr(execution, "explore_page", lambda *a, **kw: pytest.fail("Empty plan"))
     result = cycle.run_resolution_cycle(case, context, resolution_llm=FakeLLM(_unresolved()),
                                        exploration_llm=FakeLLM(json.dumps({
@@ -275,7 +282,7 @@ def test_empty_exploration_plan_does_not_execute(monkeypatch):
     assert result.exploration_execution is None and result.needs_another_cycle
 
 
-def test_partial_proposal_explores_only_current_remaining_gaps(monkeypatch):
+def test_partial_proposal_does_not_explore_existing_evidence(monkeypatch):
     case, context, _ = _inputs(extra_step=True)
     raw = json.loads(_proposal())
     raw["changes"].append(json.loads(_proposal(seq=3, target="invented"))["changes"][0])
@@ -287,10 +294,9 @@ def test_partial_proposal_explores_only_current_remaining_gaps(monkeypatch):
     assert len(result.application.applied_changes) == 1
     assert result.case.steps[1].action == "ui.click"
     assert result.case.steps[2].action == "perform.unmapped"
-    gap_section = exploration.prompts[0].split("UNRESOLVED EXECUTION GAPS\n")[1].split("\n\n")[0]
-    assert [(gap["code"], gap["step_seq"]) for gap in json.loads(gap_section)] == [
-        ("UNMAPPED_ACTION", 3)]
-    assert result.exploration_execution.successful_requests
+    assert not exploration.prompts
+    assert result.exploration_execution is None
+    assert result.decisions[-1].selected_capability == 'resolution'
     assert result.needs_another_cycle
 
 
@@ -300,5 +306,6 @@ def test_missing_base_url_skips_planning_with_issue():
     result = cycle.run_resolution_cycle(case, context, resolution_llm=FakeLLM(_unresolved()),
                                        exploration_llm=exploration)
     assert not exploration.prompts
-    assert any(issue.code == "BASE_URL_REQUIRED" for issue in result.issues)
+    assert result.decisions[-1].selected_capability == "resolution"
+    assert "exploration" in result.decisions[-1].llm_call_skipped
     assert result.needs_another_cycle

@@ -184,13 +184,6 @@ scenarios:
       - condition: Refresh fails
         behavior: Session cleared
   flows: null
-  resolution_responses:
-  - testcase_id: TC_COV_001
-    changes: []
-    unresolved:
-    - code: UNMAPPED_ACTION
-      step_seq: 1
-      reason: Insufficient trusted evidence; preserve original meaning
   ground_truth:
     expect_abstention: true
     obligations:
@@ -216,13 +209,6 @@ scenarios:
       action: Open record
       rule: Read only
       result: Delete hidden
-  resolution_responses:
-  - testcase_id: TC_COV_001
-    changes: []
-    unresolved:
-    - code: UNMAPPED_ACTION
-      step_seq: 1
-      reason: Insufficient trusted evidence; preserve original meaning
   ground_truth:
     expect_abstention: true
     obligations:
@@ -247,13 +233,6 @@ scenarios:
       from_state: draft
       to_state: active
       trigger: Publish
-  resolution_responses:
-  - testcase_id: TC_COV_001
-    changes: []
-    unresolved:
-    - code: UNMAPPED_ACTION
-      step_seq: 1
-      reason: Insufficient trusted evidence; preserve original meaning
   ground_truth:
     expect_abstention: true
     obligations:
@@ -445,12 +424,6 @@ scenarios:
   base_url: https://benchmark.test
   resolution_responses:
   - testcase_id: TC_COV_001
-    changes: []
-    unresolved:
-    - code: UNMAPPED_ACTION
-      step_seq: 1
-      reason: Insufficient trusted evidence; preserve original meaning
-  - testcase_id: TC_COV_001
     changes:
     - step_seq: 1
       from_action: perform.unmapped
@@ -544,13 +517,6 @@ scenarios:
       steps:
       - action: Open /login
         expected: URL /login
-  resolution_responses:
-  - testcase_id: TC_COV_001
-    changes: []
-    unresolved:
-    - code: UNMAPPED_ACTION
-      step_seq: 1
-      reason: Insufficient trusted evidence; preserve original meaning
   ground_truth:
     expect_abstention: true
     obligations:
@@ -578,13 +544,6 @@ scenarios:
       steps:
       - action: Submit registration
         expected: Account ready
-  resolution_responses:
-  - testcase_id: TC_COV_001
-    changes: []
-    unresolved:
-    - code: UNMAPPED_ACTION
-      step_seq: 1
-      reason: Insufficient trusted evidence; preserve original meaning
   ground_truth:
     expect_abstention: true
     obligations:
@@ -838,13 +797,6 @@ scenarios:
     when: Click Login
     then: Dashboard opens
   flows: null
-  resolution_responses:
-  - testcase_id: TC_COV_001
-    changes: []
-    unresolved:
-    - code: UNMAPPED_ACTION
-      step_seq: 1
-      reason: Insufficient trusted evidence; preserve original meaning
   ground_truth:
     expect_abstention: true
     obligations:

@@ -182,7 +182,8 @@ def test_pipeline_shares_provider_only_when_explicitly_enabled(monkeypatch, tmp_
     result = pipeline.run_pipeline(cfg)
     assert result.ok and not result.generation_success
     assert received[0]["resolution_llm"] is received[0]["exploration_llm"] is adapter
-    assert factory.call_count == opener.open.call_count == 1
+    assert factory.call_count == 1
+    assert opener.open.call_count == 0  # Unsupported source work is blocked before the model.
     assert KEY not in "\n".join(result.log) + result.generation_path.read_text()
 
 

@@ -14,6 +14,7 @@ from .apply_resolution import ApplyResult, apply_validated_resolution
 from .executability import ExecutabilityReport, analyze_executability
 from .exploration_execution import ExplorationExecutionResult, execute_validated_exploration
 from .exploration_plan import ExplorationPlan, ExplorationPlanValidationResult, validate_exploration_plan
+from .gap_routing import GapRoutingDecision, route_gaps
 from .generate.from_openapi import Endpoint
 from .llm_exploration import ExplorationLLM, propose_exploration
 from .llm_resolution import LLMResponseError, ResolutionLLM, ResolutionProposal, propose_resolution
@@ -58,6 +59,7 @@ class ResolutionCycleResult:
     issues: tuple[ResolutionCycleIssue, ...]
     audit: tuple[ResolutionCycleStage, ...]
     test_data_preparation: TestDataPreparationResult | None = None
+    decisions: tuple[GapRoutingDecision, ...] = ()
 
     @property
     def needs_another_cycle(self) -> bool:
@@ -113,7 +115,8 @@ def run_resolution_cycle(
     Optional ui_map/endpoints are passed to the existing deterministic resolver;
     selected ResolutionContext evidence is retained for LLM validation. Missing
     adapters are recorded as skipped stages. Failures are isolated and may still
-    be followed by exploration, but never by a second resolution LLM request.
+    be followed by exploration only when new gaps actually require evidence.
+    Existing evidence never triggers exploration merely because a proposal failed.
     Manual/auto decisions belong solely to the resolver/applier and analyzer.
     """
     packet = deepcopy(context)
@@ -136,6 +139,7 @@ def run_resolution_cycle(
         packet = replace(packet, gaps=before.gaps)
     after = before
     issues = []
+    decisions = []
     audit = [ResolutionCycleStage("analysis", "COMPLETED")]
     if preparation and preparation.initial is not None:
         audit.insert(0, ResolutionCycleStage('test_data_preparation', preparation.status.value))
@@ -147,7 +151,7 @@ def run_resolution_cycle(
     def finish():
         return deepcopy(ResolutionCycleResult(
             working, packet, before, after, deterministic, proposal, validation,
-            application, plan, plan_validation, execution, tuple(issues), tuple(audit), preparation))
+            application, plan, plan_validation, execution, tuple(issues), tuple(audit), preparation, tuple(decisions)))
 
     def attempt(stage, operation):
         try:
@@ -191,6 +195,7 @@ def run_resolution_cycle(
         return finish()
 
     if preparation and not preparation.available:
+        decisions.append(route_gaps(working, packet, base_url=base_url, blocked=True))
         return finish()  # Neither model nor browser can invent missing/invalid data.
 
     ok, deterministic = attempt("deterministic", lambda: resolve_deterministically(
@@ -199,14 +204,22 @@ def run_resolution_cycle(
     if ok:
         working = deepcopy(deterministic.case)
         after = analyze_executability(working, context=packet)
-    if not refresh() or after.executable:
+    if not refresh():
+        return finish()
+    decision = route_gaps(working, packet, base_url=base_url,
+                          resolved_gaps=deterministic.resolved_gaps if deterministic else ())
+    decisions.append(decision)
+    if after.executable:
+        return finish()
+    if decision.selected_capability == 'none':
+        issues.append(ResolutionCycleIssue('gap_routing', 'NO_SAFE_CAPABILITY', decision.reason))
         return finish()
 
-    if resolution_llm is None:
+    if decision.selected_capability == 'resolution' and resolution_llm is None:
         issues.append(ResolutionCycleIssue("resolution_llm", "ADAPTER_REQUIRED",
                                           "No resolution LLM adapter supplied."))
         audit.append(ResolutionCycleStage("resolution_llm", "SKIPPED"))
-    else:
+    elif decision.selected_capability == "resolution":
         ok, proposal = attempt("resolution_llm", lambda: propose_resolution(
             deepcopy(packet), resolution_llm))
         if ok:
@@ -221,6 +234,12 @@ def run_resolution_cycle(
     after = analyze_executability(working, context=packet)
     audit.append(ResolutionCycleStage("reanalysis", "COMPLETED"))
     if not refresh() or after.executable or not after.gaps:
+        return finish()
+
+    if decision.selected_capability == 'resolution':
+        decision = route_gaps(working, packet, base_url=base_url)
+        decisions.append(decision)
+    if decision.selected_capability != 'exploration':
         return finish()
 
     if exploration_llm is None or base_url is None:

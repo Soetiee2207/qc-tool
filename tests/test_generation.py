@@ -58,7 +58,7 @@ def test_unresolved_generated_case_remains_separate():
     assert len(result.generated_cases) == len(result.unresolved_cases) == len(result.cases) == 1
     assert result.cases[0].execution == "manual"
     assert result.issues
-    assert any(i.code == "ADAPTER_REQUIRED" and i.testcase_id == "TC_COV_001"
+    assert any(i.code == "NO_SAFE_CAPABILITY" and i.testcase_id == "TC_COV_001"
                and i.pass_number == 1 for i in result.issues)
 
 

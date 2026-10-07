@@ -12,7 +12,7 @@ from qctool.executability import analyze_executability
 from qctool.resolution_context import build_resolution_context
 from qctool.resolution_loop import run_resolution_loop
 from qctool.testcase import Step, StepKind, TestCase
-from qctool.ui.crawl import PageMap, UIMap
+from qctool.ui.crawl import PageMap, UIMap, Element
 
 BASE = "https://app.test"
 
@@ -81,7 +81,9 @@ def test_candidate_evidence_and_safe_provider_failure_survive_real_coverage_stac
             assert '"operation_id": "createProject"' in prompt
             raise LLMProviderError("TIMEOUT", "PRIVATE transport payload")
     result = coverage_pass.run_coverage_resolution_pass(source, requirements=requirements,
-        ui_map=ui_map(), endpoints=endpoints, resolution_llm=FailedProvider(), base_url=BASE)
+        ui_map=UIMap(BASE, "now", [PageMap(BASE + "/login", "Login", elements=[
+            Element("login", "button", "Login", "button", test_id="btn-login")])]),
+        endpoints=endpoints, resolution_llm=FailedProvider(), base_url=BASE)
     assert source == saved
     record = result.case_results[0]
     context = record.resolution.cycles[0].context

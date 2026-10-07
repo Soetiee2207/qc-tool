@@ -674,12 +674,6 @@ cases:
         target: btn-login
   resolution_responses:
   - testcase_id: TC_BENCH_011
-    changes: []
-    unresolved:
-    - code: UNMAPPED_ACTION
-      step_seq: 2
-      reason: Evidence cannot establish a unique safe resolution
-  - testcase_id: TC_BENCH_011
     changes:
     - step_seq: 2
       from_action: perform.unmapped
@@ -780,12 +774,6 @@ cases:
       args:
         target: btn-profile
   resolution_responses:
-  - testcase_id: TC_BENCH_012
-    changes: []
-    unresolved:
-    - code: UNMAPPED_ACTION
-      step_seq: 2
-      reason: Evidence cannot establish a unique safe resolution
   - testcase_id: TC_BENCH_012
     changes:
     - step_seq: 2
@@ -897,12 +885,6 @@ cases:
       args:
         target: btn-login
   resolution_responses:
-  - testcase_id: TC_BENCH_013
-    changes: []
-    unresolved:
-    - code: UNMAPPED_ACTION
-      step_seq: 2
-      reason: No Save control is known
   - testcase_id: TC_BENCH_013
     changes: []
     unresolved:
