@@ -68,32 +68,44 @@ def ground_actions(item, target, context, case, base_url, store):
                 or action.step_seq < last_step or not isinstance(action.target, str)):
             raise ValueError('Unsupported or unordered action')
         last_step = action.step_seq
-        if not any(p.step_seq == action.step_seq and p.gap_code == 'UNMAPPED_ACTION' for p in item.purposes):
-            raise ValueError('Unrelated gap')
-        steps = [s for s in case.steps if s.seq == action.step_seq and s.action == 'perform.unmapped' and s.kind.value == 'when']
-        if len(steps) != 1:
-            raise ValueError('Only current unresolved source actions')
-        step = steps[0]
-        text = step.args.get('description', '')
-        requirements = [r for r in context.specification.get('requirements', [])
-                        if r.get('id') in case.traces_to and (r.get('when') == text or
-                            text in [c.strip() for c in r.get('when', '').split(';')])]
-        if not requirements or forbidden(text):
-            raise ValueError('No exact safe requirement clause')
-        meanings = _meanings(step, case.test_data)
-        position = positions.get(step.seq, 0)
-        if position >= len(meanings):
-            raise ValueError('Repeated action beyond source')
-        meaning = meanings[position]
-        positions[step.seq] = position + 1
+        source_steps = [s for s in case.steps if s.seq==action.step_seq and s.kind.value=='when']
+        replay = len(source_steps)==1 and source_steps[0].action != 'perform.unmapped'
+        if replay:
+            step,requirements,meaning = _replay_meaning(action,item,context,case,store,positions)
+            text = requirements[0]['when']
+            if forbidden(text):
+                raise ValueError('Unsafe replay source')
+            from .semantic_ir import element_matches
+        else:
+            if not any(p.step_seq == action.step_seq and p.gap_code == 'UNMAPPED_ACTION' for p in item.purposes):
+                raise ValueError('Unrelated gap')
+            steps = [s for s in case.steps if s.seq == action.step_seq and s.action == 'perform.unmapped' and s.kind.value == 'when']
+            if len(steps) != 1:
+                raise ValueError('Only current unresolved source actions')
+            step = steps[0]
+            text = step.args.get('description', '')
+            requirements = [r for r in context.specification.get('requirements', [])
+                            if r.get('id') in case.traces_to and (r.get('when') == text or
+                                text in [c.strip() for c in r.get('when', '').split(';')])]
+            if not requirements or forbidden(text):
+                raise ValueError('No exact safe requirement clause')
+            from .semantic_ir import meanings_for_step, element_matches
+            meanings = meanings_for_step(step, context, store) or _meanings(step, case.test_data)
+            position = positions.get(step.seq, 0)
+            if position >= len(meanings):
+                raise ValueError('Repeated action beyond source')
+            meaning = meanings[position]
+            positions[step.seq] = position + 1
         matches = [e for e in elements if e.get('test_id') == action.target]
         if ids[action.target] != 1 or len(matches) != 1:
             raise ValueError('Unstable target')
         element = matches[0]
         if element.get('disabled') or forbidden(element.get('name', '')) or forbidden(action.target):
             raise ValueError('Unsafe control')
-        if action.action != meaning['action'] or _norm(element.get('name', '')) != _norm(meaning.get('hint', '')):
+        if action.action != meaning['action'] or not (element_matches(element, meaning) if meaning.get('semantic') else _norm(element.get('name', '')) == _norm(meaning.get('hint', ''))):
             raise ValueError('Source/control mismatch')
+        if meaning.get('semantic') and sum(element_matches(e, meaning) for e in elements)!=1:
+            raise ValueError('Ambiguous semantic control')
         args = {'target': action.target}
         binding = {'source': 'validated_action', 'action_index': index, 'action': action.action,
                    'target': action.target, 'step_seq': step.seq, 'page': current_page,
@@ -168,3 +180,40 @@ def ground_actions(item, target, context, case, base_url, store):
         Step(step.seq, step.kind, action.action, args).validate()
         bindings.append(binding)
     return bindings
+
+
+def _replay_meaning(action, item, context, case, store, positions):
+    """A current outcome gap may inspect its already validated source prefix.
+
+    No arbitrary executable step can be reopened. Source IR, complete concrete
+    prefix, purpose linkage, exact args and the normal DOM/safety checks all apply.
+    """
+    from .source_grounding import source_clause
+    from .semantic_ir import source_meanings
+    candidates = []
+    for req in context.specification.get('requirements', []):
+        if req.get('id') not in case.traces_to or not req.get('when') or not req.get('then'):
+            continue
+        outcomes = [s for s in case.steps if s.action=='assert.unmapped' and source_clause(s,req)==req['then']
+                    and any(p.step_seq==s.seq and p.gap_code=='UNMAPPED_ACTION' for p in item.purposes)]
+        if len(outcomes)!=1:
+            continue
+        meanings = source_meanings(req['when'],'when',context,store)
+        steps = [s for s in case.steps if s.kind.value=='when' and source_clause(s,req)==req['when']]
+        if not meanings or len(meanings)!=len(steps) or any(s.action not in ALLOWED_ACTIONS for s in steps):
+            continue
+        index = positions.get(('replay',req['id']),0)
+        if index>=len(steps) or steps[index].seq!=action.step_seq:
+            continue
+        # The whole concrete prefix still agrees with its semantic source.
+        if any(s.action!=m['action'] or 'value' in m and s.args.get('value')!=m['value'] for s,m in zip(steps,meanings)):
+            continue
+        step=steps[index]
+        if step.action!=action.action or step.args.get('target')!=action.target or action.value!=step.args.get('value'):
+            continue
+        candidates.append((step,req,meanings[index]))
+    if len(candidates)!=1:
+        raise ValueError('No complete unique source prefix for this outcome gap')
+    step,req,meaning=candidates[0]
+    positions[('replay',req['id'])]=positions.get(('replay',req['id']),0)+1
+    return step,[req],meaning

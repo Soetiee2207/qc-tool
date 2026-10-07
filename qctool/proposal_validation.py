@@ -86,6 +86,14 @@ def validate_resolution_proposal(
             _changes_fingerprint(()), deepcopy(context), _context_fingerprint(context),
         )
 
+    if proposal.semantic is not None:
+        from .semantic_ir import validate_semantics, merge_semantics
+        normalized, semantic_issues = validate_semantics(proposal.semantic, context, fixture_store)
+        issues.extend(ValidationIssue(i.code, "Source authority or complete clause coverage is unproven.",
+                                     step_seq=i.step_seq) for i in semantic_issues)
+        if normalized.clauses:
+            context = replace(context, semantics=merge_semantics(context.semantics, normalized.to_dict()))
+
     context_gaps = Counter(_gap_key(gap.code, gap.step_seq) for gap in context.gaps)
     valid: list[ProposedChange] = []
     rejected: list[RejectedChange] = []
@@ -189,7 +197,13 @@ def validate_resolution_proposal(
                     grounding = _ground_action(change, references, context)
                     if grounding is not None:
                         fail(grounding, "Proposed action or arguments are not grounded in cited context evidence.")
-                    semantics = _check_semantics(step, change, references, context, fixture_store=fixture_store, working=working, origins=origins)
+                    from .semantic_ir import meanings_for_step
+                    canonical = meanings_for_step(step, context, fixture_store)
+                    if canonical:
+                        synthetic = replace(change, action="", args={}, expansion=(AtomicProposal(change.action, change.args, change.evidence),))
+                        semantics = _validate_expansion(step, synthetic, context, working, origins, allow_single=True, fixture_store=fixture_store)
+                    else:
+                        semantics = _check_semantics(step, change, references, context, fixture_store=fixture_store, working=working, origins=origins)
                     if semantics is not None:
                         fail(semantics, "Original step and requirements do not prove the proposed meaning.")
 
@@ -272,7 +286,8 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
         item.action == "ui.click" and origins[item.seq] < step.seq
         and item.args.get("capture_response", {}).get("method") == "POST"
         for item in working.steps)
-    expected = expected_expansion(step, context.testcase.get("test_data", {}),
+    from .semantic_ir import meanings_for_step
+    expected = meanings_for_step(step, context, fixture_store) or expected_expansion(step, context.testcase.get("test_data", {}),
                                   min_atoms=1 if allow_single else 2, fixture_store=fixture_store,
                                   allow_captured_login=captured_login)
     if expected is None or len(expected) != len(change.expansion):
@@ -310,7 +325,7 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
                             and legacy_page.get("state_id") in state_ids)
             if (working is None or len(state_ids) != 1 or
                     not legacy_proof and
-                    outcome_state(step, working, context, next(iter(state_ids))) is None):
+                    outcome_state(step, working, context, next(iter(state_ids)), fixture_store=fixture_store) is None):
                 return "OUTCOME_STATE_UNPROVEN"
         if error := _fixture_fill_error(atom.action, atom.args, context, fixture_store):
             return error
@@ -338,6 +353,9 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
             hint = meaning["hint"]
             def matches_hint(item: dict) -> bool:
                 name = item.get("name", "")
+                if meaning.get("semantic"):
+                    from .semantic_ir import element_matches
+                    return element_matches(item, meaning)
                 if ((atom.action == "ui.fill" or meaning.get("empty_input")) and item.get("role") != "textbox"
                         and not item.get("input_type")):
                     return False
@@ -347,10 +365,15 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
                 return _norm(hint) == _norm(name)
             matches = [item for page in _reference_pages(single, refs, context)
                        for item in page.get("elements", []) if matches_hint(item)]
+            if meaning.get("semantic"):
+                from .semantic_ir import observed_witnesses
+                pairs = observed_witnesses([(None,item) for item in matches],atom.action,
+                    state_proven=len(state_ids)==1 and next(iter(state_ids))==context.observations.get('current_state_id'))
+                matches = [item for _,item in pairs]
             # A click's stable selector was already proven unique and cited by
             # _ground_action. Same-name navigation links must not override it.
             # Still prove the selected element matches the exact source meaning.
-            stable_click = (atom.action == "ui.click" and bool(element.get("test_id"))
+            stable_click = (not meaning.get("semantic") and atom.action == "ui.click" and bool(element.get("test_id"))
                             and atom.args.get("target") == element["test_id"])
             from .source_grounding import empty_login_requirement, observed_validation, source_clause, empty_form_contract
             requirement = empty_login_requirement(working, context) if working else None
@@ -534,8 +557,16 @@ def _ground_action(change: ProposedChange, refs: list[tuple[str, dict, dict | No
 
     if action == "ui.goto":
         url = args.get("url")
-        if not isinstance(url, str) or not any(_same_route(url, page["url"]) for page, _ in ui_refs):
-            return "UI_EVIDENCE_NOT_FOUND"
+        observed = isinstance(url, str) and any(_same_route(url, page["url"]) for page, _ in ui_refs)
+        if not observed:
+            from .semantic_ir import source_authorized_routes
+            from types import SimpleNamespace
+            base = next((p.get("url") for p in context.observations.get("ui_pages", []) if urlsplit(p.get("url", "")).scheme), None)
+            cited = {r.get("id") for source, r, _ in refs if source == "requirement"}
+            authorized = base and any(_same_route(url, target) and grounding["requirement_id"] in cited
+                                     for target, grounding in source_authorized_routes(SimpleNamespace(traces_to=context.testcase.get("traces_to", [])), context, base))
+            if not authorized:
+                return "UI_EVIDENCE_NOT_FOUND"
     elif action.startswith(("ui.", "assert.")) and "target" in args:
         target = args["target"]
         if not isinstance(target, str) or not target:
@@ -577,9 +608,19 @@ def _ground_action(change: ProposedChange, refs: list[tuple[str, dict, dict | No
         if "capture_requests" in args:
             reference = re.compile(r"(?:^|;\s*)không gửi " + re.escape(capture["method"]) +
                                    r"\s+" + re.escape(capture["path"]) + r"\s*(?=;|$)")
-        if not any(item.get("seq", 0) > change.step_seq and item.get("action") == "assert.unmapped"
-                   and reference.search(str(item.get("args", {}).get("expected", "")))
-                   for item in context.testcase.get("steps", [])):
+        authorized = any(item.get("seq", 0) > change.step_seq and item.get("action") == "assert.unmapped"
+                         and reference.search(str(item.get("args", {}).get("expected", "")))
+                         for item in context.testcase.get("steps", []))
+        if not authorized and context.semantics:
+            from .semantic_ir import meanings_for_step
+            from .testcase import StepKind
+            selector_key = "no_request" if "capture_requests" in args else "operation"
+            for item in context.testcase.get("steps", []):
+                if item["seq"] > change.step_seq and item["action"] == "assert.unmapped":
+                    probe = Step(item["seq"], StepKind(item["kind"]), item["action"], item["args"], item.get("note", ""))
+                    authorized |= any(m.get(selector_key) == (capture["method"], capture["path"])
+                                      for m in meanings_for_step(probe, context) or ())
+        if not authorized:
             return "SEMANTICS_UNPROVEN"
     if action == "http.request":
         method, path = args.get("method"), args.get("path")

@@ -150,8 +150,10 @@ def _applied_repairs(result, labels):
                 repairs.append({"cycle": index, "source": "deterministic", "step_seq": change.step_seq,
                                 "before": {"action": change.from_action or change.action, "args": change.before},
                                 "after": after, **_assessment(after, by_seq.get(change.step_seq))})
-        if cycle.application:
-            for applied in cycle.application.applied_changes:
+        for application in (cycle.application, cycle.semantic_application):
+            if application is None:
+                continue
+            for applied in application.applied_changes:
                 record = applied.to_dict()
                 repairs.append({"cycle": index, "source": "validated_llm", "step_seq": record["step_seq"],
                                 "before": record["before"], "after": record["after"],

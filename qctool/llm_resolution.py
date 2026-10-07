@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TYPE_CHECKING
 
 from .resolution_context import ResolutionContext
 from .llm_prompt import MAX_PROMPT_TOKENS, check_prompt_budget, select_prompt_context, prompt_accounting, assemble_cached_prompt
+
+
+if TYPE_CHECKING:
+    from .semantic_ir import SemanticNormalization
 
 
 class LLMResponseError(ValueError):
@@ -91,6 +95,7 @@ class ResolutionProposal:
     testcase_id: str
     changes: tuple[ProposedChange, ...]
     unresolved: tuple[UnresolvedGap, ...]
+    semantic: SemanticNormalization | None = None
 
     @property
     def status(self) -> str:
@@ -103,6 +108,7 @@ class ResolutionProposal:
             "testcase_id": self.testcase_id, "status": self.status,
             "changes": [change.to_dict() for change in self.changes],
             "unresolved": [gap.to_dict() for gap in self.unresolved],
+            **({"semantic": self.semantic.to_dict()} if self.semantic is not None else {}),
         }
 
 
@@ -279,6 +285,13 @@ def build_resolution_prompt(context: ResolutionContext, *, max_prompt_tokens: in
         output_shape['changes'][0].update(step_seq=current['seq'], from_action=current['action'],
             gap_codes=[g['code'] for g in data['gaps'] if g.get('step_seq') == current['seq']])
     output_shape["changes"][0]["evidence"] = catalog[:1]
+    from .semantic_ir import source_units
+    units = source_units(context)
+    if units:
+        output_shape['semantic'] = {'clauses': [{
+            'step_seq': u['step_seq'], 'clause_index': u['clause_index'],
+            'source_text': u['source_text'], 'atoms': [{'kind':'<semantic kind>', 'args':{}}]
+        } for u in units]}
 
     expansion_shape = json.loads(json.dumps(output_shape["changes"][0]))
     expansion_shape["proposed"] = {"steps": [
@@ -331,7 +344,7 @@ def build_resolution_prompt(context: ResolutionContext, *, max_prompt_tokens: in
         "UI outcome atoms must cite the exact final current state_id from the approved full action chain, "
         "not stale/intermediate states. action_chains pools exact validated_actions/request/purposes; "
         "page_state.action_chain is its zero-based index. All chronology and source links still apply.",
-        "EXACT ENVELOPES: Root ONLY testcase_id,changes,unresolved; no status. "
+        "EXACT ENVELOPES: Root ONLY testcase_id,changes,unresolved and optional semantic; no status. "
         "Every change EXACTLY step_seq,from_action,gap_codes,proposed,reason,evidence; ALL six fields required. "
         "reason is REQUIRED on the change, a sibling of proposed and evidence, NEVER inside proposed or an atom. "
         "step_seq is a positive integer; root testcase_id is required and copies TESTCASE.id exactly. "
@@ -354,6 +367,8 @@ def build_resolution_prompt(context: ResolutionContext, *, max_prompt_tokens: in
         ]),
         *([section("COMPACT LOGIN EXAMPLE — partial proposal from this context only", example)] if example else []),
     ]
+    from .semantic_ir import semantic_prompt_contract, source_units
+    parts[-1:-1] = ['Normalize prose into semantic.clauses before proposing its action mapping. Preserve every sibling clause; omit a whole unprovable step and mark unresolved. Prefer changes=[] with complete semantic bindings when selectors can be grounded deterministically.', section('VALIDATED SEMANTICS', data.get('semantics', {})), section('EVIDENCE NEEDS', data.get('evidence_needs', [])), semantic_prompt_contract(), section('CANONICAL SOURCE CLAUSES — normalize without dropping siblings', source_units(context))]
     schemas = [('STABLE OUTPUT CONTRACT — placeholders are not evidence', _OUTPUT_SHAPE)]
     generic_expansion = json.loads(json.dumps(_OUTPUT_SHAPE['changes'][0]))
     generic_expansion['proposed'] = {'steps': [
@@ -384,11 +399,13 @@ def parse_resolution_proposal(response: str) -> ResolutionProposal:
     except (json.JSONDecodeError, ValueError) as exc:
         raise LLMResponseError("Invalid JSON response; content omitted", category="JSON_SYNTAX" if isinstance(exc, json.JSONDecodeError) else "JSON_STRUCTURE", position=getattr(exc, "pos", None)) from None
 
-    _fields(raw, {"testcase_id", "changes", "unresolved"}, "proposal")
+    _fields(raw, {"testcase_id", "changes", "unresolved"} | ({"semantic"} if isinstance(raw, dict) and "semantic" in raw else set()), "proposal")
+    from .semantic_ir import parse_semantics
+    semantic = parse_semantics(raw["semantic"]) if "semantic" in raw else None
     testcase_id = _nonempty(raw["testcase_id"], "testcase_id")
     changes_raw = _list(raw["changes"], "changes")
     unresolved_raw = _list(raw["unresolved"], "unresolved")
-    if not changes_raw and not unresolved_raw:
+    if not changes_raw and not unresolved_raw and semantic is None:
         raise LLMResponseError("Proposal must contain a change or unresolved gap", category="EMPTY_PROPOSAL")
 
     changes: list[ProposedChange] = []
@@ -453,7 +470,7 @@ def parse_resolution_proposal(response: str) -> ResolutionProposal:
             step_seq=None if seq is None else _positive_int(seq, f"{where}.step_seq"),
             reason=_nonempty(item["reason"], f"{where}.reason"),
         ))
-    return ResolutionProposal(testcase_id, tuple(changes), tuple(unresolved))
+    return ResolutionProposal(testcase_id, tuple(changes), tuple(unresolved), semantic)
 
 
 def _arguments(args: object, where: str) -> None:

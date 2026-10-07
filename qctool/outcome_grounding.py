@@ -57,7 +57,7 @@ def response_binding(case, step_seq, method, path, operation, source=None):
     return writer, name
 
 
-def outcome_state(step, case, context, state_id=None):
+def outcome_state(step, case, context, state_id=None, *, fixture_store=None):
     """Require the current, complete, approved action chain for this source.
 
     Historical states can still ground actions. Outcome assertions require the
@@ -80,7 +80,8 @@ def outcome_state(step, case, context, state_id=None):
         return None
     from .exploration_actions import _meanings
     try:
-        meanings = _meanings(Step(1, StepKind.WHEN, "perform.unmapped",
+        from .semantic_ir import source_meanings
+        meanings = source_meanings(requirement["when"], 'when', context, fixture_store) or _meanings(Step(1, StepKind.WHEN, "perform.unmapped",
                                  {"description": requirement["when"]}), case.test_data)
     except (ValueError, TypeError, KeyError):
         return None
@@ -123,7 +124,9 @@ def outcome_state(step, case, context, state_id=None):
                 or elements[0].get("role") != binding.get("role")):
             return None
         from .ui.crawl import _norm
-        if _norm(elements[0].get("name", "")) != _norm(meaning.get("hint", "")):
+        from .semantic_ir import element_matches
+        if not (element_matches(elements[0], meaning) if meaning.get('semantic') else
+                _norm(elements[0].get("name", "")) == _norm(meaning.get("hint", ""))):
             return None
         if "value" in meaning and (action.args.get("value") != meaning["value"]
                                    or binding.get("value") != meaning["value"]):

@@ -61,6 +61,8 @@ class ResolutionCycleResult:
     audit: tuple[ResolutionCycleStage, ...]
     test_data_preparation: TestDataPreparationResult | None = None
     decisions: tuple[GapRoutingDecision, ...] = ()
+    semantic_validation: ProposalValidationResult | None = None
+    semantic_application: ApplyResult | None = None
 
     @property
     def needs_another_cycle(self) -> bool:
@@ -148,11 +150,12 @@ def run_resolution_cycle(
                       for i in preparation.blockers)
     deterministic = proposal = validation = application = None
     plan = plan_validation = execution = None
+    normalized_validation = normalized_application = None
 
     def finish():
         return deepcopy(ResolutionCycleResult(
             working, packet, before, after, deterministic, proposal, validation,
-            application, plan, plan_validation, execution, tuple(issues), tuple(audit), preparation, tuple(decisions)))
+            application, plan, plan_validation, execution, tuple(issues), tuple(audit), preparation, tuple(decisions), normalized_validation, normalized_application))
 
     def attempt(stage, operation):
         try:
@@ -191,6 +194,22 @@ def run_resolution_cycle(
             packet = candidate
         return ok
 
+    def ground_semantics():
+        nonlocal working, packet, after, normalized_validation, normalized_application
+        from .semantic_ir import grounded_proposal
+        canonical = grounded_proposal(working, packet, fixture_store)
+        if not canonical.changes:
+            return
+        ok, normalized_validation = attempt("semantic_grounding", lambda: validate_resolution_proposal(
+            canonical, packet, working, fixture_store=fixture_store))
+        if ok:
+            from .evidence_needs import rejection_needs
+            packet = replace(packet, evidence_needs=rejection_needs(normalized_validation.issues, packet))
+            ok, normalized_application = attempt("semantic_application", lambda: apply_validated_resolution(working, normalized_validation))
+            if ok:
+                working = deepcopy(normalized_application.case)
+                after = analyze_executability(working, context=packet)
+
     if packet.testcase.get("id") != working.id:
         issues.append(ResolutionCycleIssue("context", "TESTCASE_MISMATCH",
                                           "Context belongs to another testcase."))
@@ -198,7 +217,7 @@ def run_resolution_cycle(
         return finish()
 
     if preparation and not preparation.available:
-        decisions.append(route_gaps(working, packet, base_url=base_url, blocked=True))
+        decisions.append(route_gaps(working, packet, fixture_store=fixture_store, base_url=base_url, blocked=True))
         return finish()  # Neither model nor browser can invent missing/invalid data.
 
     ok, deterministic = attempt("deterministic", lambda: resolve_deterministically(
@@ -209,7 +228,15 @@ def run_resolution_cycle(
         after = analyze_executability(working, context=packet)
     if not refresh():
         return finish()
-    decision = route_gaps(working, packet, base_url=base_url,
+    from .semantic_ir import normalize_explicit_identifiers, merge_semantics
+    explicit = normalize_explicit_identifiers(packet)
+    if explicit.clauses:
+        packet = replace(packet, semantics=merge_semantics(packet.semantics, explicit.to_dict()))
+    if packet.semantics:
+        ground_semantics()
+        if not refresh():
+            return finish()
+    decision = route_gaps(working, packet, fixture_store=fixture_store, base_url=base_url,
                           resolved_gaps=deterministic.resolved_gaps if deterministic else ())
     decisions.append(decision)
     if after.executable:
@@ -229,18 +256,23 @@ def run_resolution_cycle(
             ok, validation = attempt("proposal_validation", lambda: validate_resolution_proposal(
                 deepcopy(proposal), deepcopy(packet), deepcopy(working), fixture_store=fixture_store))
             if ok:
+                from .evidence_needs import rejection_needs
+                packet = replace(deepcopy(validation.analysis_context), evidence_needs=rejection_needs(validation.issues, packet))
                 ok, application = attempt("application", lambda: apply_validated_resolution(
                     deepcopy(working), deepcopy(validation)))
                 if ok:
                     working = deepcopy(application.case)
 
+    if packet.semantics and working.to_dict() != packet.testcase and not refresh():
+        return finish()
+    ground_semantics()
     after = analyze_executability(working, context=packet)
     audit.append(ResolutionCycleStage("reanalysis", "COMPLETED"))
     if not refresh() or after.executable or not after.gaps:
         return finish()
 
     if decision.selected_capability == 'resolution':
-        decision = route_gaps(working, packet, base_url=base_url)
+        decision = route_gaps(working, packet, fixture_store=fixture_store, base_url=base_url)
         decisions.append(decision)
     if decision.selected_capability != 'exploration':
         return finish()

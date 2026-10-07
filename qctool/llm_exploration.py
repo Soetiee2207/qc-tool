@@ -91,10 +91,10 @@ def build_exploration_prompt(
         "safe links with approved destinations) have an "
         "approval rule. Unknown controls stay unresolved. The V1 empty-login rule "
         "remains supported. Each action.step_seq names the unresolved source gap, "
-        "not an already executable click. Every action requires deterministic approval; "
+        "or a concrete source WHEN prefix linked by validated semantic IR to the current unresolved THEN purpose. Replay must use the complete ordered source prefix and exactly its current targets/values; do not rewrite executable actions. Every action requires deterministic approval; "
         "stop if previous actions change page unexpectedly or invalidate grounding. Omit actions "
         "when insufficient evidence. Use only explicit routes from testcase ui.goto/notes, selected UI "
-        "page URLs, or hrefs in the supplied UI evidence. Do not guess routes or invent "
+        "page URLs, hrefs in the supplied UI evidence, or exact routes explicitly opened in the traced requirement Given/When. Source-authorized unseen routes may be inspected; observed redirects do not redefine expectations. Do not guess routes or invent "
         "elements. Targets must be safe application paths or same-origin HTTP(S) URLs; "
         "never propose foreign origins, javascript:, data:, or file: targets. An API "
         "operation is not evidence of a browser page. If target relevance or application "
@@ -110,6 +110,9 @@ def build_exploration_prompt(
         section("CURRENT UI OBSERVATION — GROUNDED PAGE/LINK EVIDENCE", data["observations"]),
         section('TEST DATA EVIDENCE — declarations are not live verification; never provision', data.get('data_acquisition', {})),
         section("TESTCASE — EXPLICIT ROUTES AND SESSION REQUIREMENTS", data["testcase"]),
+        section('VALIDATED CANONICAL SOURCE INTENTS', data.get('semantics', {})),
+        section('VALIDATOR EVIDENCE NEEDS', data.get('evidence_needs', [])),
+        'Purposes MUST name gaps currently listed below. For post-action outcomes, purpose.step_seq names the unresolved THEN; action.step_seq names its concrete WHEN prefix step. Never invent UNMAPPED_ACTION on a mapped step.',
         section("UNRESOLVED EXECUTION GAPS", [asdict(gap) for gap in gap_items]),
         section("ALLOWED OBSERVATION INTENTS", sorted(OBSERVATION_INTENTS)),
         section("SESSION MODES", sorted(SESSION_MODES)),

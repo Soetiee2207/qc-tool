@@ -29,7 +29,7 @@ class GapRoutingDecision:
     llm_call_skipped: tuple[str, ...]
 
 
-def route_gaps(case, context, *, base_url=None, resolved_gaps=(), blocked=False):
+def route_gaps(case, context, *, base_url=None, resolved_gaps=(), blocked=False, fixture_store=None):
     """Choose one useful capability; this decision never approves exploration.
 
     Post-action evidence takes priority over mapping, so a workflow is inspected
@@ -49,6 +49,7 @@ def route_gaps(case, context, *, base_url=None, resolved_gaps=(), blocked=False)
     can_inspect = bool(base_url and _grounded_targets(case, context, base_url))
     empty = empty_login_requirement(case, context)
     primary = any(g.step_seq is not None for g in context.gaps)
+    normalization_required = False
     for gap in context.gaps:
         step = next((s for s in case.steps if s.seq == gap.step_seq), None)
         classification, reason = 'BLOCKED', 'No deterministically supported progress path.'
@@ -60,13 +61,14 @@ def route_gaps(case, context, *, base_url=None, resolved_gaps=(), blocked=False)
         elif gap.code == 'UNMAPPED_ACTION' and step and str(step.args.get('description', step.args.get('expected', ''))).strip().upper() in {'', 'TBC'}:
             reason = 'The source clause has no explicit business meaning.'
         elif step and gap.code in {'MISSING_LOCATOR', 'UNMAPPED_ACTION'}:
-            atoms = expected_expansion(step, case.test_data, min_atoms=1)
+            from .semantic_ir import meanings_for_step
+            atoms = meanings_for_step(step, context, fixture_store) or expected_expansion(step, case.test_data, min_atoms=1)
             if empty and step.kind == StepKind.THEN and not observed_validation(context, empty):
                 classification, reason = 'NEEDS_EXPLORATION', 'Explicit source outcome requires a post-action alert and bounded request observation.'
             elif atoms:
-                missing_ui = any(a.get('hint') and not any(
-                    _norm(e.get('name', '')) == _norm(a['hint']) or
-                    e.get('input_type') == a['hint'] for e in elements) for a in atoms)
+                from .semantic_ir import element_matches
+                missing_ui = any(a.get('hint') and not any(element_matches(e, a) for e in elements)
+                                 for a in atoms)
                 missing_operation = any(a.get('operation') and not any(
                     (op.get('method'), op.get('path')) == a['operation'] for op in operations) for a in atoms)
                 missing_counter = any(a.get('no_request') for a in atoms) and (not empty or not observed_validation(context, empty))
@@ -90,11 +92,21 @@ def route_gaps(case, context, *, base_url=None, resolved_gaps=(), blocked=False)
         elif gap.code in {'MISSING_HTTP_METHOD', 'MISSING_HTTP_PATH', 'MISSING_URL', 'MISSING_ARGUMENT', 'MISSING_RESPONSE'}:
             if operations or elements:
                 classification, reason = 'NEEDS_RESOLUTION', 'Selected contract or UI evidence is available for argument mapping.'
+        from .semantic_ir import source_units, meanings_for_step
+        if (step and step.action in case.UNMAPPED_ACTIONS
+                and any(u['step_seq'] == step.seq for u in source_units(context))
+                and meanings_for_step(step, context, fixture_store) is None
+                and expected_expansion(step, case.test_data, min_atoms=1, fixture_store=fixture_store) is None):
+            normalization_required = True
+            classification, reason = 'NEEDS_RESOLUTION', 'Normalize complete source clauses before planning their evidence acquisition.'
+        needs = [n for n in context.evidence_needs if n.get('step_seq') == gap.step_seq and n.get('gap_code') == gap.code]
+        if any(n['kind'] in {'UI_STATE', 'WORKFLOW_STATE', 'NETWORK_BINDING'} for n in needs):
+            classification, reason = 'NEEDS_EXPLORATION', 'Validator identified missing UI/state provenance; collect evidence once.'
         if classification == 'NEEDS_EXPLORATION' and not can_inspect:
             classification, reason = 'BLOCKED', 'No configured same-origin application target for inspection.'
         entries.append(GapClassification(gap, classification, reason))
     classes = {item.classification for item in entries if item.gap in context.gaps}
-    selected = ('exploration' if 'NEEDS_EXPLORATION' in classes else
+    selected = ('resolution' if normalization_required else 'exploration' if 'NEEDS_EXPLORATION' in classes else
                 'resolution' if 'NEEDS_RESOLUTION' in classes else 'none')
     reason = {'exploration': 'Collect missing evidence before requesting a mapping.',
               'resolution': 'Trusted evidence is already selected; request mapping only.',

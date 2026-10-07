@@ -124,6 +124,11 @@ def _evidence_facts(context: ResolutionContext) -> frozenset[str]:
         add('state', scope, state['page'])
         for record in state.get('network', []):
             add('state_network', scope, record)
+    if context.semantics:
+        add('validated_semantics', None, context.semantics)
+    for need in context.evidence_needs:
+        if any(g.step_seq == need.get('step_seq') and g.code == need.get('gap_code') for g in context.gaps):
+            add('evidence_need', None, need)
     return frozenset(facts)
 
 

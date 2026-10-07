@@ -157,6 +157,9 @@ def _grounded_targets(case: TestCase, context: ResolutionContext, base_url: str)
                     and not any(char.isspace() for char in value)):
                 add(value, {"source": "testcase_step", "step_seq": step.seq,
                             "field": field, "value": value})
+    from .semantic_ir import source_authorized_routes
+    for url, proof in source_authorized_routes(case, context, base_url):
+        add(url, proof)
     for page in context.observations.get("ui_pages", []):
         page_url = page.get("url", "")
         if not isinstance(page_url, str) or _normalized_target(page_url, base_url) is None:

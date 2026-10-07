@@ -266,10 +266,14 @@ def select_prompt_context(context: ResolutionContext, *, gaps=None):
         observations['page_states'].append(reduced)
     if action_chains:
         observations['action_chains'] = action_chains
+    if context.semantics:
+        data['semantics'] = deepcopy(context.semantics)
+    if context.evidence_needs:
+        data['evidence_needs'] = deepcopy(context.evidence_needs)
     return data
 
 
-PROTOCOL_VERSIONS = {'resolution': '2', 'exploration': '2'}
+PROTOCOL_VERSIONS = {'resolution': '3', 'exploration': '3'}
 DYNAMIC_MARKER = 'DYNAMIC TESTCASE / CYCLE EVIDENCE'
 
 

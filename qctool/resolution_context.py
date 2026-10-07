@@ -35,6 +35,8 @@ class ResolutionContext:
     allowed_actions: dict
     constraints: tuple[str, ...]
     data_acquisition: dict = field(default_factory=dict)
+    semantics: dict = field(default_factory=dict)
+    evidence_needs: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict:
         """Return detached JSON-compatible data, ready for JSON or safe YAML."""
@@ -52,6 +54,10 @@ class ResolutionContext:
         }
         if self.data_acquisition:
             payload['data_acquisition'] = self.data_acquisition
+        if self.semantics:
+            payload['semantics'] = self.semantics
+        if self.evidence_needs:
+            payload['evidence_needs'] = self.evidence_needs
         return json.loads(json.dumps(payload, ensure_ascii=False))
 
 
