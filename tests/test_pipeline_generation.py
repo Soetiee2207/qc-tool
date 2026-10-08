@@ -90,6 +90,38 @@ def test_missing_case_crawls_then_resolves_deterministically(monkeypatch, tmp_pa
     assert result.xlsx_path.is_file()
 
 
+@pytest.mark.parametrize("controlled", [True, False])
+def test_bootstrap_failure_progress_has_safe_diagnostic(monkeypatch, tmp_path, controlled):
+    from qctool.execute import browser
+
+    class FailedLogin:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def login(self, *args):
+            if controlled:
+                raise browser.LoginError("LOGIN_FORM_AMBIGUOUS", "Có nhiều ô tài khoản")
+            raise RuntimeError("sensitive-password sensitive-account")
+
+    monkeypatch.setattr(browser, "BrowserSession", FailedLogin)
+    monkeypatch.setattr(ui, "crawl", lambda *args, **kwargs: UIMap(BASE, "recorded", []))
+    cfg = setup(monkeypatch, tmp_path, web_url=BASE, auth_mode="browser",
+                username="sensitive-account", password="sensitive-password")
+    progress = []
+    result = pipeline.run_pipeline(cfg, on_progress=lambda stage, msg: progress.append(msg))
+    diagnostics = "\n".join(progress + result.log)
+    assert "Đăng nhập không thành công" in diagnostics
+    assert ("LOGIN_FORM_AMBIGUOUS" if controlled else "RuntimeError") in diagnostics
+    assert "sensitive-password" not in diagnostics
+    assert "sensitive-account" not in diagnostics
+
+
 def test_unresolved_candidates_are_manual_and_never_execute(monkeypatch, tmp_path):
     cfg = setup(monkeypatch, tmp_path, sources("Create account", "Account provisioned"),
                 base_url="http://127.0.0.1:9")

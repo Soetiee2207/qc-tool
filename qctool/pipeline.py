@@ -368,7 +368,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
 
                 if need_login:
                     try:
-                        notify("crawl", f"Đăng nhập bằng {cfg.username}…")
+                        notify("crawl", "Đăng nhập bằng tài khoản đã cấu hình…")
                         from .execute.browser import BrowserSession
 
                         with BrowserSession(cfg.web_url, headless=cfg.headless,
@@ -386,8 +386,10 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                         # Đăng nhập hỏng KHÔNG được chặn phần còn lại: crawl ẩn danh
                         # vẫn dựng được UI map, và case cần xác thực sẽ báo `Blocked`
                         # kèm lý do — đúng nghĩa "thiếu điều kiện", không phải lỗi sản phẩm.
-                        log(f"  ⚠ Đăng nhập không thành công: {type(exc).__name__}: {exc}")
-                        notify("crawl", "Đăng nhập không thành công — crawl không cần "
+                        from .execute.browser import LoginError
+                        reason = str(exc) if isinstance(exc, LoginError) else type(exc).__name__
+                        log(f"  ⚠ Đăng nhập không thành công: {reason}")
+                        notify("crawl", f"Đăng nhập không thành công ({reason}) — crawl không cần "
                                         "đăng nhập vẫn chạy tiếp")
             try:
                 if needs_ui_evidence:
@@ -633,8 +635,10 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                         notify("run", browser.login(cfg.username, cfg.password))
                     except Exception as exc:            # noqa: BLE001
                         browser.authenticated = False
-                        log(f"  ⚠ Đăng nhập không thành công: {type(exc).__name__}: {exc}")
-                        notify("run", "Đăng nhập không thành công — vẫn chạy tiếp; "
+                        from .execute.browser import LoginError
+                        reason = str(exc) if isinstance(exc, LoginError) else type(exc).__name__
+                        log(f"  ⚠ Đăng nhập không thành công: {reason}")
+                        notify("run", f"Đăng nhập không thành công ({reason}) — vẫn chạy tiếp; "
                                       "case cần xác thực sẽ báo bị chặn")
             except Exception as exc:                    # noqa: BLE001
                 log(f"  ⚠ Không mở được trình duyệt: {type(exc).__name__}: {exc}")

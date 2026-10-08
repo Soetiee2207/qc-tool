@@ -57,6 +57,14 @@ class BrowserError(Exception):
     """Không mở được trình duyệt, hoặc Playwright chưa cài."""
 
 
+class LoginError(BrowserError):
+    """Lỗi bootstrap có mã và thông báo an toàn, không chứa dữ liệu form."""
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(f"{code}: {message}")
+
+
 class NeedsEnvironment(Exception):
     """Bước này không chạy được vì **môi trường**, không phải vì sản phẩm.
 
@@ -388,6 +396,90 @@ class BrowserSession:
         return any(mark in path for mark in ("/login", "/signin", "/sign-in"))
 
     def login(self, username: str, password: str) -> str:
+        """Đăng nhập form trực tiếp nếu có, hoặc dùng luồng SSO hiện có.
+
+        Chỉ chọn form/control duy nhất; không đoán selector theo sản phẩm.
+        Không thu nội dung console, URL query hay trace chứa credentials.
+        """
+        self.authenticated = False
+        private_before = self._capture_private
+        self._capture_private = True
+        traced = False
+        try:
+            self._implicit_context()
+            if self.trace_enabled:
+                self._context.tracing.stop()  # discard bootstrap trace before filling
+                traced = True
+            self.goto("/login")
+            if self._login_local_form(username, password):
+                self.authenticated = True
+                return "Đã đăng nhập qua form trực tiếp"
+            return self._login_sso(username, password)
+        except LoginError:
+            raise
+        except Exception as exc:
+            # Playwright exceptions may include filled values / URL parameters.
+            raise LoginError("LOGIN_BROWSER_ERROR", type(exc).__name__) from None
+        finally:
+            self._capture_private = private_before
+            if traced and self.authenticated:
+                self._context.tracing.start(screenshots=True, snapshots=True)
+
+    def _login_local_form(self, username: str, password: str) -> bool:
+        """False chỉ khi không có form mật khẩu trực tiếp (có thể là SSO)."""
+        passwords = [field for field in self.page.locator('input[type="password"]').all()
+                     if field.is_visible() and field.is_editable()]
+        if not passwords:
+            return False
+        if len(passwords) != 1:
+            raise LoginError("LOGIN_FORM_AMBIGUOUS", "Có nhiều ô mật khẩu khả dụng")
+        password_field = passwords[0]
+        form = password_field.locator("xpath=ancestor::form")
+        if form.count() != 1:
+            raise LoginError("LOGIN_FORM_UNSUPPORTED", "Ô mật khẩu không thuộc một form duy nhất")
+        fields = [field for field in form.locator(
+            'input:not([type="password"]):not([type="hidden"]):not([type="submit"]):not([type="button"])'
+        ).all() if field.is_visible() and field.is_editable()
+                  and field.get_attribute("type") in (None, "text", "email", "tel")]
+        identified = [field for field in fields
+                      if (field.get_attribute("name") or "").lower() in {"email", "username"}
+                      or field.get_attribute("type") == "email"
+                      or (field.get_attribute("autocomplete") or "").lower() in {"email", "username"}]
+        candidates = identified or fields
+        if len(candidates) != 1:
+            raise LoginError("LOGIN_FORM_AMBIGUOUS", "Không xác định duy nhất ô tài khoản")
+        submits = [control for control in form.locator("button, input").all()
+                   if control.is_visible() and control.is_enabled()
+                   and control.evaluate("el => el.type === 'submit'")]
+        if len(submits) != 1:
+            raise LoginError("LOGIN_FORM_AMBIGUOUS", "Không xác định duy nhất nút submit của form")
+        initial_url = self.page.url
+        candidates[0].fill(username, timeout=self.timeout_ms)
+        password_field.fill(password, timeout=self.timeout_ms)
+        submits[0].click(timeout=self.timeout_ms)
+        try:
+            self.page.wait_for_url(
+                lambda url: str(url) != initial_url
+                and origin_of(str(url)) == origin_of(self.base_url)
+                and not self._on_login_url(str(url)),
+                timeout=self.timeout_ms,
+            )
+        except Exception:
+            raise LoginError("LOGIN_NOT_COMPLETED", "Không về ứng dụng trong thời hạn; kiểm tra phản hồi login/mạng") from None
+        # SPA URL updates can precede React removing the form. Auto-wait for
+        # the original form to disappear, rather than reading DOM once.
+        try:
+            self._expect(self.page.locator('input[type="password"]:visible')).to_have_count(
+                0, timeout=self.timeout_ms,
+            )
+        except Exception:
+            raise LoginError("LOGIN_NOT_COMPLETED", "Form mật khẩu vẫn hiển thị sau submit") from None
+        self._wait_for_render()
+        if origin_of(self.page.url) != origin_of(self.base_url) or self._on_login_url(self.page.url):
+            raise LoginError("LOGIN_NOT_COMPLETED", "Chưa ở trạng thái ứng dụng sau submit")
+        return True
+
+    def _login_sso(self, username: str, password: str) -> str:
         """Đăng nhập qua form của IdP — giống người dùng thật làm.
 
         Vì sao không dùng password grant: client SPA công khai (Keycloak `vd-portal`)
@@ -397,7 +489,6 @@ class BrowserSession:
         Đăng nhập xong thì session trình duyệt đã có phiên, nên mọi case UI chạy
         sau đó đều ở trạng thái đã đăng nhập.
         """
-        self.goto("/login")
         self.page.wait_for_timeout(1200)
 
         # Bấm nút đăng nhập của portal để chuyển sang IdP
@@ -410,9 +501,7 @@ class BrowserSession:
                     clicked = True
                     break
         if not clicked:
-            raise BrowserError(
-                f"Không tìm thấy nút đăng nhập trên trang (đang ở {self.page.url[:80]})"
-            )
+            raise LoginError("LOGIN_CONTROL_NOT_FOUND", "Không tìm thấy nút đăng nhập SSO")
 
         # Chờ chuyển sang trang của IdP — đây là bước dễ hỏng nhất khi mạng chập
         for _ in range(12):
@@ -420,20 +509,14 @@ class BrowserSession:
             if "auth." in self.page.url or "openid-connect" in self.page.url:
                 break
         else:
-            raise BrowserError(
-                f"Bấm đăng nhập nhưng không chuyển được sang trang IdP "
-                f"(đang ở {self.page.url[:80]})"
-            )
+            raise LoginError("LOGIN_IDP_NOT_REACHED", "Không chuyển được sang trang IdP")
 
         # Điền form của IdP
         try:
             self.page.locator("input[name='username']").first.fill(username, timeout=15000)
             self.page.locator("input[name='password']").first.fill(password, timeout=15000)
         except Exception as exc:                        # noqa: BLE001
-            raise BrowserError(
-                f"Không thấy form đăng nhập của IdP (đang ở {self.page.url[:80]}). "
-                f"Chi tiết: {type(exc).__name__}"
-            ) from exc
+            raise LoginError("LOGIN_IDP_FORM_NOT_FOUND", type(exc).__name__) from None
 
         for selector in ("button[type='submit']", "input[type='submit']",
                          "#kc-login", "button:has-text('Sign In')"):
@@ -449,13 +532,10 @@ class BrowserSession:
         self._wait_for_render()
 
         url = self.page.url
-        if "auth.datafactory" in url or "/protocol/openid-connect/auth" in url:
-            raise BrowserError(
-                "Đăng nhập không thành công — vẫn đang ở trang của IdP. "
-                "Kiểm tra lại tài khoản/mật khẩu."
-            )
+        if origin_of(url) != origin_of(self.base_url) or self._on_login_url(url) or "/protocol/openid-connect/auth" in url:
+            raise LoginError("LOGIN_NOT_COMPLETED", "Vẫn ở trang đăng nhập/IdP sau submit")
         self.authenticated = True
-        return f"Đã đăng nhập, hiện ở {url}"
+        return "Đã đăng nhập qua SSO"
 
     # ── Lấy token cho các test API ──────────────────────────────────────────
     def _capture_auth_header(self, request) -> None:
