@@ -19,7 +19,10 @@ from .crawl import (
 if TYPE_CHECKING:
     from ..exploration_plan import ValidatedExplorationRequest
 
-MAX_ELEMENTS = 60
+# Includes interaction controls AND text witnesses. Keep a bounded snapshot
+# large enough for an ordinary detail page; omissions still block name-only
+# uniqueness proofs rather than being silently treated as complete evidence.
+MAX_ELEMENTS = 120
 MAX_TEXT = 40
 MAX_FORMS = 10
 MAX_NETWORK = 40
@@ -288,6 +291,14 @@ def explore_page(
     def safe_url(value):
         return _safe_url(fixture_store.redact(value) if fixture_store else value)
 
+    def inspect_state():
+        # Completeness belongs to this snapshot, not to an earlier page in the
+        # workflow. Keep the aggregate flags separately for the overall audit.
+        flags = set()
+        snapshot, snapshot_forms = _inspect(page, request.collect_text, flags, redact=redact, safe_url=safe_url)
+        truncated.update(flags)
+        return snapshot, snapshot_forms, sorted(flags)
+
     def result() -> ExplorationResult:
         safe_request = replace(request, target=safe_url(request.target), reason=redact(request.reason))
         return ExplorationResult(safe_request, final_url, page_map, forms, tuple(network),
@@ -356,7 +367,8 @@ def explore_page(
                     g.get("source") in {"validated_click", "validated_action"} and g.get("capture_requests") and
                     matches_request(response.request, g["capture_requests"])
                     for g in approved.grounding
-                ):
+                ) and not any(matches_request(response.request, selector)
+                              for g in bindings for selector in g.get('read_requests', [])):
                     return
             if len(network) >= MAX_NETWORK:
                 truncated.add("network")
@@ -391,9 +403,10 @@ def explore_page(
             # Bind DOM nodes per state; handles never cross an approved navigation.
             nodes = {}
             node_page = None
-            initial_page, _ = _inspect(page, request.collect_text, truncated, redact=redact, safe_url=safe_url)
+            initial_page, _, initial_flags = inspect_state()
             states.append({'state_id': observed_at + ':0', 'valid': True, 'page': initial_page.to_dict(),
                            'triggering_action': None, 'source_clause': None, 'network': list(network),
+                           'truncated': initial_flags,
                            'source': {'type': 'playwright_exploration', 'observed_at': observed_at}})
             unsafe_network = False
             def safe_request(route):
@@ -407,9 +420,26 @@ def explore_page(
                                        and req.url in {bindings[active_action_index]['url'], bindings[active_action_index]['expected_url']})
                 approved_preflight = req.method == 'OPTIONS' and any(
                     g.get('capture_requests') and matches_request(req, {**g['capture_requests'], 'method': 'OPTIONS'}) for g in bindings)
+                approved_read = any(matches_request(req, selector)
+                                    or req.method == 'OPTIONS' and matches_request(req, {**selector, 'method': 'OPTIONS'})
+                                    for g in bindings for selector in g.get('read_requests', []))
                 safe_read = req.method in {"GET", "HEAD", "OPTIONS"} and _origin(req.url) == _origin(base_url) and not forbidden(urlsplit(req.url).path)
-                if active_action_index is not None and not (allowed_login or approved_navigation or approved_preflight or safe_read):
-                    unsafe_network = True
+                if active_action_index is not None and not (allowed_login or approved_navigation or approved_preflight or approved_read or safe_read):
+                    # A split-origin SPA may load background resources after an
+                    # approved transition. Keep denying unapproved requests;
+                    # denied passive reads are not a failed action/transition.
+                    # Never exempt navigation, writes or dangerous API reads.
+                    passive_read = (req.method in {"GET", "HEAD", "OPTIONS"}
+                                    and not req.is_navigation_request()
+                                    and (not forbidden(urlsplit(req.url).path)
+                                         or req.resource_type in {"image", "font", "stylesheet"}))
+                    if passive_read:
+                        issue = ExplorationIssue('BACKGROUND_REQUEST_BLOCKED',
+                            f'Unapproved background {req.method} {safe_url(req.url)} blocked; no response inspected.')
+                        if issue not in issues and len(issues) < MAX_NETWORK:
+                            issues.append(issue)
+                    else:
+                        unsafe_network = True
                     route.abort()
                 else:
                     route.continue_()
@@ -484,7 +514,7 @@ def explore_page(
                     return result()
                 page.wait_for_timeout(250)
                 if render_wait_ms:
-                    _wait_for_render(page, max_wait_ms=min(render_wait_ms, 1000))
+                    _wait_for_render(page, max_wait_ms=render_wait_ms if binding['expected_url'] != binding['page'] else min(render_wait_ms, 1000))
                 if unsafe_network:
                     issues.append(ExplorationIssue('UNSAFE_NETWORK_REQUEST', 'Unapproved write or foreign request was blocked; remaining actions stopped.'))
                     return result()
@@ -497,7 +527,7 @@ def explore_page(
                     return result()
                 valid_transition = not unexpected_url and page.url == binding['expected_url']
                 final_url = safe_url(page.url)
-                post_page, _ = _inspect(page, request.collect_text, truncated, redact=redact, safe_url=safe_url) if valid_transition else (None, ())
+                post_page, _, state_flags = inspect_state() if valid_transition else (None, (), [])
                 state_id = observed_at + ':' + str(len(states))
                 record = {'action_index': index, 'action': action.action, 'target': action.target,
                           'source_step_seq': action.step_seq, 'source_clause': binding['source_clause'],
@@ -505,6 +535,7 @@ def explore_page(
                           'state_id': state_id, 'from_state_id': states[-1]['state_id'],
                           'final_url': unexpected_url or final_url, 'page': post_page.to_dict() if post_page else {'url': unexpected_url or final_url},
                           'valid_transition': valid_transition, 'network': list(network[network_start:]),
+                          'truncated': state_flags,
                           'source': {'type': 'playwright_exploration', 'observed_at': datetime.now(timezone(timedelta(hours=7))).isoformat()}}
                 if observation:
                     record.update(request_count=observation['body']['request_count'], selector=observation['_ui_trigger'])
@@ -513,6 +544,7 @@ def explore_page(
                                'valid': valid_transition, 'triggering_action': index,
                                'source_step_seq': action.step_seq,
                                'source_clause': binding['source_clause'], 'page': record['page'],
+                               'truncated': state_flags,
                                'network': record['network'], 'source': record['source']})
                 if not valid_transition:
                     issues.append(ExplorationIssue('UNEXPECTED_TRANSITION', 'Observed or attempted destination did not match the approved state.'))

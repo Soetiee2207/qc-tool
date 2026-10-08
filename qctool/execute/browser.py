@@ -719,7 +719,42 @@ class BrowserSession:
 
     def click(self, args: dict) -> str:
         locator = self.locate(args)
-        locator.click(timeout=self.timeout_ms)
+        # networkidle can already be satisfied on an SPA's existing document.
+        # It is not a barrier for a POST started by this click; navigating next
+        # can cancel the request before the app stores its resulting session.
+        # Track only writes started by the click, never old/background polling,
+        # and retain no URL, headers, payload or response body.
+        pending = set()
+        collecting = True
+        initial_url = self.page.url
+        def started(request):
+            if (collecting and request.resource_type in {'xhr', 'fetch'}
+                    and request.method not in {'GET', 'HEAD', 'OPTIONS'}):
+                pending.add(request)
+        def finished(request):
+            pending.discard(request)
+        listeners = [('request', started), ('requestfinished', finished), ('requestfailed', finished)]
+        deadline = time.monotonic() + self.timeout_ms / 1000
+        for event, handler in listeners:
+            self.page.on(event, handler)
+        try:
+            locator.click(timeout=self.timeout_ms)
+            self.page.wait_for_timeout(50)  # Dispatch the click's immediate async work.
+            collecting = False
+            # A completed navigation is also a completion signal. Some apps
+            # navigate after response headers and abandon an unread fetch body,
+            # so the old document may never emit requestfinished for that body.
+            while pending and self.page.url == initial_url and time.monotonic() < deadline:
+                self.page.wait_for_timeout(50)
+            if pending and self.page.url == initial_url:
+                error = NeedsEnvironment('UI_ACTION_RESPONSE_TIMEOUT: click-triggered request did not complete within the browser timeout.')
+                error.code = 'UI_ACTION_RESPONSE_TIMEOUT'
+                raise error
+            self.page.wait_for_timeout(50)  # Let the completed response update SPA state.
+        finally:
+            for event, handler in listeners:
+                with contextlib.suppress(Exception):
+                    self.page.remove_listener(event, handler)
         self._wait_for_render(max_wait_ms=4000)
         return f"Đã bấm «{self._label(args)}» → {self.page.url}"
 

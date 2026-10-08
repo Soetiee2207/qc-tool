@@ -156,13 +156,34 @@ def test_identical_rejected_planner_state_does_not_repeat_call():
 
 
 @pytest.fixture
-def authenticated_app():
+def authenticated_app(request):
     counts = {'posts': 0, 'destination': 0}
+    background = getattr(request, 'param', None)
+    crowded_home = background == 'crowded_home'
+    slow_login = background == 'slow_login'
+    if crowded_home or slow_login:
+        background = None
+    foreign = None
+    if background:
+        counts['foreign_requests'] = 0
+        class ForeignHandler(BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+            def do_GET(self):
+                counts['foreign_requests'] += 1
+                self.send_response(200); self.send_header('Access-Control-Allow-Origin', '*'); self.end_headers()
+            do_POST = do_GET
+        foreign = ThreadingHTTPServer(('127.0.0.1', 0), ForeignHandler)
+        foreign_thread = threading.Thread(target=foreign.serve_forever, daemon=True)
+        foreign_thread.start()
+        counts['foreign_origin'] = f'http://127.0.0.1:{foreign.server_port}'
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args): pass
         def do_POST(self):
             counts['posts'] += 1
             self.rfile.read(int(self.headers.get('Content-Length', 0)))
+            if slow_login:
+                import time
+                time.sleep(0.6)
             self.send_response(200); self.send_header('Set-Cookie', 'auth=1; Path=/')
             self.send_header('Content-Type', 'application/json'); self.end_headers()
             self.wfile.write(b'{"success":true,"token":"PRIVATE_RESPONSE"}')
@@ -178,11 +199,119 @@ def authenticated_app():
             elif self.path == '/destination':
                 html = '<h1>Profile</h1><span>Customer</span><button data-testid=tab>All</button>'
             else: html = '<h1>Home</h1>'
+            if self.path == '/home' and crowded_home:
+                from qctool.ui.explore import MAX_ELEMENTS
+                html += ''.join(f'<span>Unrelated content {i}</span>' for i in range(MAX_ELEMENTS + 20))
+            if self.path == '/home' and background:
+                method, path = background
+                html += f"<script>fetch('http://127.0.0.1:{foreign.server_port}{path}?token=PRIVATE_QUERY',{{method:'{method}'}}).catch(()=>{{}})</script>"
             self.wfile.write(html.encode())
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
     yield f'http://127.0.0.1:{server.server_port}', counts
     server.shutdown(); server.server_close(); thread.join()
+    if foreign:
+        foreign.shutdown(); foreign.server_close(); foreign_thread.join()
+
+
+@pytest.mark.playwright
+@pytest.mark.parametrize('authenticated_app', [('GET', '/background'), ('POST', '/background'), ('GET', '/delete')], indirect=True)
+def test_denied_background_read_does_not_discard_approved_workflow(authenticated_app, request):
+    base, counts = authenticated_app
+    case, context, ui, store = inputs(base)
+    before = deepcopy((case, context, ui))
+    approved = validate_exploration_plan(plan_for(context, store), context, case, base, fixture_store=store)
+    execution = execute_validated_exploration(approved, context, base_url=base, fixture_store=store, render_wait_ms=0)
+    method, path = request.node.callspec.params['authenticated_app']
+    assert counts['foreign_requests'] == 0  # No additional network permission.
+    codes = [issue.code for issue in execution.issues]
+    if method == 'GET' and path == '/background':
+        assert codes == ['BACKGROUND_REQUEST_BLOCKED']
+        assert counts['destination'] == 1
+        assert execution.successful_requests
+        assert outcome_state(case.steps[-1], case, execution.context, fixture_store=store)
+        proposal = grounded_proposal(case, execution.context, store)
+        validation = validate_resolution_proposal(proposal, execution.context, case, fixture_store=store)
+        assert apply_validated_resolution(case, validation).after.executable
+    else:
+        assert 'UNSAFE_NETWORK_REQUEST' in codes
+        assert counts['destination'] == 0
+        assert not execution.successful_requests
+        assert not outcome_state(case.steps[-1], case, execution.context, fixture_store=store)
+    assert 'PRIVATE_QUERY' not in json.dumps(execution.to_dict())
+    assert (case, context, ui) == before
+
+
+@pytest.mark.playwright
+@pytest.mark.parametrize('authenticated_app', [('GET', '/background')], indirect=True)
+def test_exact_contract_read_permission_is_sealed_and_observable(authenticated_app):
+    base, counts = authenticated_app
+    case, context, ui, store = inputs(base)
+    context.interface_contract['background_reads'] = [{'method': 'GET', 'path': '/background',
+                                                     'servers': [counts['foreign_origin']]}]
+    approved = validate_exploration_plan(plan_for(context, store), context, case, base, fixture_store=store)
+    before = deepcopy((case, context, ui, approved))
+    execution = execute_validated_exploration(approved, context, base_url=base, fixture_store=store, render_wait_ms=0)
+    assert not execution.issues, execution.to_dict()
+    assert counts['foreign_requests'] == 1
+    assert counts['destination'] == 1
+    assert any(n['method'] == 'GET' and n['url'] == counts['foreign_origin'] + '/background'
+               for n in execution.exploration_results[0].network)
+    assert outcome_state(case.steps[-1], case, execution.context, fixture_store=store)
+    assert (case, context, ui, approved) == before
+    tampered = deepcopy(approved.valid_requests[0])
+    next(g for g in tampered.grounding if g.get('source') == 'validated_action')['read_requests'].append(
+        {'method': 'POST', 'path': '/invented', 'origin': counts['foreign_origin']})
+    from qctool.ui.explore import explore_page
+    result = explore_page(tampered, base_url=base, fixture_store=store)
+    assert [i.code for i in result.issues] == ['ACTION_NOT_VALIDATED']
+    assert counts['foreign_requests'] == 1
+
+
+@pytest.mark.playwright
+@pytest.mark.parametrize('authenticated_app', ['crowded_home'], indirect=True)
+def test_prior_page_truncation_cannot_poison_complete_destination(authenticated_app):
+    base, _ = authenticated_app
+    case, context, ui, store = inputs(base)
+    approved = validate_exploration_plan(plan_for(context, store), context, case, base, fixture_store=store)
+    execution = execute_validated_exploration(approved, context, base_url=base, fixture_store=store, render_wait_ms=0)
+    observed = execution.exploration_results[0]
+    assert not execution.issues
+    assert 'elements' in observed.truncated  # Aggregate audit still reports omissions.
+    assert 'elements' in observed.states[-2]['truncated']
+    assert observed.states[-1]['truncated'] == []
+    final = execution.context.observations['page_states'][-1]
+    assert final['truncated'] == []
+    validation = validate_resolution_proposal(grounded_proposal(case, execution.context, store),
+        execution.context, case, fixture_store=store)
+    assert apply_validated_resolution(case, validation).after.executable
+
+
+@pytest.mark.playwright
+@pytest.mark.parametrize('authenticated_app', ['slow_login'], indirect=True)
+@pytest.mark.parametrize('timeout_ms,expected_status', [(3000, 'Pass'), (200, 'Blocked')])
+def test_real_runner_waits_for_click_write_before_navigation(authenticated_app, timeout_ms, expected_status):
+    from qctool.execute.browser import BrowserSession
+    from qctool.execute.runner import HttpSession, run_cases
+    base, counts = authenticated_app
+    case, context, _, store = inputs(base)
+    approved = validate_exploration_plan(plan_for(context, store), context, case, base, fixture_store=store)
+    execution = execute_validated_exploration(approved, context, base_url=base, fixture_store=store, render_wait_ms=0)
+    validation = validate_resolution_proposal(grounded_proposal(case, execution.context, store),
+        execution.context, case, fixture_store=store)
+    applied = apply_validated_resolution(case, validation).case
+    before = deepcopy(applied)
+    with BrowserSession(base, timeout_ms=timeout_ms) as browser:
+        result = run_cases([applied], HttpSession(base), browser=browser, fixture_store=store)
+    assert result.cases[0].status == expected_status, (result.cases[0].blocked_reason, result.cases[0].actual)
+    if expected_status == 'Pass':
+        assert all(step.ok for step in result.cases[0].steps)
+        assert result.cases[0].steps[-1].action == 'assert.url_matches'
+    else:
+        assert 'UI_ACTION_RESPONSE_TIMEOUT' in result.cases[0].blocked_reason
+        assert result.cases[0].steps[-1].issue_code == 'UI_ACTION_RESPONSE_TIMEOUT'
+    assert applied == before
+    assert 'PRIVATE_PASSWORD' not in json.dumps(result.to_dict())
 
 
 @pytest.mark.playwright
@@ -264,6 +393,31 @@ def test_prefix_contract_selection_keeps_own_outcomes_separate(tmp_path):
     assert rebuilt.specification['requirements'][0]['then'] == context.specification['requirements'][0]['then']
     assert rebuilt.specification['prerequisites'][0]['evidence']['relation'] == 'exact_workflow_prefix'
     assert (case, requirements) == before
+
+
+def test_background_contract_reads_are_permissions_not_assertion_authority(tmp_path):
+    from qctool.generate.loader import load_endpoints
+    from qctool.llm_resolution import _evidence_catalog
+    import yaml
+    case, context, _, _ = inputs()
+    spec = tmp_path / 'contract.yaml'
+    spec.write_text(yaml.safe_dump({'openapi': '3.0.3', 'servers': [{'url': 'https://api.example.test'}], 'paths': {
+        '/api/session': {'post': {'operationId': 'session', 'responses': {'200': {'description': 'ok'}}}},
+        '/api/declared-read': {'get': {'operationId': 'read', 'responses': {'200': {'description': 'ok'}}}},
+        '/api/unrelated-write': {'post': {'operationId': 'write', 'responses': {'200': {'description': 'ok'}}}},
+        '/api/external': {'get': {'x-external': True, 'operationId': 'external', 'responses': {'200': {'description': 'ok'}}}},
+    }}))
+    endpoints = load_endpoints(spec)[0]
+    before = deepcopy((case, endpoints))
+    packet = build_resolution_context(case, context.gaps,
+        requirements=context.specification['requirements'] + context.specification['prerequisites'], endpoints=endpoints)
+    assert [op['path'] for op in packet.interface_contract['api_operations']] == ['/api/session']
+    reads = packet.interface_contract['background_reads']
+    assert [(op['method'], op['path'], op['servers']) for op in reads] == [
+        ('GET', '/api/declared-read', ['https://api.example.test'])]
+    assert reads[0]['evidence'] == {'type': 'openapi', 'operation_id': 'read'}
+    assert 'declared-read' not in json.dumps(_evidence_catalog(packet.to_dict()))
+    assert (case, endpoints) == before
 
 
 @pytest.mark.parametrize('route', ['/delete-record', '/payment', '/upload', '/seed'])

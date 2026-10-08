@@ -73,7 +73,8 @@ def exploration_site():
             elif path == "/empty":
                 html = '<title>Empty</title>'
             elif path == "/many":
-                html = '<title>Many</title>' + ''.join(f'<button data-testid="b{i}">B{i}</button>' for i in range(100))
+                from qctool.ui.explore import MAX_ELEMENTS
+                html = '<title>Many</title>' + ''.join(f'<button data-testid="b{i}">B{i}</button>' for i in range(MAX_ELEMENTS + 20))
             else:
                 html = '<title>Local page</title><button>Local</button>'
             self.wfile.write(html.encode())
@@ -217,7 +218,8 @@ def test_empty_evidence_is_success_and_output_is_bounded(exploration_site):
     empty = explore_page(ExplorationRequest("/empty"), base_url=site, render_wait_ms=0)
     assert empty.explored and empty.page.elements == [] and empty.issues == ()
     bounded = explore_page(ExplorationRequest("/many", collect_text=False), base_url=site)
-    assert len(bounded.page.elements) == 60
+    from qctool.ui.explore import MAX_ELEMENTS
+    assert len(bounded.page.elements) == MAX_ELEMENTS
     assert bounded.page.text == []
     assert "elements" in bounded.truncated
 

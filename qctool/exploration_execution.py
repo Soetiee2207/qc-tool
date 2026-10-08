@@ -58,7 +58,8 @@ def _enrich(observations: dict, result: ExplorationResult,
     if payload.get('states'):
         history = observations.setdefault('page_states', [])
         for state in payload['states']:
-            entry = {**deepcopy(state), 'truncated': list(payload['truncated']), 'session': approved.request.session,
+            state_flags = list(state.get('truncated', payload['truncated']))
+            entry = {**deepcopy(state), 'truncated': state_flags, 'session': approved.request.session,
                      'testcase_id': approved.testcase_id,
                      'purposes': [asdict(p) for p in approved.purposes],
                      'validated_actions': deepcopy([g for g in approved.grounding
@@ -83,7 +84,7 @@ def _enrich(observations: dict, result: ExplorationResult,
                           'previous_snapshot': old, 'request': payload['request'],
                           'action_observations': [a for a in payload.get('action_observations', [])
                                                   if a.get('state_id') == state['state_id']],
-                          'network': state['network'], 'truncated': payload['truncated']})
+                          'network': state['network'], 'truncated': state_flags})
             page.update(deepcopy(snapshot))
             page.update(session=approved.request.session, state_id=state['state_id'], evidence=state['source'])
             observations['current_state_id'] = state['state_id']

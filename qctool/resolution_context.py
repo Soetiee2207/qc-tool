@@ -84,6 +84,11 @@ def build_resolution_context(
     prerequisites = _prerequisites(selected_requirements, requirements or [])
     selected_ui = _ui_pages(case, ui_map) if ui_map is not None else []
     selected_api = _api_operations(case, endpoints or [])
+    # Transport permission is separate from outcome evidence. A split-origin
+    # SPA needs its declared read operations while entering an approved state;
+    # those operations do not become expected outcomes or resolver API evidence.
+    background_reads = [_operation(ep) for ep in sorted(endpoints or [], key=lambda ep: (ep.method, ep.path, ep.operation_id))
+                        if ep.method.upper() in {'GET', 'HEAD'}]
     if prerequisites:
         from copy import deepcopy
         from .testcase import Step, StepKind
@@ -113,6 +118,9 @@ def build_resolution_context(
         interface_contract={
             "api_operations": selected_api[:MAX_ENDPOINTS],
             "omitted_api_operations": max(0, len(selected_api) - MAX_ENDPOINTS),
+            **({'background_reads': background_reads[:MAX_ENDPOINTS],
+                'omitted_background_reads': max(0, len(background_reads) - MAX_ENDPOINTS)}
+               if background_reads else {}),
         },
         observations={
             "ui_pages": selected_ui[:MAX_UI_PAGES],
@@ -316,7 +324,11 @@ def _api_operations(case: TestCase, endpoints: Sequence[Endpoint]) -> list[dict]
         for method, path, operation in references
     )]
     matched.sort(key=lambda ep: (ep.method, ep.path, ep.operation_id))
-    return [{
+    return [_operation(ep) for ep in matched]
+
+
+def _operation(ep: Endpoint) -> dict:
+    return {
         "method": ep.method, "path": ep.path, "operation_id": ep.operation_id,
         "summary": ep.summary, "requires_auth": ep.requires_auth,
         "parameters": [{key: param[key] for key in ("name", "in", "required") if key in param}
@@ -324,4 +336,4 @@ def _api_operations(case: TestCase, endpoints: Sequence[Endpoint]) -> list[dict]
         "request_required": list(ep.request_required),
         "response_codes": sorted(ep.responses), "servers": list(ep.servers or ep.contract_servers),
         "evidence": {"type": "openapi", "operation_id": ep.operation_id},
-    } for ep in matched]
+    }

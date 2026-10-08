@@ -60,6 +60,16 @@ def _meanings(step, data):
 def ground_actions(item, target, context, case, base_url, store):
     from .exploration_plan import _normalized_target
     positions, bindings = {}, []
+    # Exact contract-only read permissions, not guessed endpoints or outcomes.
+    from .response_capture import origin_of
+    read_requests = []
+    for operation in context.interface_contract.get('background_reads', []):
+        if operation.get('method') not in {'GET', 'HEAD'} or forbidden(operation.get('path', '')):
+            continue
+        for server in operation.get('servers', []):
+            selector = {'method': operation['method'], 'path': operation['path'], 'origin': origin_of(server)}
+            if selector not in read_requests:
+                read_requests.append(selector)
     last_step = 0
     current_page = target
     for index, action in enumerate(item.actions):
@@ -215,6 +225,9 @@ def ground_actions(item, target, context, case, base_url, store):
             raise ValueError('Unknown action')
         Step(step.seq, step.kind, action.action, args).validate()
         bindings.append(binding)
+    if read_requests:
+        for binding in bindings:
+            binding['read_requests'] = read_requests
     return bindings
 
 
