@@ -37,6 +37,7 @@ class ResolutionContext:
     data_acquisition: dict = field(default_factory=dict)
     semantics: dict = field(default_factory=dict)
     evidence_needs: tuple[dict, ...] = ()
+    capability_attempts: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict:
         """Return detached JSON-compatible data, ready for JSON or safe YAML."""
@@ -58,6 +59,8 @@ class ResolutionContext:
             payload['semantics'] = self.semantics
         if self.evidence_needs:
             payload['evidence_needs'] = self.evidence_needs
+        if self.capability_attempts:
+            payload['capability_attempts'] = self.capability_attempts
         return json.loads(json.dumps(payload, ensure_ascii=False))
 
 
@@ -78,8 +81,18 @@ def build_resolution_context(
 
     gap_items = tuple(gaps)
     selected_requirements = _requirements(case, requirements or [])
+    prerequisites = _prerequisites(selected_requirements, requirements or [])
     selected_ui = _ui_pages(case, ui_map) if ui_map is not None else []
     selected_api = _api_operations(case, endpoints or [])
+    if prerequisites:
+        from copy import deepcopy
+        from .testcase import Step, StepKind
+        probe = deepcopy(case)
+        probe.steps.extend(Step(len(probe.steps) + i + 1, StepKind.THEN, 'assert.unmapped',
+                                {'expected': p['then']}) for i, p in enumerate(prerequisites))
+        for operation in _api_operations(probe, endpoints or []):
+            if operation not in selected_api:
+                selected_api.append(operation)
 
     context = ResolutionContext(
         testcase={
@@ -94,6 +107,8 @@ def build_resolution_context(
         specification={
             "requirements": selected_requirements[:MAX_REQUIREMENTS],
             "omitted_requirements": max(0, len(selected_requirements) - MAX_REQUIREMENTS),
+            **({'prerequisites': prerequisites[:MAX_REQUIREMENTS],
+                'omitted_prerequisites': max(0, len(prerequisites) - MAX_REQUIREMENTS)} if prerequisites else {}),
         },
         interface_contract={
             "api_operations": selected_api[:MAX_ENDPOINTS],
@@ -141,6 +156,30 @@ def _requirements(case: TestCase, records: Sequence[dict | Requirement]) -> list
             item["evidence"] = {"type": "requirement", "id": raw["id"]}
             by_id[raw["id"]] = item
     return [by_id[id] for id in dict.fromkeys(case.traces_to) if id in by_id]
+
+
+def _prerequisites(selected, records):
+    """Source-declared completed prefixes, not similar prose or inferred APIs.
+
+    Same Given/actor/data and a strict ordered WHEN prefix are mandatory. These
+    records authorize how to reach a state; never add their Then to the case.
+    """
+    out = []
+    for current in selected:
+        full = [c.strip() for c in (current.get('when') or '').split(';') if c.strip()]
+        for record in records:
+            raw = record.to_dict() if isinstance(record, Requirement) else record
+            prefix = [c.strip() for c in (raw.get('when') or '').split(';') if c.strip()]
+            if (raw.get('id') == current['id'] or not current.get('given')
+                    or raw.get('given') != current['given'] or not raw.get('then')
+                    or not 0 < len(prefix) < len(full) or prefix != full[:len(prefix)]):
+                continue
+            item = {k: raw[k] for k in ('id','given','when','then','source') if k in raw}
+            item['evidence'] = {'type':'requirement', 'id':raw['id'],
+                                'relation':'exact_workflow_prefix', 'for_requirement':current['id']}
+            if item not in out:
+                out.append(item)
+    return out
 
 
 def _route(value: str) -> tuple[str, str, str] | None:

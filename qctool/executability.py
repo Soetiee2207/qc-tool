@@ -150,6 +150,8 @@ def analyze_executability(case: TestCase, *, context=None) -> ExecutabilityRepor
         gaps.append(ExecutionGap("MISSING_ASSERTION", "No executable assertion in testcase."))
 
     if context is not None:
+        from .workflow_evidence import incomplete_outcomes
+        gaps.extend(ExecutionGap('SOURCE_OUTCOME_INCOMPLETE', message, seq) for seq, message in incomplete_outcomes(case, context))
         from .source_grounding import SEMANTIC_GAP, semantic_mismatches
         gaps.extend(ExecutionGap(SEMANTIC_GAP, message, seq)
                     for seq, message in semantic_mismatches(case, context))

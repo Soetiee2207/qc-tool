@@ -116,8 +116,20 @@ def outcome_state(step, case, context, state_id=None, *, fixture_store=None):
                 or previous.get("page", {}).get("url") != binding.get("page")
                 or state.get("page", {}).get("url") != binding.get("expected_url")
                 or action.action != meaning["action"] or binding.get("action") != action.action
-                or action.args.get("target") != binding.get("target")):
+                or action.action != 'ui.goto' and action.args.get("target") != binding.get("target")):
             return None
+        if action.action == 'ui.goto':
+            from .proposal_validation import _same_route
+            if (not _same_route(meaning.get('args', {}).get('url', ''), binding.get('url', ''))
+                    or not _same_route(action.args.get('url', ''), binding.get('url', ''))
+                    or binding.get('transition', {}).get('source') != 'requirement_route'):
+                return None
+            if binding.get('url') != binding.get('expected_url'):
+                expected_routes = {m['route'] for m in source_meanings(requirement['then'], 'then', context, fixture_store) or () if m.get('route')}
+                if index != len(bindings)-1 or not any(_same_route(route, binding.get('expected_url', '')) for route in expected_routes):
+                    return None
+            state = previous
+            continue
         elements = [e for e in previous["page"].get("elements", [])
                     if e.get("test_id") == binding["target"]]
         if (len(elements) != 1 or elements[0].get("name") != binding.get("name")

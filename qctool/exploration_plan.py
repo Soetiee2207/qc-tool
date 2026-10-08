@@ -266,6 +266,7 @@ def _safe_planned(item, store):
                    purposes=tuple(replace(p, reason=store.redact(p.reason)) for p in item.purposes),
                    actions=tuple(replace(a, value=store.redact(a.value) if a.value is not None else None,
                                          target=store.redact(a.target),
+                                         url=store.redact(a.url) if a.url is not None else None,
                                          page=store.redact(a.page) if a.page is not None else None,
                                          expected_url=store.redact(a.expected_url) if a.expected_url is not None else None)
                                  for a in item.actions))
@@ -375,7 +376,8 @@ def validate_exploration_plan(
         purposes = tuple(dict.fromkeys((previous.purposes if previous else ()) + safe_purposes))
         request = ExplorationRequest(
             target, session=item.session, collect_text=True,
-            collect_network=any(purpose.intent == "observe_network" for purpose in purposes),
+            collect_network=(any(purpose.intent == "observe_network" for purpose in purposes)
+                             or any(binding.get("capture_requests") for binding in action_grounding)),
             reason="; ".join(dict.fromkeys(purpose.reason for purpose in purposes)),
             actions=tuple(deepcopy(item.actions)),
         )

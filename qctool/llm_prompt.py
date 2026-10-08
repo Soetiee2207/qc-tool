@@ -128,6 +128,7 @@ def select_prompt_context(context: ResolutionContext, *, gaps=None):
     Audit snapshots/receipts stay in the original context, outside model input.
     """
     from .step_expansion import expected_expansion
+    from .testcase import ACTION_SPECS
     data = context.to_dict()
     if gaps is not None:
         from dataclasses import asdict
@@ -149,6 +150,10 @@ def select_prompt_context(context: ResolutionContext, *, gaps=None):
 
     texts = [case.get('source_quote', ''), *case.get('preconditions', [])]
     texts.extend(r.get(k, '') for r in requirements for k in ('given', 'when', 'then', 'statement', 'source_quote'))
+    # Exact source prefixes supply prerequisite interface/transition authority.
+    # Keep their declared expectations separate from this case's obligations.
+    prerequisites = data['specification'].get('prerequisites', [])
+    texts.extend(r.get(k, '') for r in prerequisites for k in ('given', 'when', 'then'))
     texts.extend(s.get('note', '') for s in case['steps'])
     texts.extend(s['args'].get(k, '') for s in case['steps'] for k in ('description', 'expected', 'expectation'))
     texts = [t for t in texts if isinstance(t, str)]
@@ -171,7 +176,8 @@ def select_prompt_context(context: ResolutionContext, *, gaps=None):
             if isinstance(args.get(key), dict):
                 selector = args[key]
                 operations.add((selector.get('method'), selector.get('path')))
-        if step['action'].startswith('ui.') and not args.get('target') and step.get('note'):
+        if (step['action'].startswith('ui.') and 'target' in ACTION_SPECS.get(step['action'], ACTION_SPECS['perform.unmapped']).required
+                and not args.get('target') and step.get('note')):
             probe = expected_expansion(Step(step['seq'], StepKind.WHEN, 'perform.unmapped',
                                            {'description': step['note']}), case.get('test_data', {}), min_atoms=1)
             if probe:
@@ -179,8 +185,10 @@ def select_prompt_context(context: ResolutionContext, *, gaps=None):
             elif step['action'] != 'ui.goto':
                 unknown = True
         if step['action'] in {'perform.unmapped', 'assert.unmapped'}:
-            atoms = expected_expansion(Step(step['seq'], StepKind(step['kind']), step['action'], args),
-                                       case.get('test_data', {}), min_atoms=1)
+            from .semantic_ir import meanings_for_step
+            source_step = Step(step['seq'], StepKind(step['kind']), step['action'], args)
+            atoms = meanings_for_step(source_step, context) or expected_expansion(
+                source_step, case.get('test_data', {}), min_atoms=1)
             if atoms is None:
                 # Select grammar has its own authoritative source parser.
                 if step['action'] == 'perform.unmapped':
@@ -190,7 +198,13 @@ def select_prompt_context(context: ResolutionContext, *, gaps=None):
                     except (ValueError, KeyError, TypeError):
                         pass
             if atoms is None:
-                unknown = True
+                # An available named fixture precondition is source/data work,
+                # not a request for every unrelated element of the entry page.
+                fixtures = {f.get('requirement', {}).get('fixture') for f in context.data_acquisition.get('findings', [])
+                            if f.get('status') == 'AVAILABLE'}
+                source_tokens = set(re.findall(r'[\w-]+', args.get('description', '')))
+                if step['kind'] != 'given' or not fixtures.intersection(source_tokens):
+                    unknown = True
             else:
                 hints.update(_norm(a['hint']) for a in atoms if a.get('hint'))
                 routes.update(_route(a['route']) for a in atoms if a.get('route'))
@@ -246,6 +260,10 @@ def select_prompt_context(context: ResolutionContext, *, gaps=None):
         if 'explorations' in result:
             result['explorations'] = [{k: v for k, v in e.items() if k != 'previous_snapshot'}
                                       for e in result['explorations']]
+            for exploration in result['explorations']:
+                for observation in exploration.get('action_observations', []):
+                    if observation.get('page'):
+                        observation['page'] = page_view(observation['page'])
         return result
 
     observations['ui_pages'] = _unique([page_view(p) for p in observations.get('ui_pages', [])
@@ -273,7 +291,7 @@ def select_prompt_context(context: ResolutionContext, *, gaps=None):
     return data
 
 
-PROTOCOL_VERSIONS = {'resolution': '3', 'exploration': '3'}
+PROTOCOL_VERSIONS = {'resolution': '4', 'exploration': '4'}
 DYNAMIC_MARKER = 'DYNAMIC TESTCASE / CYCLE EVIDENCE'
 
 

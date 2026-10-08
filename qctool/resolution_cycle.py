@@ -194,6 +194,21 @@ def run_resolution_cycle(
             packet = candidate
         return ok
 
+    def capability_attempt(capability):
+        nonlocal packet
+        import hashlib
+        from .resolution_loop import _evidence_facts
+        state = [working.to_dict(), sorted(_evidence_facts(packet)), packet.allowed_actions]
+        fingerprint = hashlib.sha256(json.dumps(state, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        record = {'capability': capability, 'fingerprint': fingerprint}
+        if record in packet.capability_attempts:
+            audit.append(ResolutionCycleStage(capability + '_llm', 'SKIPPED_UNCHANGED_STATE'))
+            issues.append(ResolutionCycleIssue(capability + '_llm', 'NO_NEW_EVIDENCE',
+                                               'Equivalent source/evidence state already attempted; no repeated model call.'))
+            return False
+        packet = replace(packet, capability_attempts=packet.capability_attempts + (record,))
+        return True
+
     def ground_semantics():
         nonlocal working, packet, after, normalized_validation, normalized_application
         from .semantic_ir import grounded_proposal
@@ -236,6 +251,8 @@ def run_resolution_cycle(
         ground_semantics()
         if not refresh():
             return finish()
+    from .workflow_evidence import outcome_needs
+    packet = replace(packet, evidence_needs=outcome_needs(working, packet, fixture_store))
     decision = route_gaps(working, packet, fixture_store=fixture_store, base_url=base_url,
                           resolved_gaps=deterministic.resolved_gaps if deterministic else ())
     decisions.append(decision)
@@ -249,7 +266,7 @@ def run_resolution_cycle(
         issues.append(ResolutionCycleIssue("resolution_llm", "ADAPTER_REQUIRED",
                                           "No resolution LLM adapter supplied."))
         audit.append(ResolutionCycleStage("resolution_llm", "SKIPPED"))
-    elif decision.selected_capability == "resolution":
+    elif decision.selected_capability == "resolution" and capability_attempt("resolution"):
         ok, proposal = attempt("resolution_llm", lambda: propose_resolution(
             deepcopy(packet), resolution_llm))
         if ok:
@@ -272,6 +289,7 @@ def run_resolution_cycle(
         return finish()
 
     if decision.selected_capability == 'resolution':
+        packet = replace(packet, evidence_needs=outcome_needs(working, packet, fixture_store))
         decision = route_gaps(working, packet, fixture_store=fixture_store, base_url=base_url)
         decisions.append(decision)
     if decision.selected_capability != 'exploration':
@@ -284,8 +302,10 @@ def run_resolution_cycle(
         audit.append(ResolutionCycleStage("exploration_llm", "SKIPPED"))
         return finish()
 
+    if not capability_attempt("exploration"):
+        return finish()
     ok, plan = attempt("exploration_llm", lambda: propose_exploration(
-        deepcopy(packet), exploration_llm, gaps=after.gaps))
+        deepcopy(packet), exploration_llm, gaps=after.gaps, fixture_store=fixture_store))
     if not ok:
         return finish()
     ok, plan_validation = attempt("exploration_validation", lambda: validate_exploration_plan(

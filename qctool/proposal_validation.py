@@ -294,6 +294,11 @@ def _validate_expansion(step: Step, change: ProposedChange, context: ResolutionC
         return "EXPANSION_SEMANTICS_UNPROVEN"
     workflow_state_required = (step.kind.value == "then" and any("hint" in m for m in expected)
                                and any(s.get("validated_actions") for s in context.observations.get("page_states", [])))
+    if step.kind.value == 'then' and working is not None:
+        from .outcome_grounding import outcome_requirement
+        from .workflow_evidence import requires_state
+        requirement = outcome_requirement(step, working, context)
+        workflow_state_required |= bool(requirement and requires_state(requirement, context, fixture_store))
     for atom, meaning in zip(change.expansion, expected):
         if atom.action not in ACTION_SPECS:
             return "UNKNOWN_ACTION"
@@ -586,8 +591,13 @@ def _ground_action(change: ProposedChange, refs: list[tuple[str, dict, dict | No
             or _norm(args["by_name"]) != _norm(element.get("name", ""))
         ):
             return "UI_EVIDENCE_NOT_FOUND"
-        if not element.get("test_id") and args.get("by_name") != element.get("name"):
-            return "UI_EVIDENCE_NOT_FOUND"
+        if not element.get("test_id"):
+            if args.get("by_name") != element.get("name"):
+                return "UI_EVIDENCE_NOT_FOUND"
+            if action in {'assert.visible', 'assert.text'} and (page.get('omitted_elements') or 'elements' in page.get('truncated', []) or
+                    any('elements' in source.get('truncated', []) for source in page.get('explorations', [])) or
+                    sum(_norm(element['name']) in _norm(other.get('name', '')) for other in page.get('elements', [])) != 1):
+                return "UI_EVIDENCE_NOT_FOUND"
     if action == "ui.click" and ("capture_response" in args or "capture_requests" in args):
         capture = args.get("capture_response") or args["capture_requests"]
         try:

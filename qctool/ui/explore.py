@@ -37,10 +37,14 @@ class ExplorationAction:
     value: str | None = field(default=None, repr=False)
     page: str | None = None
     expected_url: str | None = None
+    url: str | None = None
 
     def to_dict(self):
         from ..test_fixtures import is_alias
         result = {"action": self.action, "target": self.target, "step_seq": self.step_seq}
+        if self.action == 'ui.goto':
+            result.pop('target')
+            result['url'] = _safe_url(self.url or '')
         if self.value is not None:
             # Untrusted literal values can be arbitrary secrets. Approved source
             # literals have a separate proof; aliases never contain runtime values.
@@ -173,7 +177,7 @@ class ExplorationResult:
 
 def _name(handle, tag: str, redact=_redact) -> str:
     # The crawler falls back to value; exploration deliberately never reads it.
-    text = handle.inner_text() if tag in {"button", "a"} or handle.get_attribute("role") in {"alert", "status"} else handle.evaluate(
+    text = handle.inner_text() if tag in {"button", "a", "h1", "h2", "h3", "span", "p"} or handle.get_attribute("role") in {"alert", "status"} else handle.evaluate(
         "element => Array.from(element.labels || []).map(label => {"
         "const copy = label.cloneNode(true);"
         "copy.querySelectorAll('input,textarea,select,button').forEach(e => e.remove());"
@@ -191,12 +195,18 @@ def _inspect(page, collect_text: bool, truncated: set[str], *, redact=_redact, s
     elements: list[Element] = []
     # Conditional alerts are useful post-action evidence, even though they are
     # not interactive controls. Reuse Element rather than a second UI schema.
-    handles = page.locator(",".join(INTERACTIVE) + ',[role="alert"],[role="status"]')
-    count = handles.count()
-    if count > MAX_ELEMENTS:
-        truncated.add("elements")
-    for index in range(min(count, MAX_ELEMENTS)):
-        handle = handles.nth(index)
+    primary = ",".join(INTERACTIVE) + ',[role="alert"],[role="status"]'
+    secondary = ':is(h1,h2,h3,[role="heading"],span:not(:has(*)),p:not(:has(*))):not(:is(' + primary + '))'
+    # Keep existing interaction extraction first. Text witnesses must not crowd
+    # out controls; any bounded omissions remain explicit truncation metadata.
+    handles = []
+    for selector in (primary, secondary):
+        group = page.locator(selector)
+        count = group.count()
+        if len(handles) + count > MAX_ELEMENTS:
+            truncated.add("elements")
+        handles.extend(group.nth(i) for i in range(min(count, MAX_ELEMENTS - len(handles))))
+    for handle in handles:
         if not handle.is_visible():
             continue
         tag = handle.evaluate("element => element.tagName.toLowerCase()")
@@ -206,7 +216,7 @@ def _inspect(page, collect_text: bool, truncated: set[str], *, redact=_redact, s
             truncated.add("options")
         elements.append(Element(
             id=redact(handle.get_attribute("id") or _slug(name or test_id or "", f"element_{len(elements)}")),
-            role=redact(handle.get_attribute("role") or INTERACTIVE.get(tag, tag)),
+            role=redact(handle.get_attribute("role") or ('heading' if tag in {'h1','h2','h3'} else INTERACTIVE.get(tag, tag))),
             name=name or redact(test_id or ""), tag=tag,
             input_type=redact(handle.get_attribute("type") or "text") if tag == "input" else None,
             required=_has_attr(handle, "required"),
@@ -330,7 +340,7 @@ def explore_page(
                     redirect_url = safe_url(outgoing)
                 cdp.send("Fetch.failRequest", {"requestId": event["requestId"], "errorReason": "Aborted"})
             elif (v2 and event['frameId'] == main_frame_id
-                  and outgoing != (target if active_action_index is None else bindings[active_action_index]['expected_url'])):
+                  and outgoing not in ({target} if active_action_index is None else {bindings[active_action_index]['expected_url'], bindings[active_action_index].get('url', bindings[active_action_index]['expected_url'])})):
                 unexpected_url = safe_url(outgoing)
                 cdp.send('Fetch.failRequest', {'requestId': event['requestId'], 'errorReason': 'Aborted'})
             else:
@@ -392,8 +402,13 @@ def explore_page(
                 req = route.request
                 allowed_login = any(g.get("action_index") == active_action_index and g.get("capture_requests")
                                     and matches_request(req, g["capture_requests"]) for g in bindings)
+                approved_navigation = (active_action_index is not None and bindings[active_action_index]['action'] == 'ui.goto'
+                                       and req.is_navigation_request() and req.method == 'GET'
+                                       and req.url in {bindings[active_action_index]['url'], bindings[active_action_index]['expected_url']})
+                approved_preflight = req.method == 'OPTIONS' and any(
+                    g.get('capture_requests') and matches_request(req, {**g['capture_requests'], 'method': 'OPTIONS'}) for g in bindings)
                 safe_read = req.method in {"GET", "HEAD", "OPTIONS"} and _origin(req.url) == _origin(base_url) and not forbidden(urlsplit(req.url).path)
-                if active_action_index is not None and not (allowed_login or safe_read):
+                if active_action_index is not None and not (allowed_login or approved_navigation or approved_preflight or safe_read):
                     unsafe_network = True
                     route.abort()
                 else:
@@ -406,32 +421,37 @@ def explore_page(
                 if binding is None or page.url != binding['page'] or redirect_url or unexpected_url:
                     issues.append(ExplorationIssue("ACTION_PAGE_CHANGED", "Approved current page changed."))
                     return result()
-                if node_page != binding['page']:
-                    nodes = {}
-                    for upcoming in bindings[index:]:
-                        if upcoming['page'] != binding['page']:
-                            break
-                        control = page.get_by_test_id(upcoming['target'])
-                        if control.count() != 1:
-                            issues.append(ExplorationIssue('ACTION_PRECONDITION_FAILED', 'New state lacks a unique approved control.'))
-                            return result()
-                        nodes[upcoming['target']] = control.element_handle()
-                    node_page = binding['page']
-                locator = page.get_by_test_id(action.target)
-                tag = locator.evaluate("e => e.tagName.toLowerCase()") if locator.count() == 1 else None
-                role = (locator.get_attribute("role") or INTERACTIVE.get(tag, tag)) if tag else None
-                if (locator.count() != 1 or not locator.is_visible() or locator.is_disabled()
-                        or not locator.evaluate("(e, original) => e === original && e.isConnected", nodes[action.target])
-                        or tag != binding['tag'] or role != binding['role']
-                        or _name(locator, tag, redact) != binding['name']
-                        or tag == 'input' and (locator.get_attribute('type') or 'text') != binding['input_type']
-                        or tag == 'a' and locator.get_attribute('href') != binding.get('href')):
-                    issues.append(ExplorationIssue("ACTION_PRECONDITION_FAILED", "Approved control state or DOM identity changed."))
-                    return result()
+                if action.action != 'ui.goto':
+                    if node_page != binding['page']:
+                        nodes = {}
+                        for upcoming in bindings[index:]:
+                            if upcoming['page'] != binding['page']:
+                                break
+                            if upcoming['action'] == 'ui.goto':
+                                continue
+                            control = page.get_by_test_id(upcoming['target'])
+                            if control.count() != 1:
+                                issues.append(ExplorationIssue('ACTION_PRECONDITION_FAILED', 'New state lacks a unique approved control.'))
+                                return result()
+                            nodes[upcoming['target']] = control.element_handle()
+                        node_page = binding['page']
+                    locator = page.get_by_test_id(action.target)
+                    tag = locator.evaluate("e => e.tagName.toLowerCase()") if locator.count() == 1 else None
+                    role = (locator.get_attribute("role") or INTERACTIVE.get(tag, tag)) if tag else None
+                    if (locator.count() != 1 or not locator.is_visible() or locator.is_disabled()
+                            or not locator.evaluate("(e, original) => e === original && e.isConnected", nodes[action.target])
+                            or tag != binding['tag'] or role != binding['role']
+                            or _name(locator, tag, redact) != binding['name']
+                            or tag == 'input' and (locator.get_attribute('type') or 'text') != binding['input_type']
+                            or tag == 'a' and locator.get_attribute('href') != binding.get('href')):
+                        issues.append(ExplorationIssue("ACTION_PRECONDITION_FAILED", "Approved control state or DOM identity changed."))
+                        return result()
                 active_action_index = index
                 network_start = len(network)
                 observation = None
-                if action.action == 'ui.fill':
+                if action.action == 'ui.goto':
+                    page.goto(binding['url'], wait_until='load', timeout=timeout_ms)
+                elif action.action == 'ui.fill':
                     if not locator.is_editable():
                         issues.append(ExplorationIssue('ACTION_PRECONDITION_FAILED', 'Approved input is not editable.'))
                         return result()

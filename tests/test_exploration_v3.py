@@ -184,7 +184,7 @@ def test_two_page_workflow_and_history(workflow_app,login):
     assert len(observed.states)==len(plan.requests[0].actions)+1
     assert observed.states[0]['page']['url']==base+'/a'
     assert observed.states[-1]['page']['url']==base+'/b'
-    assert any(e['test_id']=='validate' for e in observed.states[-1]['page']['elements'])
+    assert any(e.get('test_id')=='validate' for e in observed.states[-1]['page']['elements'])
     for i,record in enumerate(observed.action_observations):
         assert record['from_state_id']==observed.states[i]['state_id']
         assert record['state_id']==observed.states[i+1]['state_id']
@@ -200,7 +200,7 @@ def test_two_page_workflow_and_history(workflow_app,login):
     ref=EvidenceReference('ui-map',{'page':base+'/b','state_id':observed.states[-1]['state_id'],'test_id':'validate','role':'button','name':'Validate'})
     _evidence_fields('ui-map',ref.ref,'ref')
     assert _resolve_references((ref,),enriched) is not None
-    assert ref.to_dict() in _evidence_catalog(enriched.to_dict())
+    assert EvidenceReference('ui-map', {'page': ref.ref['page'], 'state_id': ref.ref['state_id'], 'test_id': 'validate'}).to_dict() in _evidence_catalog(enriched.to_dict())
     repair=ProposedChange(2,'perform.unmapped',('UNMAPPED_ACTION',),'ui.click',
                           {'target':'validate'},'Source-required control in this state',(ref,))
     assert _ground_action(repair,_resolve_references((ref,),enriched),enriched) is None

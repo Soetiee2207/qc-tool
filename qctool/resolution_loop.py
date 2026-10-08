@@ -97,6 +97,7 @@ def _evidence_facts(context: ResolutionContext) -> frozenset[str]:
 
     for kind, records in (
         ("requirement", context.specification.get("requirements", [])),
+        ("prerequisite", context.specification.get("prerequisites", [])),
         ("api_operation", context.interface_contract.get("api_operations", [])),
     ):
         for record in records:

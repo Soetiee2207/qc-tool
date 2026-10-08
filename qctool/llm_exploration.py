@@ -54,7 +54,7 @@ _OUTPUT_SHAPE = {
 
 def build_exploration_prompt(
     context: ResolutionContext, *, gaps: Iterable[ExecutionGap] | None = None,
-    max_prompt_tokens: int = MAX_PROMPT_TOKENS,
+    max_prompt_tokens: int = MAX_PROMPT_TOKENS, fixture_store=None,
 ) -> str:
     """Use only the supplied context and gaps (default: context.gaps).
 
@@ -63,6 +63,8 @@ def build_exploration_prompt(
     """
     gap_items = context.gaps if gaps is None else tuple(gaps)
     data = select_prompt_context(context, gaps=gap_items)
+    from .workflow_evidence import workflow_candidates
+    data['workflow_candidates'] = [{k:v for k,v in candidate.items() if k != 'requirement_id'} for candidate in workflow_candidates(context, fixture_store)]
     output_shape = deepcopy(_OUTPUT_SHAPE)
     output_shape['testcase_id'] = data['testcase']['id']
 
@@ -73,12 +75,12 @@ def build_exploration_prompt(
         "Propose an UNTRUSTED exploration plan as JSON. Do not execute or repair anything.",
         "Rules: Plan only observation for the listed unresolved gaps. Allowed intents "
         "are inspect_page and observe_network: navigate to the entry page, then inspect approved states. "
-        "Only bounded approved ui.fill, ui.select and ui.click are permitted. At most "
+        "Only bounded approved ui.fill, ui.select and ui.click, plus source-authorized ui.goto are permitted. At most "
         "five ordered actions per request. Each request opens a fresh independent browser "
         "context. Keep a multi-page sequence inside ONE request, including the full "
         "source-required action prefix and approved transitions; splitting it into "
-        "page requests does not preserve prior values, clicks or UI state. Page-only "
-        "inspection cannot read the state left by another request. Every target must be an exact unique stable "
+        "page requests does not preserve prior values, clicks or UI state. The request target already navigates to the GIVEN entry page; NEVER replay GIVEN ui.goto/session as actions. The actions list contains only source WHEN actions. ui.goto is for a WHEN navigate clause, not for repeating entry navigation. When a complete SOURCE-AUTHORIZED WORKFLOW CANDIDATE is supplied, use its exact current step_seq/targets/values and transitions in one request; never prepend GIVEN steps. Page-only "
+        "inspection cannot read the state left by another request. Every interaction target must be an exact unique stable "
         "test_id on the requested current page, justified in source-clause order by "
         "the unresolved step's explicit requirement. Do not invent actions or values. "
         "Fill values must be exact public source literals or available trusted fixture "
@@ -86,7 +88,7 @@ def build_exploration_prompt(
         "resolved passwords, tokens or credentials. Never fill secret literals. "
         "Select only a native select and an exact observed option value or explicit "
         "source option; the explorer verifies it again. No upload, account creation, "
-        "destructive/admin/payment action or arbitrary JavaScript. Only source-required "
+        "destructive/admin/payment action or arbitrary JavaScript. An explicit source ui.goto may inspect a read-only access-denial route; it does not authorize any admin control or mutation. Only source-required "
         "Login, Validate, Check, Search, Filter or Preview button clicks (and grounded "
         "safe links with approved destinations) have an "
         "approval rule. Unknown controls stay unresolved. The V1 empty-login rule "
@@ -113,6 +115,7 @@ def build_exploration_prompt(
         section('VALIDATED CANONICAL SOURCE INTENTS', data.get('semantics', {})),
         section('VALIDATOR EVIDENCE NEEDS', data.get('evidence_needs', [])),
         'Purposes MUST name gaps currently listed below. For post-action outcomes, purpose.step_seq names the unresolved THEN; action.step_seq names its concrete WHEN prefix step. Never invent UNMAPPED_ACTION on a mapped step.',
+        section("SOURCE-AUTHORIZED WORKFLOW CANDIDATES — still require validation", data.get("workflow_candidates", [])),
         section("UNRESOLVED EXECUTION GAPS", [asdict(gap) for gap in gap_items]),
         section("ALLOWED OBSERVATION INTENTS", sorted(OBSERVATION_INTENTS)),
         section("SESSION MODES", sorted(SESSION_MODES)),
@@ -131,7 +134,7 @@ def build_exploration_prompt(
         "actions is OPTIONAL and belongs INSIDE its request at requests[i].actions; "
         "omit it for page-only inspection. Every request has exactly target, session, "
         "purposes and optionally actions. Each action has exactly action, target, "
-        "step_seq; ui.fill and ui.select also require value. Optional page and expected_url "
+        "step_seq (ui.goto replaces target with url); ui.fill and ui.select also require value. Optional page and expected_url "
         "are the only state fields. Never put value on ui.click. Do not add any other fields. requests may be [] when unresolved. Each request needs a "
         "nonempty purposes array. step_seq is an integer or null, not placeholder text. "
         "Angle-bracket strings indicate placeholders, not evidence.",
@@ -142,7 +145,7 @@ def build_exploration_prompt(
         "(exact destination after this approved action). A navigation action requires expected_url "
         "grounded in the clicked link's observed href or an explicit source route. Subsequent actions "
         "must use exact controls already observed on that destination page. No guessed "
-        "redirects, foreign pages or ui.goto actions. Omit a workflow when destination "
+        "redirects or foreign pages. ui.goto is allowed only for the next exact validated source navigate clause. Its exact JSON shape is {\"action\":\"ui.goto\",\"url\":\"<source route>\",\"step_seq\":1}, optional page/expected_url; target/value are forbidden. Omit a workflow when destination "
         "controls or transition evidence are insufficient. These optional fields are "
         "the only additions to the action schema above.",
         section("OUTPUT JSON SHAPE", output_shape),
@@ -154,10 +157,10 @@ def build_exploration_prompt(
 
 def propose_exploration(
     context: ResolutionContext, adapter: ExplorationLLM, *,
-    gaps: Iterable[ExecutionGap] | None = None,
+    gaps: Iterable[ExecutionGap] | None = None, fixture_store=None,
 ) -> ExplorationPlan:
     """Return an untrusted plan from an injected adapter; never execute it."""
-    prompt = build_exploration_prompt(context, gaps=gaps)
+    prompt = build_exploration_prompt(context, gaps=gaps, fixture_store=fixture_store)
     with prompt_accounting(prompt):
         plan = parse_exploration_plan(adapter.complete(prompt))
     if plan.testcase_id != context.testcase["id"]:
@@ -191,13 +194,14 @@ def parse_exploration_plan(response: str) -> ExplorationPlan:
             label = f"{where}.actions[{position}]"
             verb = _nonempty(action.get("action"), f"{label}.action") if isinstance(action, dict) else None
             state_fields = {key for key in ('page', 'expected_url') if isinstance(action, dict) and key in action}
-            _fields(action, {"action", "target", "step_seq"} | ({"value"} if verb in {"ui.fill", "ui.select"} else set()) | state_fields, label)
+            _fields(action, {"action", "url" if verb == "ui.goto" else "target", "step_seq"} | ({"value"} if verb in {"ui.fill", "ui.select"} else set()) | state_fields, label)
             for key in state_fields:
                 _nonempty(action[key], f'{label}.{key}')
             if verb in {"ui.fill", "ui.select"} and not isinstance(action["value"], str):
                 raise LLMResponseError(f"{label}.value must be a string")
             actions.append(ExplorationAction(
-                target=_nonempty(action["target"], f"{label}.target"),
+                target="" if verb == "ui.goto" else _nonempty(action["target"], f"{label}.target"),
+                url=_nonempty(action["url"], f"{label}.url") if verb == "ui.goto" else None,
                 step_seq=_positive_int(action["step_seq"], f"{label}.step_seq"),
                 action=verb,
                 value=action.get("value"),

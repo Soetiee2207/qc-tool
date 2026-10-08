@@ -416,6 +416,8 @@ def source_authorized_routes(case, context, base_url):
 
 
 def semantic_prompt_contract():
+    import json
+    argument_schema = json.dumps({kind: {'required': sorted(required), 'optional': sorted(optional)} for kind, (required, optional) in sorted(FIELDS.items())}, sort_keys=True)
     return (
         'For natural-language unmapped steps return canonical semantic normalization FIRST, preferably changes=[] when deterministic grounding can build the actions. Optional root semantic: {"clauses":[{"step_seq":1,"clause_index":0,'
         '"source_text":"EXACT complete source clause","atoms":[{"kind":"navigate","args":{"route":"/route"}}]}]}. '
@@ -431,7 +433,8 @@ def semantic_prompt_contract():
         'For an API outcome preserve every explicit JSON predicate. Atoms have ONLY kind,args; api status belongs INSIDE args. No selectors/runtime action/evidence fields in semantic atoms. '
         'No guessed semantics, destructive action, negation reversal or expectation from UI. '
         'If unsure omit that step from semantic and leave its gap unresolved. '
-        'changes may be [] with semantic: deterministic code will ground the normalized intents.'
+        'changes may be [] with semantic: deterministic code will ground the normalized intents. '
+        'Exact semantic args field sets (no extras; facts belong inside precondition.args.facts, not directly in args): ' + argument_schema
     )
 
 
@@ -445,6 +448,12 @@ def grounded_proposal(case, context, fixture_store=None):
             continue
         units = [u for u in source_units(context) if u['step_seq'] == step.seq]
         refs = tuple(EvidenceReference('requirement', {'id': id}) for id in dict.fromkeys(u['requirement_id'] for u in units))
+        if step.kind.value == 'then':
+            from .outcome_grounding import outcome_requirement, outcome_state
+            from .workflow_evidence import requires_state
+            requirement = outcome_requirement(step, case, context)
+            if requirement and requires_state(requirement, context, fixture_store) and outcome_state(step, case, context, fixture_store=fixture_store) is None:
+                continue
         atoms = []
         pages,state_proven=outcome_pages(context) if step.kind.value=='then' else (context.observations.get('ui_pages',[]),False)
         for m in meanings:
@@ -452,10 +461,19 @@ def grounded_proposal(case, context, fixture_store=None):
             if 'hint' in m:
                 candidates = observed_witnesses([(p,e) for p in pages
                               for e in p.get('elements', []) if element_matches(e, m)],m['action'],state_proven=state_proven)
-                if len(candidates) != 1 or not candidates[0][1].get('test_id'):
+                if len(candidates) != 1:
                     break
-                p,e = candidates[0]; args['target'] = e['test_id']
-                evidence.append(EvidenceReference('ui-map', {'page': p['url'], 'test_id': e['test_id'], **({'state_id': p['state_id']} if p.get('state_id') else {})}))
+                p,e = candidates[0]
+                locator = {'test_id': e['test_id']} if e.get('test_id') else {'role': e['role'], 'name': e['name']}
+                if not e.get('test_id'):
+                    if (p.get('omitted_elements') or 'elements' in p.get('truncated', []) or any('elements' in source.get('truncated', []) for source in p.get('explorations', []))):
+                        break
+                    if m['action'] not in {'assert.visible', 'assert.text'} or sum(
+                            _norm(e['name']) in _norm(other.get('name', '')) for other in p.get('elements', [])) != 1:
+                        break
+                    args['by_name'] = e['name']
+                args['target'] = e.get('test_id') or e.get('id')
+                evidence.append(EvidenceReference('ui-map', {'page': p['url'], **locator, **({'state_id': p['state_id']} if p.get('state_id') else {})}))
             elif 'route' in m:
                 route_pages = [p for p in pages if urlsplit(p['url']).path == m['route']]
                 if len(route_pages) != 1:
@@ -536,8 +554,10 @@ def element_matches(element, meaning):
 
 def _safe_authorized(atom, unit, context, store):
     try:
-        from .exploration_actions import forbidden
-        if atom.kind in {'activate', 'navigate'} and forbidden(unit['source_text']):
+        from .exploration_actions import forbidden, navigation_forbidden
+        if atom.kind == 'navigate' and navigation_forbidden(atom.args['route']):
+            return False
+        if atom.kind == 'activate' and forbidden(unit['source_text']):
             return False
         return _atom_authorized(atom, unit, context, store)
     except (TypeError, ValueError, KeyError, AttributeError):
@@ -662,4 +682,5 @@ def outcome_pages(context):
         pages=[p for p in context.observations.get('ui_pages',[]) if p.get('state_id')==current]
         if pages:
             return pages,True
+        return [{**states[0]['page'], 'state_id': current, 'truncated': states[0].get('truncated', [])}], True
     return context.observations.get('ui_pages',[]),False

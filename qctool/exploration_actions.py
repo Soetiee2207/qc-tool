@@ -4,7 +4,7 @@ from dataclasses import asdict
 import hashlib
 import json
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from .step_expansion import expected_expansion
 from .test_fixtures import REGISTRY, is_alias
@@ -12,7 +12,7 @@ from .testcase import ACTION_SPECS, Step
 from .ui.crawl import _norm
 from .ui.explore import _redact
 
-ALLOWED_ACTIONS = frozenset({'ui.fill', 'ui.select', 'ui.click'})
+ALLOWED_ACTIONS = frozenset({'ui.fill', 'ui.select', 'ui.click', 'ui.goto'})
 SAFE_BUTTONS = frozenset({'login', 'sign in', 'dang nhap', 'đăng nhập', 'validate', 'check', 'search', 'filter', 'preview'})
 FILL_TYPES = frozenset({'text', 'email', 'password', 'search', 'tel', 'url', 'number'})
 DANGEROUS = re.compile(r'\b(delete|remove|purchase|pay|payment|admin|upload|create|update|save|send|register|logout|provision|xoa|xóa|xoá|mua|thanh toan|thanh toán|quan tri|quản trị|dang ky|đăng ký|gửi|lưu|cập nhật|charge|checkout|buy)\b')
@@ -20,6 +20,17 @@ DANGEROUS = re.compile(r'\b(delete|remove|purchase|pay|payment|admin|upload|crea
 
 def forbidden(value):
     return bool(DANGEROUS.search(_norm(value)))
+
+
+def navigation_forbidden(url):
+    """Read-only source navigation never authorizes destructive endpoint names.
+
+    An admin access-denial page is distinct from an admin control/action; its
+    approved redirect is checked separately against the final source outcome.
+    """
+    path = _norm(urlsplit(url).path)
+    return bool(re.search(r'\bseed\b', path) or any(
+        match.group() != 'admin' for match in DANGEROUS.finditer(path)))
 
 
 def action_fingerprint(request, grounding):
@@ -59,9 +70,13 @@ def ground_actions(item, target, context, case, base_url, store):
         pages = [p for p in context.observations.get('ui_pages', [])
                  if _normalized_target(p.get('url', ''), base_url) == current_page
                  and p.get('session') in (None, item.session)]
-        if len(pages) != 1:
+        if len(pages) > 1:
+            signatures = {json.dumps(sorted(p.get('elements', []), key=lambda e: json.dumps(e, sort_keys=True)), sort_keys=True) for p in pages}
+            if len(signatures) == 1:
+                pages = pages[:1]
+        if action.action != 'ui.goto' and len(pages) != 1:
             raise ValueError('Ambiguous or unobserved current page')
-        page = pages[0]
+        page = pages[0] if len(pages) == 1 else {}
         elements = page.get('elements', [])
         ids = Counter(e.get('test_id') for e in elements if e.get('test_id'))
         if (action.action not in ALLOWED_ACTIONS or type(action.step_seq) is not int
@@ -73,8 +88,6 @@ def ground_actions(item, target, context, case, base_url, store):
         if replay:
             step,requirements,meaning = _replay_meaning(action,item,context,case,store,positions)
             text = requirements[0]['when']
-            if forbidden(text):
-                raise ValueError('Unsafe replay source')
             from .semantic_ir import element_matches
         else:
             if not any(p.step_seq == action.step_seq and p.gap_code == 'UNMAPPED_ACTION' for p in item.purposes):
@@ -87,7 +100,7 @@ def ground_actions(item, target, context, case, base_url, store):
             requirements = [r for r in context.specification.get('requirements', [])
                             if r.get('id') in case.traces_to and (r.get('when') == text or
                                 text in [c.strip() for c in r.get('when', '').split(';')])]
-            if not requirements or forbidden(text):
+            if not requirements:
                 raise ValueError('No exact safe requirement clause')
             from .semantic_ir import meanings_for_step, element_matches
             meanings = meanings_for_step(step, context, store) or _meanings(step, case.test_data)
@@ -96,11 +109,37 @@ def ground_actions(item, target, context, case, base_url, store):
                 raise ValueError('Repeated action beyond source')
             meaning = meanings[position]
             positions[step.seq] = position + 1
+        if action.action == 'ui.goto':
+            destination = _normalized_target(action.url or '', base_url)
+            source_url = meaning.get('args', {}).get('url')
+            if destination is None or navigation_forbidden(destination):
+                raise ValueError('Unsafe navigation operation')
+            expected = _normalized_target(action.expected_url, base_url) if action.expected_url else destination
+            if forbidden(destination) and expected == destination:
+                raise ValueError('Admin inspection requires an explicit access-denial outcome')
+            if expected != destination:
+                from .semantic_ir import source_meanings
+                routes = {m['route'] for r in requirements for m in source_meanings(r['then'], 'then', context, store) or () if m.get('route')}
+                if index != len(item.actions) - 1 or expected not in {_normalized_target(route, base_url) for route in routes}:
+                    raise ValueError('Navigation redirect needs an exact final source outcome')
+            if (meaning['action'] != 'ui.goto' or not source_url
+                    or destination != _normalized_target(source_url, base_url)
+                    or action.value is not None or action.target):
+                raise ValueError('Navigation must be the exact ordered source route')
+            binding = {'source': 'validated_action', 'action_index': index, 'action': 'ui.goto',
+                       'step_seq': step.seq, 'page': current_page, 'url': destination,
+                       'source_clause': meaning['source_clause'], 'requirement_ids': [r['id'] for r in requirements],
+                       'expected_url': expected, 'transition': {'from': current_page, 'to': expected,
+                       'source': 'requirement_route'}}
+            Step(step.seq, step.kind, 'ui.goto', {'url': destination}).validate()
+            bindings.append(binding)
+            current_page = expected
+            continue
         matches = [e for e in elements if e.get('test_id') == action.target]
         if ids[action.target] != 1 or len(matches) != 1:
             raise ValueError('Unstable target')
         element = matches[0]
-        if element.get('disabled') or forbidden(element.get('name', '')) or forbidden(action.target):
+        if forbidden(meaning['source_clause']) or element.get('disabled') or forbidden(element.get('name', '')) or forbidden(action.target):
             raise ValueError('Unsafe control')
         if action.action != meaning['action'] or not (element_matches(element, meaning) if meaning.get('semantic') else _norm(element.get('name', '')) == _norm(meaning.get('hint', ''))):
             raise ValueError('Source/control mismatch')
@@ -140,6 +179,7 @@ def ground_actions(item, target, context, case, base_url, store):
                     raise ValueError('Unknown option')
                 binding['option_source'] = 'ui-map' if options else 'requirement'
         else:
+            authority = requirements + workflow_prerequisites(requirements, context)
             if action.value is not None or binding['tag'] not in {'button', 'a'} or _norm(element['name']) not in SAFE_BUTTONS:
                 raise ValueError('Unsupported click')
             if binding['tag'] == 'a' and not action.expected_url:
@@ -149,12 +189,12 @@ def ground_actions(item, target, context, case, base_url, store):
                 operations = [op for op in context.interface_contract.get('api_operations', [])
                               if op.get('method') == 'POST' and any(
                                   re.search(r'(?<!\w)POST\s+' + re.escape(op.get('path', '')) + r'(?=\s|;|$)', r.get('then', ''))
-                                  for r in requirements)]
+                                  for r in authority)]
                 origins = {origin_of(server) for op in operations for server in op.get('servers', [])}
                 if operations:
                     if len(operations) != 1 or len(origins) != 1 or forbidden(operations[0]["path"]):
                         raise ValueError('Ambiguous source request contract')
-                    binding['capture_requests'] = {'method': 'POST', 'path': operations[0]['path'], 'origin': origins.pop(), 'timeout_ms': 2000}
+                    binding['capture_requests'] = {'method': 'POST', 'path': operations[0]['path'], 'origin': origins.pop(), 'timeout_ms': 10000 if workflow_prerequisites(requirements, context) else 2000}
         destination = current_page
         if action.expected_url is not None:
             destination = _normalized_target(action.expected_url, base_url)
@@ -163,11 +203,7 @@ def ground_actions(item, target, context, case, base_url, store):
             href = element.get('href')
             if binding['tag'] == 'a' and (not href or _normalized_target(urljoin(current_page, href), base_url) != destination):
                 raise ValueError('Link destination differs from the approved transition')
-            explicit = any(
-                _normalized_target(token.strip('`\"\''), base_url) == destination
-                for requirement in requirements for field in ('given', 'when', 'then')
-                for token in re.findall(r'https?://[^\s;]+|(?<!\w)/[^\s;]*', requirement.get(field, ''))
-            )
+            explicit = destination in authorized_transition_routes(requirements, context, base_url, store)
             if not (href and _normalized_target(urljoin(current_page, href), base_url) == destination or explicit):
                 raise ValueError('Destination is not tied to source or clicked href')
             binding['transition'] = {'from': current_page, 'to': destination,
@@ -209,7 +245,7 @@ def _replay_meaning(action, item, context, case, store, positions):
         if any(s.action!=m['action'] or 'value' in m and s.args.get('value')!=m['value'] for s,m in zip(steps,meanings)):
             continue
         step=steps[index]
-        if step.action!=action.action or step.args.get('target')!=action.target or action.value!=step.args.get('value'):
+        if step.action!=action.action or (step.action=='ui.goto' and step.args.get('url')!=action.url) or (step.action!='ui.goto' and step.args.get('target')!=action.target) or action.value!=step.args.get('value'):
             continue
         candidates.append((step,req,meanings[index]))
     if len(candidates)!=1:
@@ -217,3 +253,35 @@ def _replay_meaning(action, item, context, case, store, positions):
     step,req,meaning=candidates[0]
     positions[('replay',req['id'])]=positions.get(('replay',req['id']),0)+1
     return step,[req],meaning
+
+
+def workflow_prerequisites(requirements, context):
+    """Recheck exact source-prefix authority; metadata alone never authorizes it."""
+    found = []
+    for current in requirements:
+        full = [c.strip() for c in current.get('when', '').split(';') if c.strip()]
+        for prefix in context.specification.get('prerequisites', []):
+            clauses = [c.strip() for c in prefix.get('when', '').split(';') if c.strip()]
+            if (current.get('given') and prefix.get('given') == current['given']
+                    and 0 < len(clauses) < len(full) and clauses == full[:len(clauses)]
+                    and prefix.get('then') and prefix.get('evidence', {}).get('for_requirement') == current.get('id')):
+                if prefix not in found:
+                    found.append(prefix)
+    return found
+
+
+def authorized_transition_routes(requirements, context, base_url, store=None):
+    """Positive source route claims only; literal mentions/negation are not proof."""
+    from .exploration_plan import _normalized_target
+    from .semantic_ir import SemanticAtom, _safe_authorized, literals
+    out = set()
+    for req in requirements + workflow_prerequisites(requirements, context):
+        for field in ('given', 'when', 'then'):
+            for clause in req.get(field, '').split(';'):
+                unit = {'field': field, 'source_text': clause.strip()}
+                for route in literals(clause):
+                    atom = SemanticAtom('url' if field == 'then' else 'navigate', {'route': route})
+                    if _safe_authorized(atom, unit, context, store):
+                        normalized = _normalized_target(route, base_url)
+                        if normalized: out.add(normalized)
+    return out

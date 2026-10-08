@@ -58,7 +58,7 @@ def _enrich(observations: dict, result: ExplorationResult,
     if payload.get('states'):
         history = observations.setdefault('page_states', [])
         for state in payload['states']:
-            entry = {**deepcopy(state), 'session': approved.request.session,
+            entry = {**deepcopy(state), 'truncated': list(payload['truncated']), 'session': approved.request.session,
                      'testcase_id': approved.testcase_id,
                      'purposes': [asdict(p) for p in approved.purposes],
                      'validated_actions': deepcopy([g for g in approved.grounding
