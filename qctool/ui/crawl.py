@@ -256,6 +256,10 @@ def crawl(base_url: str, extra_paths: list[str] | None = None,
         # ── Pha 2: sau đăng nhập ────────────────────────────────────────────
         if storage_state and storage_state.is_file():
             notify("Pha 2 — crawl SAU khi đăng nhập")
+            # URL identity is scoped to the browser session. An anonymous visit
+            # may have redirected to login; it cannot stand in for the same
+            # requested route with trusted authenticated storage state.
+            seen_urls = set()
             context = browser.new_context(
                 viewport={"width": 1440, "height": 900}, ignore_https_errors=True,
                 storage_state=str(storage_state),

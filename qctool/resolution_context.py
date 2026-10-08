@@ -20,7 +20,9 @@ from .ui.crawl import UIMap, _norm
 
 
 MAX_REQUIREMENTS = 6
-MAX_UI_PAGES = 2
+# A bounded five-action workflow can visit its initial page plus five destinations.
+# Selection still requires exact source routes/locators; unrelated pages stay out.
+MAX_UI_PAGES = 6
 MAX_ELEMENTS_PER_PAGE = 24
 MAX_ENDPOINTS = 6
 

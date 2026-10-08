@@ -10,7 +10,7 @@ import pytest
 from qctool.executability import analyze_executability
 from qctool.generate.loader import load_endpoints
 from qctool.model import Requirement, SourceRef
-from qctool.resolution_context import MAX_ELEMENTS_PER_PAGE, build_resolution_context
+from qctool.resolution_context import MAX_ELEMENTS_PER_PAGE, MAX_UI_PAGES, build_resolution_context
 from qctool.testcase import ACTION_SPECS, ActionSpec, Step, StepKind, TestCase
 from qctool.ui.crawl import Element, PageMap, UIMap
 
@@ -93,6 +93,35 @@ def test_literal_references_in_logical_candidate_select_evidence_without_repair(
         ("POST", "/projects")]
     assert (case, ui) == saved
     assert all(s.action in case.UNMAPPED_ACTIONS for s in case.steps)
+
+
+def test_compound_workflow_keeps_all_three_explicit_page_references():
+    routes = ["/basket", "/review", "/history"]
+    ui = UIMap("https://portal.test", "recorded", [
+        PageMap("https://portal.test" + route, route, elements=[
+            Element("control", "button", route, "button", test_id=route[1:] + "-control")])
+        for route in routes + ["/admin"]
+    ])
+    case = _case(
+        _step(1, "perform.unmapped", {"description": "Open /basket; continue to /review; submit"}),
+        _step(2, "assert.unmapped", {"expected": "URL /history; heading visible"}),
+    )
+    before = deepcopy((case, ui))
+    context = build_resolution_context(case, analyze_executability(case).gaps, ui_map=ui)
+    assert {page["url"] for page in context.observations["ui_pages"]} == {
+        "https://portal.test" + route for route in routes}
+    assert context.observations["omitted_ui_pages"] == 0
+    assert (case, ui) == before
+
+
+def test_explicit_page_selection_is_still_bounded():
+    routes = [f"/state-{i}" for i in range(MAX_UI_PAGES + 2)]
+    ui = UIMap("https://portal.test", "recorded", [
+        PageMap("https://portal.test" + route, route) for route in routes])
+    case = _case(_step(1, "perform.unmapped", {"description": "; ".join(routes)}))
+    context = build_resolution_context(case, (), ui_map=ui)
+    assert len(context.observations["ui_pages"]) == MAX_UI_PAGES
+    assert context.observations["omitted_ui_pages"] == 2
 
 
 @pytest.mark.parametrize("reference", [
