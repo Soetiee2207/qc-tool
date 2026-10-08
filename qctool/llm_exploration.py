@@ -87,11 +87,11 @@ def build_exploration_prompt(
         "aliases already bound in testcase.test_data. Use aliases literally, never "
         "resolved passwords, tokens or credentials. Never fill secret literals. "
         "Select only a native select and an exact observed option value or explicit "
-        "source option; the explorer verifies it again. No upload, account creation, "
-        "destructive/admin/payment action or arbitrary JavaScript. An explicit source ui.goto may inspect a read-only access-denial route; it does not authorize any admin control or mutation. Only source-required "
+        "source option; the explorer verifies it again. No upload, account provisioning, "
+        "destructive/admin/online-payment action or arbitrary JavaScript. A reviewed mutation permission, when supplied, permits ONLY its exact requirement/page/test_id/transition/operation; it does not grant any other control or request. An explicit source ui.goto may inspect a read-only access-denial route; it does not authorize any admin control or unapproved mutation. Only source-required "
         "Login, Validate, Check, Search, Filter or Preview button clicks (and grounded "
         "safe links with approved destinations) have an "
-        "approval rule. Unknown controls stay unresolved. The V1 empty-login rule "
+        "approval rule by default. Additional creation/update workflow controls need an exact supplied reviewed mutation permission; never invent one. Unknown controls stay unresolved. The V1 empty-login rule "
         "remains supported. Each action.step_seq names the unresolved source gap, "
         "or a concrete source WHEN prefix linked by validated semantic IR to the current unresolved THEN purpose. Replay must use the complete ordered source prefix and exactly its current targets/values; do not rewrite executable actions. Every action requires deterministic approval; "
         "stop if previous actions change page unexpectedly or invalidate grounding. Omit actions "
@@ -118,6 +118,7 @@ def build_exploration_prompt(
         section("SOURCE-AUTHORIZED WORKFLOW CANDIDATES — still require validation", data.get("workflow_candidates", [])),
         section("UNRESOLVED EXECUTION GAPS", [asdict(gap) for gap in gap_items]),
         section("ALLOWED OBSERVATION INTENTS", sorted(OBSERVATION_INTENTS)),
+        section("REVIEWED MUTATION PERMISSIONS — exact scope; not business expectations", data.get('mutation_permissions', {})),
         section("SESSION MODES", sorted(SESSION_MODES)),
         "Anonymous uses no authentication state. Authenticated requires trusted "
         "storage_state supplied separately; its availability is not established here. "

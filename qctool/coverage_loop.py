@@ -94,6 +94,7 @@ def run_coverage_loop(
     base_url: str | None = None, storage_state: Path | None = None,
     fixture_store: FixtureStore | None = None,
     allow_provisioning: bool = False, environment: str | None = None, preparation_cache=None,
+    mutation_policy=None, mutation_budget=None,
 ) -> CoverageLoopResult:
     """Reanalyse after each pass, add accepted cases only, never repair inputs.
 
@@ -105,6 +106,10 @@ def run_coverage_loop(
     covered in the previous pass, and never beyond max_passes. No evidence from
     unresolved attempts is implicitly reused or treated as coverage.
     """
+    from .exploration_actions import mutation_policy as load_mutation_policy, MutationBudget
+    mutation_policy = load_mutation_policy(mutation_policy, fixture_store=fixture_store)
+    if mutation_policy and mutation_budget is None:
+        mutation_budget = MutationBudget()
     for name, budget in (("max_passes", max_passes), ("max_cycles", max_cycles)):
         if type(budget) is not int or budget < 1:
             raise ValueError(f"{name} must be a positive integer")
@@ -157,7 +162,8 @@ def run_coverage_loop(
                 resolution_llm=resolution_llm, exploration_llm=exploration_llm,
                 contexts=deepcopy(trusted_contexts), requirements=deepcopy(rows),
                 ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints),
-                base_url=base_url, storage_state=storage_state, fixture_store=fixture_store, allow_provisioning=allow_provisioning, environment=environment, preparation_cache=preparation_cache))
+                base_url=base_url, storage_state=storage_state, fixture_store=fixture_store, allow_provisioning=allow_provisioning, environment=environment, preparation_cache=preparation_cache,
+                mutation_policy=mutation_policy, mutation_budget=mutation_budget))
         except Exception:
             issues.append(CoverageLoopIssue(index, "PASS_FAILED",
                                           "Pass failed; previously accepted cases retained."))

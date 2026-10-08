@@ -170,6 +170,7 @@ def execute_validated_exploration(
     validation_result: ExplorationPlanValidationResult, context: ResolutionContext, *,
     base_url: str, storage_state: Path | None = None,
     timeout_ms: int = 10000, render_wait_ms: int = 2000, fixture_store=None,
+    mutation_policy=None, mutation_budget=None,
 ) -> ExplorationExecutionResult:
     """Execute only approved requests, independently, in validation order.
 
@@ -184,6 +185,10 @@ def execute_validated_exploration(
         for item in validation_result.valid_requests
     ):
         raise TypeError("Expected an ExplorationPlanValidationResult containing validated requests")
+    from .exploration_actions import mutation_policy as load_mutation_policy, MutationBudget
+    mutation_policy = load_mutation_policy(mutation_policy, fixture_store=fixture_store)
+    if mutation_policy and mutation_budget is None:
+        mutation_budget = MutationBudget()
     enriched = deepcopy(context)
     results, successful, failed, issues = [], [], [], []
     gaps = {(gap.code, gap.step_seq) for gap in context.gaps}
@@ -202,6 +207,8 @@ def execute_validated_exploration(
             continue
         try:
             extra = {"fixture_store": fixture_store} if fixture_store is not None else {}
+            if mutation_policy:
+                extra.update(mutation_policy=mutation_policy, mutation_budget=mutation_budget)
             result = deepcopy(explore_page(
                 deepcopy(approved if approved.request.actions else approved.request), base_url=base_url,
                 storage_state=storage_state if approved.requires_auth_state else None,

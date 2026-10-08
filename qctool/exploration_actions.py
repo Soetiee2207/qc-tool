@@ -4,6 +4,7 @@ from dataclasses import asdict
 import hashlib
 import json
 import re
+from threading import Lock
 from urllib.parse import urljoin, urlsplit
 
 from .step_expansion import expected_expansion
@@ -16,6 +17,141 @@ ALLOWED_ACTIONS = frozenset({'ui.fill', 'ui.select', 'ui.click', 'ui.goto'})
 SAFE_BUTTONS = frozenset({'login', 'sign in', 'dang nhap', 'đăng nhập', 'validate', 'check', 'search', 'filter', 'preview'})
 FILL_TYPES = frozenset({'text', 'email', 'password', 'search', 'tel', 'url', 'number'})
 DANGEROUS = re.compile(r'\b(delete|remove|purchase|pay|payment|admin|upload|create|update|save|send|register|logout|provision|xoa|xóa|xoá|mua|thanh toan|thanh toán|quan tri|quản trị|dang ky|đăng ký|gửi|lưu|cập nhật|charge|checkout|buy)\b')
+
+# Reviewed permissions are config, never model output. High-risk actions remain
+# excluded even when a caller enables bounded creation/update workflows.
+HIGH_RISK = re.compile(r'\b(delete|remove|admin|seed|upload|logout|register|provision|charge|payment|pay|xóa|xoá|quản trị|đăng ký)\b')
+
+
+def high_risk(value):
+    # Match risk words in paths/IDs as well as human labels (admin_users,
+    # deleteRecord). This does not infer business meaning or permit new actions.
+    return bool(HIGH_RISK.search(_norm(re.sub(r'([a-z])([A-Z])', r'\1 \2', value).replace('_', ' '))))
+
+
+def mutation_policy(config=None, *, fixture_store=None):
+    """Strict public, non-secret permissions; disabled unless explicitly enabled."""
+    from copy import deepcopy
+    from .response_capture import validate_capture
+    if config is None:
+        return {}
+    if not isinstance(config, dict) or set(config) - {'enabled', 'environment', 'allowed_environment', 'application_origin', 'rules'}:
+        raise ValueError('Invalid exploration mutation policy')
+    if type(config.get('enabled', False)) is not bool:
+        raise ValueError('Mutation enabled must be boolean')
+    if not config.get('enabled', False):
+        return {}
+    required = {'enabled', 'environment', 'allowed_environment', 'application_origin', 'rules'}
+    if (set(config) != required or not isinstance(config['environment'], str)
+            or not re.fullmatch(r'[A-Za-z0-9_-]{1,40}', config['environment'])
+            or config['environment'] != config['allowed_environment']):
+        raise ValueError('Mutation requires an exact approved environment')
+    validate_capture({'method': 'GET', 'path': '/', 'origin': config['application_origin']})
+    rules = config['rules']
+    if not isinstance(rules, list) or not 1 <= len(rules) <= 8:
+        raise ValueError('Mutation policy needs one to eight exact rules')
+    ids = set()
+    for rule in rules:
+        keys = {'id', 'requirement_id', 'page', 'target', 'expected_url', 'max_attempts'}
+        if not isinstance(rule, dict) or set(rule) not in (keys, keys | {'operation'}):
+            raise ValueError('Invalid mutation rule fields')
+        if any(not isinstance(rule[k], str) or not rule[k].strip() for k in keys - {'max_attempts'}):
+            raise ValueError('Mutation rule identifiers must be nonempty')
+        if rule['id'] in ids or type(rule['max_attempts']) is not int or not 1 <= rule['max_attempts'] <= 3:
+            raise ValueError('Mutation rule IDs/budgets must be unique and bounded')
+        ids.add(rule['id'])
+        for key in ('page', 'expected_url'):
+            value = rule[key]
+            if not value.startswith('/') or value.startswith('//') or urlsplit(value).query or urlsplit(value).fragment or '\\' in value or any(c.isspace() or ord(c) < 32 for c in value):
+                raise ValueError('Mutation pages must be exact application paths')
+        if any(high_risk(rule[k]) for k in ('page', 'expected_url', 'target')):
+            raise ValueError('High-risk mutation is unsupported')
+        op = rule.get('operation')
+        if op is not None:
+            if not isinstance(op, dict) or set(op) != {'operation_id', 'method', 'path', 'origin', 'required_json', 'allowed_json_fields'}:
+                raise ValueError('Invalid mutation operation fields')
+            if op['method'] not in {'POST', 'PUT', 'PATCH'} or not isinstance(op['operation_id'], str) or not op['operation_id']:
+                raise ValueError('Only reviewed create/update operations are supported')
+            validate_capture({k: op[k] for k in ('method', 'path', 'origin')})
+            if high_risk(op['path']):
+                raise ValueError('High-risk operation is unsupported')
+            fields = op['allowed_json_fields']
+            values = op['required_json']
+            if (not isinstance(fields, list) or not fields or any(not isinstance(k, str) or not k for k in fields)
+                    or len(set(fields)) != len(fields) or not isinstance(values, dict) or not set(values) <= set(fields)
+                    or any(re.search(r'password|secret|token|credential|authorization|cookie', k, re.I) for k in fields)
+                    or any(type(v) not in {str, bool, int, float, type(None)} or isinstance(v, str) and (_redact(v) != v or is_alias(v)) for v in values.values())):
+                raise ValueError('Mutation body policy must contain only public constraints')
+    def public(value):
+        if isinstance(value, dict):
+            return all(public(k) and public(v) for k, v in value.items())
+        if isinstance(value, list):
+            return all(public(v) for v in value)
+        return not isinstance(value, str) or _redact(value) == value
+    if not public(config):
+        raise ValueError('Secret-bearing mutation policy')
+    if fixture_store and fixture_store.redact(json.dumps(config, ensure_ascii=False)) != json.dumps(config, ensure_ascii=False):
+        raise ValueError('Fixture credentials cannot be policy literals')
+    try:
+        json.dumps(config, allow_nan=False)
+    except ValueError:
+        raise ValueError('Mutation constraints must be finite JSON values') from None
+    return deepcopy(config)
+
+
+class MutationBudget:
+    """Run-owned attempt budget. Copies share this ledger; no persistent cache."""
+    def __init__(self):
+        self._counts = {}
+        self._lock = Lock()
+
+    def __deepcopy__(self, memo):
+        return self
+
+    def claim(self, permission):
+        key = permission['fingerprint'], permission['rule']['id']
+        with self._lock:
+            count = self._counts.get(key, 0)
+            if count >= permission['rule']['max_attempts']:
+                return False
+            self._counts[key] = count + 1
+            return True
+
+
+def mutation_permission(policy, *, page, target, destination, requirement_ids, base_url):
+    from .exploration_plan import _normalized_target
+    from .response_capture import origin_of
+    policy = mutation_policy(policy)
+    if not policy or origin_of(base_url) != policy['application_origin']:
+        return None
+    matches = [r for r in policy['rules'] if r['requirement_id'] in requirement_ids
+               and r['target'] == target and _normalized_target(r['page'], base_url) == page
+               and _normalized_target(r['expected_url'], base_url) == destination]
+    if len(matches) != 1:
+        return None
+    return {'fingerprint': hashlib.sha256(json.dumps(policy, sort_keys=True).encode()).hexdigest(),
+            'environment': policy['environment'], 'rule': matches[0]}
+
+
+def source_mutation_authorized(atom, unit, context):
+    """Permission permits considering meaning; DOM/contract proof remains later."""
+    policy = context.mutation_permissions
+    if not policy or high_risk(unit['source_text']):
+        return False
+    requirements = [r for r in context.specification.get('requirements', [])
+                    if r.get('id') in context.testcase.get('traces_to', [])
+                    and unit['source_text'] in [c.strip() for c in r.get('when', '').split(';')]]
+    for rule in policy['rules']:
+        if not any(r['id'] == rule['requirement_id'] for r in requirements):
+            continue
+        if atom.kind == 'navigate' and atom.args['route'] in {rule['page'], rule['expected_url']}:
+            return True
+        if atom.kind == 'activate':
+            pages = [p for p in context.observations.get('ui_pages', []) if urlsplit(p['url']).path == rule['page']]
+            if any(e.get('test_id') == rule['target'] and _norm(e.get('name', '')) == _norm(atom.args['label'])
+                   for p in pages for e in p.get('elements', [])):
+                return True
+    return False
 
 
 def forbidden(value):
@@ -57,7 +193,7 @@ def _meanings(step, data):
     return result
 
 
-def ground_actions(item, target, context, case, base_url, store):
+def ground_actions(item, target, context, case, base_url, store, policy=None):
     from .exploration_plan import _normalized_target
     positions, bindings = {}, []
     # Exact contract-only read permissions, not guessed endpoints or outcomes.
@@ -120,12 +256,16 @@ def ground_actions(item, target, context, case, base_url, store):
             meaning = meanings[position]
             positions[step.seq] = position + 1
         if action.action == 'ui.goto':
+            from .response_capture import origin_of
             destination = _normalized_target(action.url or '', base_url)
             source_url = meaning.get('args', {}).get('url')
-            if destination is None or navigation_forbidden(destination):
+            route_permission = origin_of(base_url) == (policy or {}).get('application_origin') and any(r['requirement_id'] in [r['id'] for r in requirements]
+                                   and destination in {_normalized_target(r['page'], base_url), _normalized_target(r['expected_url'], base_url)}
+                                   for r in (policy or {}).get('rules', []))
+            if destination is None or navigation_forbidden(destination) and not route_permission:
                 raise ValueError('Unsafe navigation operation')
             expected = _normalized_target(action.expected_url, base_url) if action.expected_url else destination
-            if forbidden(destination) and expected == destination:
+            if forbidden(destination) and expected == destination and not route_permission:
                 raise ValueError('Admin inspection requires an explicit access-denial outcome')
             if expected != destination:
                 from .semantic_ir import source_meanings
@@ -149,8 +289,13 @@ def ground_actions(item, target, context, case, base_url, store):
         if ids[action.target] != 1 or len(matches) != 1:
             raise ValueError('Unstable target')
         element = matches[0]
-        if forbidden(meaning['source_clause']) or element.get('disabled') or forbidden(element.get('name', '')) or forbidden(action.target):
+        destination = _normalized_target(action.expected_url, base_url) if action.expected_url else current_page
+        permission = mutation_permission(policy, page=current_page, target=action.target,
+                                         destination=destination, requirement_ids=[r['id'] for r in requirements], base_url=base_url) if action.action == 'ui.click' else None
+        if element.get('disabled') or (forbidden(meaning['source_clause']) or forbidden(element.get('name', '')) or forbidden(action.target)) and not permission:
             raise ValueError('Unsafe control')
+        if permission and (high_risk(element.get('name', '')) or high_risk(meaning['source_clause'])):
+            raise ValueError('High-risk control')
         if action.action != meaning['action'] or not (element_matches(element, meaning) if meaning.get('semantic') else _norm(element.get('name', '')) == _norm(meaning.get('hint', ''))):
             raise ValueError('Source/control mismatch')
         if meaning.get('semantic') and sum(element_matches(e, meaning) for e in elements)!=1:
@@ -190,8 +335,20 @@ def ground_actions(item, target, context, case, base_url, store):
                 binding['option_source'] = 'ui-map' if options else 'requirement'
         else:
             authority = requirements + workflow_prerequisites(requirements, context)
-            if action.value is not None or binding['tag'] not in {'button', 'a'} or _norm(element['name']) not in SAFE_BUTTONS:
+            if action.value is not None or binding['tag'] not in {'button', 'a'} or _norm(element['name']) not in SAFE_BUTTONS and not permission:
                 raise ValueError('Unsupported click')
+            if permission:
+                binding['mutation_permission'] = permission
+                operation = permission['rule'].get('operation')
+                if operation:
+                    from .response_capture import origin_of
+                    operations = [op for op in context.interface_contract.get('api_operations', [])
+                                  if all(op.get(k) == operation[k] for k in ('operation_id', 'method', 'path'))
+                                  and operation['origin'] in {origin_of(s) for s in op.get('servers', [])}]
+                    if len(operations) != 1 or not any(re.search(r'(?<!\w)' + re.escape(operation['method']) + r'\s+' + re.escape(operation['path']) + r'(?=\s|;|$)', r.get('then', '')) for r in requirements):
+                        raise ValueError('Mutation operation lacks exact source/contract proof')
+                    binding['capture_requests'] = {k: operation[k] for k in ('method', 'path', 'origin')}
+                    binding['capture_requests']['timeout_ms'] = 10000
             if binding['tag'] == 'a' and not action.expected_url:
                 raise ValueError('Navigation link needs an approved destination')
             if _norm(element['name']) in {'login', 'sign in', 'dang nhap', 'đăng nhập'}:
@@ -208,7 +365,7 @@ def ground_actions(item, target, context, case, base_url, store):
         destination = current_page
         if action.expected_url is not None:
             destination = _normalized_target(action.expected_url, base_url)
-            if destination is None or forbidden(destination):
+            if destination is None or forbidden(destination) and not permission:
                 raise ValueError('Unsafe transition')
             href = element.get('href')
             if binding['tag'] == 'a' and (not href or _normalized_target(urljoin(current_page, href), base_url) != destination):

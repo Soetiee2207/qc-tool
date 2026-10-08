@@ -291,7 +291,7 @@ def select_prompt_context(context: ResolutionContext, *, gaps=None):
     return data
 
 
-PROTOCOL_VERSIONS = {'resolution': '4', 'exploration': '4'}
+PROTOCOL_VERSIONS = {'resolution': '4', 'exploration': '5'}
 DYNAMIC_MARKER = 'DYNAMIC TESTCASE / CYCLE EVIDENCE'
 
 

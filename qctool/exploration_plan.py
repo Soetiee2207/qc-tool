@@ -274,6 +274,7 @@ def _safe_planned(item, store):
 
 def validate_exploration_plan(
     plan: ExplorationPlan, context: ResolutionContext, case: TestCase, base_url: str, *, fixture_store=None,
+    mutation_policy=None,
 ) -> ExplorationPlanValidationResult:
     """Approve grounded inspection and exact source-grounded UI interactions.
 
@@ -281,6 +282,8 @@ def validate_exploration_plan(
     or API endpoint inference occurs. Identical target/session/action sequences
     merge before the request and total-click budgets are enforced in plan order.
     """
+    from .exploration_actions import mutation_policy as load_mutation_policy
+    mutation_policy = load_mutation_policy(mutation_policy, fixture_store=fixture_store)
     report = analyze_executability(case, context=context)
     global_issues: list[ExplorationPlanIssue] = []
     if plan.testcase_id != case.id or plan.testcase_id != context.testcase.get("id"):
@@ -357,7 +360,7 @@ def validate_exploration_plan(
                         action_grounding = []
                 if not action_grounding:
                     from .exploration_actions import ground_actions
-                    action_grounding = ground_actions(item, target, context, case, base_url, fixture_store)
+                    action_grounding = ground_actions(item, target, context, case, base_url, fixture_store, mutation_policy)
             except (ValueError, TypeError, KeyError):
                 fail("UNSAFE_OR_UNGROUNDED_ACTION", "Sequence lacks exact safe controls, source clauses, values or trusted fixtures.")
         if not failures:

@@ -65,6 +65,7 @@ class PipelineConfig:
     generation_profile: str = "legacy" # direct/all callers retain compatibility
     allow_provisioning: bool = False   # opt-in, vẫn phải qua reviewed engine policy
     data_environment: str | None = None
+    exploration_mutation: dict = field(default_factory=dict)
 
     # ── UI/UX test (Playwright) ────────────────────────────────────────────
     ui_retry: int = 0                   # số lần chạy lại case hỏng (tối đa 3)
@@ -119,6 +120,12 @@ class PipelineConfig:
             else:
                 mode = "manual"
 
+        from .exploration_actions import mutation_policy
+        fixture_store = load_fixture_store(data.get("test_fixtures"))
+        try:
+            exploration_mutation = mutation_policy((data.get('exploration') or {}).get('mutation'), fixture_store=fixture_store)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise cfg_mod.ConfigError('Invalid exploration.mutation policy') from exc
         return cls(
             docs_dir=resolve(data.get("docs_dir")),
             openapi=resolve(data.get("openapi")),
@@ -140,7 +147,8 @@ class PipelineConfig:
             generation_profile=generation_profile,
             allow_provisioning=allow_provisioning,
             data_environment=provisioning.get("environment"),
-            fixture_store=load_fixture_store(data.get("test_fixtures")),
+            exploration_mutation=exploration_mutation,
+            fixture_store=fixture_store,
             ui_retry=max(0, min(int(ui.get("retry", 0) or 0), 3)),
             ui_evidence=str(ui.get("evidence", "on-fail") or "on-fail"),
             ui_trace=bool(ui.get("trace", False)),
@@ -469,6 +477,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
             resolution_llm=resolution_llm, exploration_llm=exploration_llm,
             module=cfg.module or "COV", fixture_store=cfg.fixture_store,
             allow_provisioning=cfg.allow_provisioning, environment=cfg.data_environment,
+            mutation_policy=cfg.exploration_mutation,
         )
         result.generation_result = generation_result
         generation_path = out_dir / "generation.json"

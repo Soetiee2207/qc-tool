@@ -38,6 +38,7 @@ class ResolutionContext:
     semantics: dict = field(default_factory=dict)
     evidence_needs: tuple[dict, ...] = ()
     capability_attempts: tuple[dict, ...] = ()
+    mutation_permissions: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Return detached JSON-compatible data, ready for JSON or safe YAML."""
@@ -61,6 +62,8 @@ class ResolutionContext:
             payload['evidence_needs'] = self.evidence_needs
         if self.capability_attempts:
             payload['capability_attempts'] = self.capability_attempts
+        if self.mutation_permissions:
+            payload['mutation_permissions'] = self.mutation_permissions
         return json.loads(json.dumps(payload, ensure_ascii=False))
 
 

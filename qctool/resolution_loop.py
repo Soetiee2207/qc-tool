@@ -152,6 +152,7 @@ def run_resolution_loop(
     fixture_store: FixtureStore | None = None,
     ui_map: UIMap | None = None, endpoints: list[Endpoint] | None = None,
     data_verification=None, preparation_cache=None, allow_provisioning: bool = False, environment: str | None = None,
+    mutation_policy=None, mutation_budget=None,
 ) -> ResolutionLoopResult:
     """Run at most max_cycles, passing each resulting case/context to the next.
 
@@ -162,7 +163,11 @@ def run_resolution_loop(
     """
     if type(max_cycles) is not int or max_cycles < 1:
         raise ValueError("max_cycles must be a positive integer")
-    working, packet = deepcopy(case), deepcopy(context)
+    from .exploration_actions import mutation_policy as load_mutation_policy, MutationBudget
+    mutation_policy = load_mutation_policy(mutation_policy, fixture_store=fixture_store)
+    if mutation_policy and mutation_budget is None:
+        mutation_budget = MutationBudget()
+    working, packet = deepcopy(case), replace(deepcopy(context), mutation_permissions=mutation_policy)
     preparation = None
     if packet.testcase.get('id') == case.id:
         preparation = prepare_test_data(working, fixture_store=fixture_store,
@@ -202,6 +207,7 @@ def run_resolution_loop(
                 deepcopy(working), deepcopy(packet), resolution_llm=resolution_llm,
                 exploration_llm=exploration_llm, base_url=base_url, storage_state=storage_state, fixture_store=fixture_store,
                 ui_map=deepcopy(trusted_ui), endpoints=deepcopy(trusted_endpoints),
+                **({'mutation_policy': mutation_policy, 'mutation_budget': mutation_budget} if mutation_policy else {}),
                 **({'data_verification': data_verification} if data_verification is not None else {})))
             candidate_report = analyze_executability(result.case, context=result.context)
             candidate_facts = _evidence_facts(result.context)

@@ -111,7 +111,7 @@ def run_resolution_cycle(
     base_url: str | None = None, storage_state: Path | None = None,
     fixture_store: FixtureStore | None = None,
     ui_map: UIMap | None = None, endpoints: list[Endpoint] | None = None,
-    data_verification=None,
+    data_verification=None, mutation_policy=None, mutation_budget=None,
 ) -> ResolutionCycleResult:
     """Run resolution once, then collect evidence once if gaps remain.
 
@@ -122,7 +122,11 @@ def run_resolution_cycle(
     Existing evidence never triggers exploration merely because a proposal failed.
     Manual/auto decisions belong solely to the resolver/applier and analyzer.
     """
-    packet = deepcopy(context)
+    from .exploration_actions import mutation_policy as load_mutation_policy, MutationBudget
+    mutation_policy = load_mutation_policy(mutation_policy, fixture_store=fixture_store)
+    if mutation_policy and mutation_budget is None:
+        mutation_budget = MutationBudget()
+    packet = replace(deepcopy(context), mutation_permissions=mutation_policy)
     preparation = None
     working = deepcopy(case)
     if packet.testcase.get('id') == case.id:
@@ -309,11 +313,12 @@ def run_resolution_cycle(
     if not ok:
         return finish()
     ok, plan_validation = attempt("exploration_validation", lambda: validate_exploration_plan(
-        deepcopy(plan), deepcopy(packet), deepcopy(working), base_url, fixture_store=fixture_store))
+        deepcopy(plan), deepcopy(packet), deepcopy(working), base_url, fixture_store=fixture_store, mutation_policy=mutation_policy))
     if not ok or not plan_validation.valid_requests:
         return finish()
     ok, execution = attempt("exploration_execution", lambda: execute_validated_exploration(
-        deepcopy(plan_validation), deepcopy(packet), base_url=base_url, storage_state=storage_state, fixture_store=fixture_store))
+        deepcopy(plan_validation), deepcopy(packet), base_url=base_url, storage_state=storage_state, fixture_store=fixture_store,
+        **({'mutation_policy': mutation_policy, 'mutation_budget': mutation_budget} if mutation_policy else {})))
     if ok:
         packet = deepcopy(execution.context)
     # Observation does not modify the testcase or its executability. Stop here.

@@ -100,6 +100,7 @@ def run_generation(
     allow_provisioning: bool = False, environment: str | None = None,
     max_passes: int = 3, max_cycles: int = 3, module: str = "COV",
     contexts: Mapping[str, ResolutionContext] | None = None, preparation_cache=None,
+    mutation_policy=None, mutation_budget=None,
 ) -> GenerationResult:
     """Validate inputs, delegate once to the coverage loop, classify its results.
 
@@ -111,6 +112,10 @@ def run_generation(
     superseded attempts remain in history. Invalid existing batches skip model
     work. Configuration/schema errors in requirement input retain normal errors.
     """
+    from .exploration_actions import mutation_policy as load_mutation_policy, MutationBudget
+    mutation_policy = load_mutation_policy(mutation_policy, fixture_store=fixture_store)
+    if mutation_policy and mutation_budget is None:
+        mutation_budget = MutationBudget()
     for name, budget in (("max_passes", max_passes), ("max_cycles", max_cycles)):
         if type(budget) is not int or budget < 1:
             raise ValueError(f"{name} must be a positive integer")
@@ -149,7 +154,8 @@ def run_generation(
                 base_url=base_url, storage_state=storage_state,
                 max_passes=max_passes, max_cycles=max_cycles, module=module,
                 contexts=deepcopy(contexts), fixture_store=fixture_store,
-                allow_provisioning=allow_provisioning, environment=environment, preparation_cache=preparation_cache))
+                allow_provisioning=allow_provisioning, environment=environment, preparation_cache=preparation_cache,
+                mutation_policy=mutation_policy, mutation_budget=mutation_budget))
         except Exception:
             failed = True
             issues.append(GenerationIssue("coverage_loop", "GENERATION_FAILED",

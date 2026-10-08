@@ -264,6 +264,7 @@ def _inspect(page, collect_text: bool, truncated: set[str], *, redact=_redact, s
 def explore_page(
     request: ExplorationRequest | ValidatedExplorationRequest, *, base_url: str,
     storage_state: Path | None = None, timeout_ms: int = 10000, render_wait_ms: int = 2000, fixture_store=None,
+    mutation_policy=None, mutation_budget=None,
 ) -> ExplorationResult:
     """Inspect exactly one same-origin target in a fresh, owned browser context.
 
@@ -318,6 +319,14 @@ def explore_page(
         if not approved.action_fingerprint or approved.action_fingerprint != action_fingerprint(request, bindings):
             issues.append(ExplorationIssue('ACTION_NOT_VALIDATED', 'Approved sequence was altered.'))
             return result()
+        from ..exploration_actions import mutation_permission
+        for binding in bindings:
+            permission = binding.get('mutation_permission')
+            if permission and (mutation_budget is None or permission != mutation_permission(
+                    mutation_policy, page=binding['page'], target=binding['target'],
+                    destination=binding['expected_url'], requirement_ids=binding['requirement_ids'], base_url=base_url)):
+                issues.append(ExplorationIssue('MUTATION_NOT_AUTHORIZED', 'Mutation requires matching trusted policy and run budget.'))
+                return result()
 
     target, request_issues = validate_exploration_request(
         request, base_url=base_url, timeout_ms=timeout_ms, render_wait_ms=render_wait_ms,
@@ -342,10 +351,34 @@ def explore_page(
         # Playwright routing can miss later requests in an HTTP redirect chain.
         cdp = page.context.new_cdp_session(page)
         main_frame_id = cdp.send("Page.getFrameTree")["frameTree"]["frame"]["id"]
+        mutation_redirect_blocked = False
+        mutation_network_ids = set()
 
         def guard(event):
-            nonlocal redirect_url, unexpected_url
+            nonlocal redirect_url, unexpected_url, mutation_redirect_blocked
             outgoing = event["request"]["url"]
+            if (any(g.get('mutation_permission') for g in bindings) and active_action_index is None
+                    and event['request']['method'] not in {'GET', 'HEAD', 'OPTIONS'}):
+                mutation_redirect_blocked = True
+                issues.append(ExplorationIssue('MUTATION_REQUEST_BLOCKED', 'Unapproved bootstrap mutation was blocked.'))
+                cdp.send('Fetch.failRequest', {'requestId': event['requestId'], 'errorReason': 'Aborted'})
+                return
+            # Playwright routing does not see subsequent HTTP redirect requests.
+            # Fetch interception blocks them before a second write reaches a host.
+            if v2 and active_action_index is not None and bindings[active_action_index].get('mutation_permission'):
+                method = event['request']['method']
+                operation = bindings[active_action_index]['mutation_permission']['rule'].get('operation')
+                if event.get('redirectedRequestId') and (method not in {'GET', 'HEAD', 'OPTIONS'}
+                        or event['redirectedRequestId'] in mutation_network_ids):
+                    mutation_redirect_blocked = True
+                    issues.append(ExplorationIssue('MUTATION_REDIRECT_BLOCKED', 'Approved mutation cannot follow an HTTP redirect.'))
+                    cdp.send('Fetch.failRequest', {'requestId': event['requestId'], 'errorReason': 'Aborted'})
+                    return
+                if operation and method == operation['method'] and outgoing == operation['origin'] + operation['path']:
+                    mutation_network_ids.add(event['requestId'])
+            if event.get('resourceType') != 'Document':
+                cdp.send('Fetch.continueRequest', {'requestId': event['requestId']})
+                return
             if _origin(outgoing) != _origin(base_url):
                 if event["frameId"] == main_frame_id:
                     redirect_url = safe_url(outgoing)
@@ -358,7 +391,8 @@ def explore_page(
                 cdp.send("Fetch.continueRequest", {"requestId": event["requestId"]})
 
         cdp.on("Fetch.requestPaused", guard)
-        cdp.send("Fetch.enable", {"patterns": [{"resourceType": "Document", "requestStage": "Request"}]})
+        cdp.send("Fetch.enable", {"patterns": [({"requestStage": "Request"} if any(g.get('mutation_permission') for g in bindings)
+                                                else {"resourceType": "Document", "requestStage": "Request"})]})
 
         def response_metadata(response):
             from ..response_capture import matches_request
@@ -394,6 +428,8 @@ def explore_page(
         if render_wait_ms:
             _wait_for_render(page, max_wait_ms=render_wait_ms)
         if v2:
+            if mutation_redirect_blocked:
+                return result()
             if unexpected_url or page.url != target:
                 states.append({'state_id': observed_at + ':0', 'valid': False, 'triggering_action': None,
                                'source_clause': None, 'page': {'url': unexpected_url or safe_url(page.url)}, 'network': [],
@@ -409,22 +445,49 @@ def explore_page(
                            'truncated': initial_flags,
                            'source': {'type': 'playwright_exploration', 'observed_at': observed_at}})
             unsafe_network = False
+            mutation_requests = set()
             def safe_request(route):
                 nonlocal unsafe_network
                 from ..response_capture import matches_request
                 req = route.request
+                binding = bindings[active_action_index] if active_action_index is not None else {}
+                permission = binding.get('mutation_permission')
+                allowed_mutation = False
+                if permission and req.method not in {'GET', 'HEAD', 'OPTIONS'}:
+                    operation = permission['rule'].get('operation')
+                    valid = (operation and matches_request(req, operation) and not urlsplit(req.url).query
+                             and req.redirected_from is None and active_action_index not in mutation_requests)
+                    if valid:
+                        try:
+                            body = req.post_data_json if len(req.post_data or '') <= 65536 else None
+                            valid = (req.headers.get('content-type', '').split(';')[0].strip().lower() == 'application/json'
+                                     and isinstance(body, dict) and set(body) <= set(operation['allowed_json_fields'])
+                                     and all(k in body and type(body[k]) is type(v) and body[k] == v
+                                             for k, v in operation['required_json'].items()))
+                        except Exception:
+                            valid = False
+                    if valid:
+                        mutation_requests.add(active_action_index)
+                        allowed_mutation = True
+                    else:
+                        unsafe_network = True
+                        issues.append(ExplorationIssue('MUTATION_REQUEST_BLOCKED', 'Mutation request differs from approved operation/body or repeats a write.'))
+                        route.abort()
+                        return
                 allowed_login = any(g.get("action_index") == active_action_index and g.get("capture_requests")
-                                    and matches_request(req, g["capture_requests"]) for g in bindings)
+                                    and not g.get('mutation_permission') and matches_request(req, g["capture_requests"]) for g in bindings)
                 approved_navigation = (active_action_index is not None and bindings[active_action_index]['action'] == 'ui.goto'
                                        and req.is_navigation_request() and req.method == 'GET'
                                        and req.url in {bindings[active_action_index]['url'], bindings[active_action_index]['expected_url']})
+                approved_navigation = approved_navigation or (bool(permission) and req.is_navigation_request()
+                                       and req.method == 'GET' and req.url == binding['expected_url'])
                 approved_preflight = req.method == 'OPTIONS' and any(
                     g.get('capture_requests') and matches_request(req, {**g['capture_requests'], 'method': 'OPTIONS'}) for g in bindings)
                 approved_read = any(matches_request(req, selector)
                                     or req.method == 'OPTIONS' and matches_request(req, {**selector, 'method': 'OPTIONS'})
                                     for g in bindings for selector in g.get('read_requests', []))
                 safe_read = req.method in {"GET", "HEAD", "OPTIONS"} and _origin(req.url) == _origin(base_url) and not forbidden(urlsplit(req.url).path)
-                if active_action_index is not None and not (allowed_login or approved_navigation or approved_preflight or approved_read or safe_read):
+                if active_action_index is not None and not (allowed_mutation or allowed_login or approved_navigation or approved_preflight or approved_read or safe_read):
                     # A split-origin SPA may load background resources after an
                     # approved transition. Keep denying unapproved requests;
                     # denied passive reads are not a failed action/transition.
@@ -501,6 +564,16 @@ def explore_page(
                         return result()
                     session.select({'target': action.target, 'value': action.value})
                 elif action.action == 'ui.click':
+                    if binding.get('mutation_permission') and not mutation_budget.claim(binding['mutation_permission']):
+                        issues.append(ExplorationIssue('MUTATION_BUDGET_EXCEEDED', 'Run-scoped approved action budget is exhausted; no click performed.'))
+                        return result()
+                    if binding.get('mutation_permission'):
+                        permission = binding['mutation_permission']
+                        states[-1].setdefault('mutation_attempts', []).append({
+                            'action_index': index, 'step_seq': action.step_seq, 'target': action.target,
+                            'source_clause': binding['source_clause'], 'rule_id': permission['rule']['id'],
+                            'environment': permission['environment'], 'policy_fingerprint': permission['fingerprint'],
+                            'status': 'ATTEMPTED', 'observed_at': datetime.now(timezone(timedelta(hours=7))).isoformat()})
                     form = locator.locator('xpath=ancestor::form[1]')
                     if form.count() and (form.get_attribute('method') or 'GET').upper() != 'GET' and not binding.get('capture_requests'):
                         issues.append(ExplorationIssue('ACTION_PRECONDITION_FAILED', 'Unapproved form submission.'))
@@ -515,7 +588,7 @@ def explore_page(
                 page.wait_for_timeout(250)
                 if render_wait_ms:
                     _wait_for_render(page, max_wait_ms=render_wait_ms if binding['expected_url'] != binding['page'] else min(render_wait_ms, 1000))
-                if unsafe_network:
+                if unsafe_network or mutation_redirect_blocked:
                     issues.append(ExplorationIssue('UNSAFE_NETWORK_REQUEST', 'Unapproved write or foreign request was blocked; remaining actions stopped.'))
                     return result()
                 if redirect_url or _origin(page.url) != _origin(base_url):
@@ -539,6 +612,10 @@ def explore_page(
                           'source': {'type': 'playwright_exploration', 'observed_at': datetime.now(timezone(timedelta(hours=7))).isoformat()}}
                 if observation:
                     record.update(request_count=observation['body']['request_count'], selector=observation['_ui_trigger'])
+                if binding.get('mutation_permission'):
+                    permission = binding['mutation_permission']
+                    record['mutation'] = {'rule_id': permission['rule']['id'], 'environment': permission['environment'],
+                                          'policy_fingerprint': permission['fingerprint'], 'status': 'ATTEMPTED'}
                 action_observations.append(record)
                 states.append({'state_id': state_id, 'from_state_id': record['from_state_id'],
                                'valid': valid_transition, 'triggering_action': index,

@@ -555,9 +555,10 @@ def element_matches(element, meaning):
 def _safe_authorized(atom, unit, context, store):
     try:
         from .exploration_actions import forbidden, navigation_forbidden
-        if atom.kind == 'navigate' and navigation_forbidden(atom.args['route']):
+        from .exploration_actions import source_mutation_authorized
+        if atom.kind == 'navigate' and navigation_forbidden(atom.args['route']) and not source_mutation_authorized(atom, unit, context):
             return False
-        if atom.kind == 'activate' and forbidden(unit['source_text']):
+        if atom.kind == 'activate' and forbidden(unit['source_text']) and not source_mutation_authorized(atom, unit, context):
             return False
         return _atom_authorized(atom, unit, context, store)
     except (TypeError, ValueError, KeyError, AttributeError):

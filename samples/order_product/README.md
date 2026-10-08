@@ -60,17 +60,34 @@ bootstrap; fixture aliases bind vào đúng `AC-order_product-001-1`. Một case
 generated thường có ID `TC_ORDER_PRODUCT_001`; source obligation là định danh
 ổn định, ID candidate có thể thay đổi theo generation pass.
 
-## Giới hạn tool hiện tại cần quan sát
+## Cấp quyền mutation có phạm vi
 
-Explorer hiện giới hạn tối đa 5 actions/request và chặn checkout/purchase cùng
-POST không được approve. `POST /api/orders` trong OpenAPI là contract evidence,
-**không phải quyền cho phép explorer tạo đơn**. Account DECLARED cũng không
-chứng minh cart/address hoặc tự authorize mutation.
+Config có `exploration.mutation`, mặc định **`enabled: false`**. Đổi đúng
+field này thành `true` nếu muốn cho phép explorer thực hiện tạo đơn thật.
+`--llm` không tự bật quyền, `--allow-provisioning` cũng không thay thế quyền.
 
-Vì vậy input này không bảo đảm executable/Pass với engine hiện tại. Nếu bị
-chặn, giữ testcase unresolved và xem validator/routing issues trong audit;
-không bỏ HTTP/JSON outcomes, không thay bằng case chỉ mở trang và không bật
-`--allow-provisioning` để cố vượt safety gate. Chưa thay đổi engine/policy ở đây.
+Hai rules chỉ áp dụng `AC-order_product-001-1` tại website đã khai:
+
+- `cart-checkout-btn` trên `/cart` được chuyển tới `/checkout`.
+- `checkout-submit-btn` trên `/checkout` được chuyển tới `/my-orders` và gửi
+  đúng `POST /api/orders`, operation `createOrder`, tại backend origin đã khai.
+  JSON phải có `paymentMethod: cod`, chỉ được chứa address/phone/paymentMethod/cartItemIds.
+  SePay, voucher, field/request khác và redirect của request ghi đều bị chặn.
+
+Mỗi rule tối đa một attempt **exploration trong một generation run**, chia sẻ
+budget qua các case/cycle/pass. Attempt đã bắt đầu vẫn tiêu budget nếu bị lỗi;
+không retry ghi dữ liệu, không có cache budget toàn cục. Source clause, stable
+UI target, current page và OpenAPI phải cùng khớp; quyền không tạo ra evidence.
+Explorer vẫn tối đa 5 actions/request và chặn admin/xóa/upload/thanh toán online.
+
+**Budget này dành cho exploration; runner thực thi testcase là pha riêng.**
+Nếu explorer đã tạo đơn thì giỏ hàng đã thay đổi. Không coi observation đó
+là một lần runner Pass, cũng không giả định giỏ còn đủ dữ liệu cho pha execute.
+Muốn thử quyền trước, đặt `out.skip_run: true` để chỉ chạy generation/exploration
+và xem audit. Dù skip execution, exploration đã được cấp quyền vẫn có thể tạo đơn.
+
+Input không bảo đảm executable/Pass: cart/address, mọi source outcomes và
+grounding vẫn phải được chứng minh. Nếu thiếu thì giữ unresolved; không bỏ assertions.
 
 **Nếu case thực sự được resolve và execute, nó tạo đơn thật:** ghi order/items,
 giữ tồn kho, tạo payment pending, bỏ items đã đặt khỏi giỏ, gửi notifications
