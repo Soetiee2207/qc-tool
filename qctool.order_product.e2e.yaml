@@ -1,0 +1,60 @@
+# One business obligation; no credentials or fake product/address IDs here.
+feature: order_product
+module: ORDER_PRODUCT
+generation:
+  profile: business
+docs_dir: ./samples/order_product
+openapi: ./samples/order_product/openapi.yaml
+web_url: https://salonhub-soe.vercel.app
+run:
+  base_url: https://salonhub-3cg8.onrender.com
+  timeout_seconds: 30
+  verify_ssl: true
+auth:
+  mode: browser # Explicit bootstrap using the customer's existing env account.
+llm:
+  enabled: false # Add --llm for the real configured provider.
+provisioning:
+  enabled: false # Does not authorize order creation or override explorer safety.
+  environment: production
+ui:
+  retry: 0
+  evidence: off
+  trace: false
+out:
+  dir: ./artifacts/order-product-e2e
+  skip_run: false
+  headless: false
+test_fixtures:
+  fixtures:
+    active_user:
+      email: {env: QCTOOL_USERNAME}
+      password: {env: QCTOOL_PASSWORD}
+      facts:
+        role: customer
+        account_state: active
+  bindings:
+    AC-order_product-001-1:
+      email: active_user.email
+      password: active_user.password
+      correct_password: active_user.password
+  acquisition:
+    requirements:
+      AC-order_product-001-1:
+      - fixture: active_user
+        aliases: [active_user.email, active_user.password]
+        facts:
+          account_exists: true
+          password_valid: true
+          account_state: active
+        require_verified: false
+        source_ref: samples/order_product/urd.md:AC-001-1
+    evidence:
+    - fixture: active_user
+      facts:
+        account_exists: true
+        password_valid: true
+        account_state: active
+        role: customer
+      assurance: DECLARED
+      source_ref: operator:confirmed-existing-customer-account
