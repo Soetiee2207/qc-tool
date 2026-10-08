@@ -71,8 +71,10 @@ uv run qctool run --config qctool.yaml
 ```
 
 CLI dùng chung `run_pipeline()` cho ingest, crawl/evidence, generation/resolution,
-Chromium/API execution và report. Mặc định output gọn; `summary.json` chứa số liệu,
-`pipeline.log` và `generation.json` giữ diagnostics/history chi tiết đã redact.
+Chromium/API execution và report. Terminal hiển thị tiến trình `[ingest]`,
+`[crawl]`, `[generate]`, `[run]`, `[report]` ngay khi từng chặng bắt đầu; tiến trình
+được redact và ghi vào `pipeline.log` trong lúc chạy. Summary hiện khi kết thúc;
+`summary.json` chứa số liệu, `generation.json` giữ diagnostics/history chi tiết.
 Candidate business manual/unresolved giữ trong testcase YAML/XLSX và reports, không tự thành Pass.
 
 **Profile mặc định của `run`: `business`.** Requirements/flows tạo obligations;

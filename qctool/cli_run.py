@@ -1,4 +1,4 @@
-"""Quiet product CLI facade: preflight, existing pipeline, factual summary.
+"""Product CLI facade: safe live progress, preflight and factual summary.
 
 No mapping/resolution/exploration/execution logic lives here. Legacy commands keep
 existing exit behavior. Resolution blockers never become runner Fail/Blocked.
@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from io import StringIO
 import json
 import os
+import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -328,13 +329,28 @@ def cmd_project(args, *, validate_only=False):
         print('Không gọi model/browser/API; không chứng minh tài khoản hay website hoạt động.')
         return 0
     buffer = StringIO()
+    terminal = sys.stdout
+    progress = []
     try:
-        with redirect_stdout(buffer), redirect_stderr(buffer):
-            result = pipeline.run_pipeline(cfg,resolution_llm=checked.adapter,exploration_llm=checked.adapter)
+        out = cfg.out_dir or Path('artifacts')/cfg.feature
+        out.mkdir(parents=True,exist_ok=True)
+        # Use the original terminal while raw dependency output stays buffered.
+        # Flush each phase to terminal AND disk before browser/model work proceeds.
+        with (out/'pipeline.log').open('w',encoding='utf-8') as live_log:
+            def on_progress(stage, message):
+                line = redact(f'  [{stage}] {message}',cfg)
+                progress.append(line)
+                print(line,file=terminal,flush=True)
+                live_log.write(line+'\n')
+                live_log.flush()
+
+            with redirect_stdout(buffer), redirect_stderr(buffer):
+                result = pipeline.run_pipeline(cfg,on_progress=on_progress,
+                    resolution_llm=checked.adapter,exploration_llm=checked.adapter)
         summary = redact(build_summary(result),cfg)
         out = result.out_dir or cfg.out_dir or Path('artifacts')/cfg.feature
         out.mkdir(parents=True,exist_ok=True)
-        (out/'pipeline.log').write_text(redact('\n'.join(result.log)+'\n'+buffer.getvalue(),cfg),encoding='utf-8')
+        (out/'pipeline.log').write_text(redact('\n'.join(progress+result.log)+'\n'+buffer.getvalue(),cfg),encoding='utf-8')
         (out/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')
         print_summary(summary,redact(str(out),cfg))
         return summary['exit_code']

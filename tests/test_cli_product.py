@@ -76,7 +76,8 @@ def test_successful_full_run_summary_agrees_with_every_artifact(monkeypatch,tmp_
         assert Path(summary['artifacts']['report']).with_name(key).is_file()
     text=capsys.readouterr().out
     assert 'QC: SUCCESS' in text and 'Pass: 1' in text
-    assert '[generate]' not in text and 'Generation:' in text
+    assert '[generate]' in text and '[ingest]' in text and '[run]' in text and 'Generation:' in text
+    assert '[generate]' in (out/'pipeline.log').read_text()
 
 
 def test_minimal_docs_url_no_llm_no_provisioning(monkeypatch,tmp_path,capsys):
@@ -166,6 +167,47 @@ def test_error_secret_redaction_in_terminal_and_log(monkeypatch,tmp_path,capsys)
     assert secret not in (out/'summary.json').read_text()
     assert secret not in (out/'pipeline.log').read_text()
     assert '[REDACTED]' in (out/'pipeline.log').read_text()
+
+
+def test_progress_is_visible_and_flushed_to_log_before_pipeline_finishes(monkeypatch,tmp_path,capsys):
+    secret='PRIVATE-LIVE-PROVIDER-KEY'
+    password='PRIVATE-LIVE-PASSWORD'
+    path,out=inputs(monkeypatch,tmp_path,options={'auth':{'mode':'manual','password':password}})
+    monkeypatch.setenv('QCTOOL_LLM_API_KEY',secret)
+    original=pipeline.run_pipeline
+    seen=[]
+    def spy(cfg,on_progress=None,**kwargs):
+        assert callable(on_progress)
+        on_progress('crawl','Opening browser '+secret+' '+password)
+        visible=capsys.readouterr().out
+        persisted=(out/'pipeline.log').read_text()
+        assert '[crawl] Opening browser' in visible and '[crawl] Opening browser' in persisted
+        assert '[REDACTED]' in visible and '[REDACTED]' in persisted
+        assert secret not in visible+persisted and password not in visible+persisted
+        assert 'QC: SUCCESS' not in visible  # Callback runs before final summary.
+        print('Internal dependency '+secret+' '+password)
+        assert capsys.readouterr().out == ''  # Raw stdout remains captured.
+        seen.append(True)
+        return original(cfg,on_progress=on_progress,**kwargs)
+    monkeypatch.setattr(pipeline,'run_pipeline',spy)
+    assert main(['run','--config',str(path)]) == 0 and seen == [True]
+    log=(out/'pipeline.log').read_text()
+    assert '[crawl] Opening browser' in log and 'Internal dependency [REDACTED]' in log
+    assert secret not in log and password not in log
+    assert 'QC: SUCCESS' in capsys.readouterr().out
+
+
+def test_failed_pipeline_retains_safe_live_progress(monkeypatch,tmp_path,capsys):
+    path,out=inputs(monkeypatch,tmp_path)
+    def broken(cfg,on_progress=None,**kwargs):
+        on_progress('ingest','Reading source documents')
+        raise RuntimeError('Private internal details')
+    monkeypatch.setattr(pipeline,'run_pipeline',broken)
+    assert main(['run','--config',str(path)]) == 2
+    text=capsys.readouterr().out
+    assert '[ingest] Reading source documents' in text and 'LỖI PIPELINE' in text
+    assert 'Private internal details' not in text
+    assert '[ingest] Reading source documents' in (out/'pipeline.log').read_text()
 
 
 @pytest.mark.parametrize('flags', [[],['--url','javascript:alert(1)'],['--config','/missing/config.yaml']])
