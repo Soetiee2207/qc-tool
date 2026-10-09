@@ -63,6 +63,9 @@ class AgentTools:
         self.ready = None
         self.audit = []
         self.observations = []
+        # What the tool was doing when an exception escaped: turned into feedback
+        # the model can act on instead of a bare class name.
+        self.phase = None
 
     def close(self):
         if self.browser:
@@ -100,6 +103,8 @@ class AgentTools:
         return result
 
     def act(self, action, args, *, browser=None, dry_run=False):
+        target = args.get('target') or args.get('url') or args.get('mode') or ''
+        self.phase = f"{'dry-run ' if dry_run else ''}{action} {target}".strip()
         b = browser or self._open()
         args = deepcopy(args)
         if action in {'ui.click', 'ui.fill', 'ui.select'}:
@@ -157,8 +162,15 @@ class AgentTools:
         check = check_case(self.candidate, self.intent, self.policy)
         if not check.accepted:
             return {'ok': False, 'errors': list(check.errors), 'review': list(check.review)}
-        self.close()
-        b = self._open()  # fresh isolated context, never authoring state
+        self.phase = 'dry-run browser setup (fresh context; not caused by your draft)'
+        try:
+            self.close()
+            b = self._open()  # fresh isolated context, never authoring state
+        except Exception as exc:
+            self.browser = None
+            return {'ok': False, 'phase': 'setup', 'retryable': True,
+                    'error': f'Dry-run browser setup failed ({type(exc).__name__}); '
+                             'environment issue, resubmit the same draft unchanged'}
         self.policy.authentication_observed = False
         saved = {}
         results = []
@@ -192,7 +204,14 @@ class AgentTools:
                 results.append({'seq': step.seq, 'ok': True})
             except Exception as exc:
                 # No snapshot or arbitrary browser error at an assertion point.
-                error = str(exc) if isinstance(exc, (SafetyError, ValueError)) else type(exc).__name__
+                error = (str(exc) if isinstance(exc, (SafetyError, ValueError))
+                         else 'timed out: element missing, hidden or page still loading'
+                         if type(exc).__name__ == 'TimeoutError' else type(exc).__name__)
+                window = max((s.args['capture_requests'].get('timeout_ms', 10000) for s in self.candidate.steps
+                              if s.seq < step.seq and isinstance(s.args.get('capture_requests'), dict)), default=0)
+                if step.action.startswith('assert.') and window > 3000 and 'timed out' in error:
+                    error += (f'; an earlier capture_requests step blocked for {window} ms, so a transient '
+                              'message may already be gone: use "timeout_ms": 2000')
                 result = {'ok': False, 'steps': results, 'failed_step': step.seq,
                           'error': public(error, self.policy.store),
                           'failed_action': step.action, 'failed_target': step.args.get('target')}
@@ -257,7 +276,9 @@ class AgentTools:
                 for step in macro:
                     self.act(step['action'], step['args'])
                 result = {'ok': True, 'url': safe_url(self._open().page.url), 'expanded_steps': macro,
-                          'next': 'Observe the source destination if UI evidence is needed'}
+                          'logged_in': True,
+                          'next': 'Already logged in: do NOT fill the login form again. Navigate to the '
+                                  'source route (browser_observe url=...) and include expanded_steps in draft_case.'}
             else:
                 raise ValueError('Unknown tool')
         except Exception as exc:
@@ -265,6 +286,10 @@ class AgentTools:
             # arbitrary browser/transport text is not.
             message = (str(exc) if isinstance(exc, (SafetyError, ValueError))
                        else getattr(exc, 'code', None) or type(exc).__name__)
+            if type(exc).__name__ == 'TimeoutError':
+                # Raw Playwright text may hold URLs/queries; phase is our own label.
+                message = (f'{name}: timed out during {self.phase or "browser operation"} '
+                           f'(element missing, hidden or page still loading). Observe current page before retrying.')
             result = {'ok': False, 'error': public(message, self.policy.store)}
         if isinstance(result, dict) and not result.get('ok', True) and self.policy.store:
             bindings = self.policy.store.to_dict().get('bindings', {})

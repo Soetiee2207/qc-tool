@@ -5,6 +5,7 @@ created: 2026-10-09
 updated: 2026-10-09
 lang: vi
 changelog:
+  - 2026-10-09 | claude | customer_e2e_test_1: sửa TC_005/007 → 11/11 Pass
   - 2026-10-09 | claude | customer_e2e_test_1: 9/11 Pass, 0 Fail
   - 2026-10-09 | claude | Chạy đủ 7 intent customer 4 lượt; sửa gate/feedback/retry; 5/7 Pass
   - 2026-10-09 | codex | Agent Orders Pass 11/11; ghi rõ chi phí debug và phạm vi kiểm chứng
@@ -205,3 +206,22 @@ Tài liệu mới `samples/customer_e2e_test_1/` lấy từ source SalonHub; con
 **9/11 executable, 9 Pass, 0 Fail, 0 Blocked, 2 Not Executed**. Hai case chưa ready do
 TOKEN_BUDGET: AC-002-2 (anonymous Thêm vào giỏ — ID sản phẩm phụ thuộc dữ liệu) và
 AC-002-4 (/my-orders). Case đăng nhập không có trace (cố ý, tránh lộ mật khẩu).
+
+### customer_e2e_test_1 — sửa 2 case Not Executed (2026-10-09)
+
+Lượt trước 9/11 (TC_005, TC_007 hết TOKEN_BUDGET). Nguyên nhân và sửa (generic):
+
+| Nguyên nhân | Sửa |
+|---|---|
+| `operator: contains` bị validator chặn dù `browser.text/value` chạy được (TC_007) | `allowed_operators(action)` dùng chung: `assert.text/value` = eq/contains/matches; verb khác giữ tập cũ (`json_field` không có contains) |
+| Lỗi chỉ là `TimeoutError`, agent không biết bước nào (TC_005) | Tool báo phase/target (`ui.click <target>`), lỗi setup dry-run tách riêng; không lộ text thô |
+| Macro login xong agent điền form lần nữa (TC_007) | `use_macro` trả `logged_in: true` + chỉ dẫn |
+| Agent tự bịa operator | Protocol liệt kê operator theo verb |
+| Token/call tăng 3.8k → 14.7k | Rút gọn snapshot cũ trong lịch sử (giữ bản mới nhất) |
+| `capture_requests` chặn 10 s → toast (~4 s) đã biến mất trước khi assert (TC_005; runner sẽ ra **Fail giả**) | Protocol: dùng `timeout_ms: 2000` khi sau đó kiểm thông báo tạm thời; dry-run gợi ý khi assert timeout sau cửa sổ dài |
+
+Config: budget 14 turns / 90k tokens (dự phòng). Lượt đủ 11 intent (`runs/20261009-130021`):
+**11/11 executable, 11 Pass, 0 Fail, 0 Blocked.** 49 call, 318.390 token, tối đa 11.952 token/call.
+8/11 case `needs_review` (oracle không có literal nguyên văn, hoặc ID sản phẩm phụ thuộc dữ liệu)
+→ CLI exit 3 `GENERATION_INCOMPLETE` cho tới khi QC duyệt; đây là chủ ý, không phải lỗi.
+Kiểm thử: offline 428 pass, Chromium 63 pass.

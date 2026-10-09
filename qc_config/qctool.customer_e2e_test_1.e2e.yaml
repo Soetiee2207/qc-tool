@@ -4,8 +4,8 @@ module: CUSTOMER_E2E_TEST_1
 generation:
   profile: agent
   budget:
-    max_turns: 12
-    max_tokens: 60000
+    max_turns: 14
+    max_tokens: 90000
     max_seconds: 480
     completion_tokens: 2200
 docs_dir: ../samples/customer_e2e_test_1

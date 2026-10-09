@@ -8,7 +8,7 @@ from typing import Protocol
 from ..llm_provider import capture_provider_attempts, LLMProviderError, _unique_keys, _reject_constant
 from ..executability import _NON_UI_ADAPTERS
 from ..execute.runner import UI_VERBS
-from ..testcase import ACTION_SPECS, Step, StepKind, TestCase
+from ..testcase import ACTION_SPECS, Step, StepKind, TestCase, allowed_operators
 from .gate import case_schema
 from .tools import public
 
@@ -90,7 +90,8 @@ PROTOCOL_VERSION = 'agent-authoring-v1'
 
 
 def protocol():
-    vocabulary = {a: {'required': s.required, 'optional': s.optional, **({'doc': s.doc} if s.doc else {})}
+    vocabulary = {a: {'required': s.required, 'optional': s.optional, **({'doc': s.doc} if s.doc else {}),
+                      **({'operators': sorted(allowed_operators(a))} if 'operator' in (*s.required, *s.optional) else {})}
                   for a, s in sorted(ACTION_SPECS.items()) if a in UI_VERBS or a in _NON_UI_ADAPTERS}
     return ('You author executable QC tests using tools. Documents define expected truth; UI/API observations never redefine it. '
         'Preserve EVERY source action and expected outcome in order. Explore missing UI with browser_observe/browser_act. '
@@ -110,9 +111,42 @@ def protocol():
         'on that ui.click, shaped {"method":"POST","path":"/exact/path","origin":"<API server origin from list_api>","save_as":"res"}. '
         'Then assert with source=<save_as>: assert.http_status/assert.json_field for capture_response; '
         'assert.json_field path "$.request_count" expected 0 for capture_requests. Never replay a UI write as http.request. '
+        'capture_requests blocks for its whole window (default 10000 ms) before the next step runs; transient UI '
+        '(toasts, alerts that auto-hide in ~3-4 s) will be gone by then, so set "timeout_ms": 2000 when a later step '
+        'asserts such a message. '
         'An empty input is assert.value with expected "". '
         'If data/environment prevents execution, explain without inventing facts. Action vocabulary: '
         + json.dumps(vocabulary, sort_keys=True, ensure_ascii=False))
+
+
+def _has_page(value):
+    return isinstance(value, dict) and ('aria' in value or 'snapshot' in value)
+
+
+def compact_history(messages):
+    """Keep only the newest page snapshot in full; older ones become a short stub.
+
+    Every turn resends the whole conversation, so stale ARIA snapshots made each
+    call grow (3.8k → 14.7k tokens) until the intent budget ran out. The model only
+    needs the current page; tool_call_id pairing is preserved so the history stays
+    a valid tool conversation. Errors/feedback text are kept.
+    """
+    pages = []
+    for index, message in enumerate(messages):
+        if message.get('role') != 'tool':
+            continue
+        try:
+            value = json.loads(message['content'])
+        except (TypeError, ValueError):
+            continue
+        if _has_page(value):
+            pages.append((index, value))
+    for index, value in pages[:-1]:
+        stub = {k: v for k, v in value.items() if k not in ('aria', 'snapshot', 'stable_locators', 'steps')}
+        stub['url'] = value.get('url') or (value.get('snapshot') or {}).get('url')
+        stub['superseded'] = 'older page snapshot omitted; see the latest observation'
+        messages[index] = {**messages[index], 'content': json.dumps(stub, ensure_ascii=False, sort_keys=True)}
+    return messages
 
 
 def manual_case(intent, case_id, module, reason, *, status='manual'):
@@ -145,6 +179,7 @@ def author_intent(intent, tools, llm, *, budget=None, critic=False):
             if time.monotonic() - started >= budget.max_seconds:
                 result.stop_reason = 'TIME_BUDGET'
                 break
+            compact_history(messages)
             estimate = len(json.dumps(messages, ensure_ascii=False)) // 3 + len(json.dumps(definitions)) // 3
             if consumed + estimate + budget.completion_tokens > budget.max_tokens:
                 result.stop_reason = 'TOKEN_BUDGET'

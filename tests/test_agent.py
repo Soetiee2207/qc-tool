@@ -311,3 +311,53 @@ def test_url_oracle_must_be_a_path_regex_not_prose():
     assert not prose.accepted and any('not prose' in e for e in prose.errors)
     absolute = check('^https://app\\.test/a$')
     assert absolute.accepted and not absolute.review
+
+
+def test_operator_contract_matches_browser():
+    from qctool.testcase import Step, StepKind, ValidationError, allowed_operators
+    # browser.text/value run contains/eq/matches via expect(); validator must agree.
+    for action in ('assert.text', 'assert.value'):
+        assert allowed_operators(action) == {'eq', 'contains', 'matches'}
+        Step(1, StepKind.THEN, action, {'target': 't', 'expected': 'x', 'operator': 'contains'}).validate()
+        with pytest.raises(ValidationError):
+            Step(1, StepKind.THEN, action, {'target': 't', 'expected': 'x', 'operator': 'gt'}).validate()
+    # json_field has no `contains` in runner._compare: must stay rejected there.
+    with pytest.raises(ValidationError):
+        Step(1, StepKind.THEN, 'assert.json_field', {'path': '$.a', 'expected': 1, 'operator': 'contains'}).validate()
+
+
+def test_protocol_lists_operators_per_verb():
+    from qctool.agent.loop import protocol
+    vocab = json.loads(protocol().split('Action vocabulary: ', 1)[1])
+    assert vocab['assert.text']['operators'] == ['contains', 'eq', 'matches']
+
+
+def test_timeout_feedback_names_phase_without_raw_text(monkeypatch):
+    tools = AgentTools(INTENT, 'TC_A_001', 'A', SafetyPolicy('https://app.test'))
+    class TimeoutError(Exception):
+        pass
+    def boom(*a, **k):
+        tools.phase = 'ui.fill login-email-input'
+        raise TimeoutError('waiting for https://app.test/x?token=SECRET')
+    monkeypatch.setattr(tools, 'act', boom)
+    answer = tools.call('browser_act', {'action': 'ui.fill', 'args': {'target': 'login-email-input', 'value': 'x'}})
+    assert not answer['ok'] and 'ui.fill login-email-input' in answer['error'] and 'SECRET' not in answer['error']
+
+
+def test_compact_history_keeps_latest_page_and_pairs():
+    from qctool.agent.loop import compact_history
+    page = lambda url: json.dumps({'url': url, 'aria': 'X' * 5000, 'stable_locators': [1] * 50})
+    messages = [{'role': 'system', 'content': 's'},
+                {'role': 'tool', 'tool_call_id': 'a', 'content': page('/one')},
+                {'role': 'tool', 'tool_call_id': 'b', 'content': json.dumps({'ok': False, 'error': 'keep me'})},
+                {'role': 'tool', 'tool_call_id': 'c', 'content': page('/two')}]
+    compact_history(messages)
+    old, kept = json.loads(messages[1]['content']), json.loads(messages[3]['content'])
+    assert 'aria' not in old and old['url'] == '/one' and old['superseded']
+    assert kept['aria'] and messages[1]['tool_call_id'] == 'a'
+    assert json.loads(messages[2]['content'])['error'] == 'keep me'
+
+
+def test_protocol_warns_capture_window_hides_transient_messages():
+    from qctool.agent.loop import protocol
+    assert '"timeout_ms": 2000' in protocol()

@@ -297,6 +297,15 @@ def percentile_of(text: str) -> float:
     return PERF_DEFAULT_PERCENTILE
 
 _OPERATORS = {"eq", "ne", "gt", "gte", "lt", "lte", "in", "not_in", "matches", "exists"}
+# Assert UI so chuỗi qua Playwright `expect()` (browser.text/value) — tập riêng, khớp đúng
+# những gì trình duyệt chạy được. Validator và runner phải đồng ý, nếu không agent bị
+# chặn ở toán tử runner vẫn chạy được (hoặc ngược lại: lọt qua rồi fail lúc chạy).
+_UI_TEXT_OPERATORS = {"eq", "contains", "matches"}
+
+
+def allowed_operators(action: str) -> frozenset[str]:
+    """Toán tử hợp lệ cho một verb — nguồn duy nhất cho validator và prompt agent."""
+    return frozenset(_UI_TEXT_OPERATORS if action in {"assert.text", "assert.value"} else _OPERATORS)
 
 
 class ValidationError(Exception):
@@ -347,10 +356,10 @@ class Step:
                 raise ValidationError(
                     f"Bước {self.seq}: {capture_key} không hợp lệ — {exc}. "
                     "Dạng đúng: {method, path, origin[, save_as, timeout_ms]}") from None
-        if "operator" in self.args and self.args["operator"] not in _OPERATORS:
+        if "operator" in self.args and self.args["operator"] not in allowed_operators(self.action):
             raise ValidationError(
-                f"Bước {self.seq}: operator `{self.args['operator']}` không hợp lệ. "
-                f"Cho phép: {sorted(_OPERATORS)}"
+                f"Bước {self.seq} (`{self.action}`): operator `{self.args['operator']}` không hợp lệ. "
+                f"Cho phép: {sorted(allowed_operators(self.action))}"
             )
 
     def to_dict(self) -> dict:
