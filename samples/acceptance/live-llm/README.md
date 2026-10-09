@@ -1,3 +1,7 @@
+> **Đã retire ở V2 (2026-10-09).** Script chạy bộ này (`scripts/run_live_llm_acceptance.py`) và engine
+> resolution/exploration nó dùng đã bị gỡ. Giữ thư mục làm lịch sử. Kiểm chứng agent hiện
+> tại: `samples/customer_e2e_test_1/` và `docs/findings/agent-redesign.md`.
+
 # Acceptance model thật (chạy thủ công)
 
 Script dùng app hư cấu `tests/mock_server.py`, tự mở server trên port trống và

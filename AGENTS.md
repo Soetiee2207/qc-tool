@@ -48,6 +48,8 @@ uv run qctool all --config qctool.yaml    # cả pipeline từ file cấu hình
 uv run qctool ingest   <feature-dir> --feature <tên>
 uv run qctool generate --requirements artifacts/<f>/requirements.yaml \
                        --openapi <spec.yaml> --xlsx artifacts/<f>/testcases.xlsx
+# ↑ không gọi LLM: OpenAPI → case API; prose → case thủ công (perform.unmapped).
+#   Case UI tự động từ prose chỉ có qua `run --config … --llm` (agent).
 uv run qctool run      artifacts/<f>/testcases.yaml \
                        --base-url <url> --xlsx artifacts/<f>/testcases.xlsx
 
@@ -134,7 +136,7 @@ Prose dùng authoring agent tool-calling (`generated_by: llm`); OpenAPI giữ ge
 
 - **Mỗi testcase một browser context** (`start_case`/`end_case`). Dùng chung context
   là quay lại đúng cái bẫy R4: chạy riêng pass, chạy cả suite fail.
-- **Ưu tiên `data-testid`**: mapper đặt `target: <test_id>`, `by_name` chỉ để người
+- **Ưu tiên `data-testid`**: agent đặt `target: <test_id>` (`agent/tools.py::locator`), `by_name` chỉ để người
   đọc. Dùng nhãn hiển thị làm selector thì mỗi lần dev sửa chữ là test đỏ.
 - **Case đạt ở lần chạy lại là `flaky`, không phải `Pass` sạch.** Báo cáo phải nói
   riêng (Mục 6). Xoá dấu vết lần hỏng đầu là nói dối.
@@ -229,8 +231,9 @@ Các luật còn lại:
 
 - **Không suy diễn.** Thiếu owner/acceptance → ghi `TBC`. Đánh dấu *done* **phải có bằng chứng**;
   thêm một việc vào to-do thì không cần.
-- **Không sinh case khi không có cơ sở.** Requirement không nêu endpoint → case sinh ra ở dạng
-  `perform.unmapped` và bị đánh dấu *chưa map*, **không** được đoán ra một selector hay URL.
+- **Không sinh case khi không có cơ sở.** Agent không viết được case qua gate + dry-run (hết
+  budget, locator không duy nhất, thiếu dữ liệu) → case giữ dạng `perform.unmapped`, `manual`,
+  *chưa map*; **không** được đoán selector/URL hay nới gate để lấy số.
 - **OpenAPI là nguồn ground cho API.** Endpoint/field không có trong OpenAPI hoặc tài liệu → tool
   **không được bịa**. Thà bỏ sót còn hơn sinh case gọi endpoint không tồn tại.
 - **Approval gate (L1):** trước khi Write/Edit, in bảng plan `# | path | action | summary` rồi chờ Y/n —

@@ -107,31 +107,23 @@ Hoặc copy [qctool.run.example.yaml](qctool.run.example.yaml) thành `qctool.ya
 uv run qctool run --config qctool.yaml
 ```
 
-CLI dùng chung `run_pipeline()` cho ingest, crawl/evidence, generation/resolution,
-Chromium/API execution và report. Terminal hiển thị tiến trình `[ingest]`,
-`[crawl]`, `[generate]`, `[run]`, `[report]` ngay khi từng chặng bắt đầu; tiến trình
-được redact và ghi vào `pipeline.log` trong lúc chạy. Summary hiện khi kết thúc;
-`summary.json` chứa số liệu, `generation.json` giữ diagnostics/history chi tiết.
-Candidate business manual/unresolved giữ trong testcase YAML/XLSX và reports, không tự thành Pass.
+CLI dùng chung `run_pipeline()` cho ingest, crawl (đăng nhập + `app-model.yaml`),
+generation bằng agent, Chromium/API execution và report. Terminal hiển thị tiến trình
+`[ingest]`, `[crawl]`, `[generate]`, `[agent]`, `[run]`, `[report]`; tiến trình được redact
+và ghi vào `pipeline.log`. `summary.json` chứa số liệu, `generation.json` giữ lịch sử
+agent (tool đã gọi, lỗi gate/dry-run, token). Case manual/unresolved vẫn nằm trong
+testcase YAML/XLSX và report, không bao giờ thành Pass.
 
-**Profile mặc định của `run`: `business`.** Requirements/flows tạo obligations;
-coverage planner sinh candidates từ obligations chưa phủ. Legacy API/UI seeds
-không tham gia coverage hoặc execution của profile này; vẫn được lưu trong
-`legacy-testcases.yaml`. `case-scopes.json` ghi `BUSINESS_COVERAGE` hoặc
-`LEGACY_DIAGNOSTIC` kèm artifact chứa từng case (ID có thể trùng giữa hai artifact).
-
-Dùng `--profile legacy` hoặc `generation.profile: legacy` để chạy đường tương thích
-cũ gồm legacy seeds. Summary tách `business_counts`/`diagnostic_counts`; diagnostic
-Fail không được trình bày như Fail của business obligation. Tổng execution counts
-vẫn khớp reports; diagnostic Fail vẫn trả exit 1 (`DIAGNOSTIC_EXECUTION_FAILED`
-khi chỉ diagnostic thất bại). `all` và caller trực tiếp giữ default legacy.
-OpenAPI-only không khai business obligations: dùng profile legacy để chạy API seeds;
-profile business không tự coi interface contract là requirement coverage hoàn tất.
+**Profile duy nhất: `agent`.** Mỗi acceptance criterion là một intent; agent viết một
+testcase cho nó trong một hội thoại có feedback. `generation.profile: business`/`legacy`
+trong config cũ chỉ là alias của `agent` — không còn nhánh legacy, không còn
+`legacy-testcases.yaml`. Giới hạn chi phí: `generation.max_intents`, `intent_ids`,
+`budget` (turns/tokens/giây mỗi intent).
 
 Preparation AVAILABLE được dùng lại trong cùng run chỉ khi toàn bộ data/trust
 identity khớp: fixture, aliases, facts, assurance, credentials/config, reviewed rules,
-policy, contract, backend và environment. Cache runtime tối đa 128 entries, TTL
-5 phút, không đọc proof từ JSON hoặc chia sẻ mặc định giữa runs. Audit ghi
+policy, contract, backend và environment. Cache runtime tối đa 128 entries, độ tươi
+300 giây, không đọc proof từ JSON hoặc chia sẻ mặc định giữa runs. Audit ghi
 `preparation_mode: EXECUTED/REUSED`, `preparation_identity`, `reused_from_testcase`
 và `executed_calls`; receipt cũ chỉ là lịch sử proof, không phải call mới.
 
@@ -154,7 +146,7 @@ hiện có và provider configuration nếu bật LLM. Không gọi model/browse
 không ghi artifacts, không chứng minh coverage/account/website hoạt động và không
 phải validator đầy đủ mọi tính năng chuẩn OpenAPI.
 
-Artifacts: `requirements.yaml`, `ui-map.yaml` khi có evidence, `testcases.yaml`,
+Artifacts: `requirements.yaml`, `app-model.yaml`, `testcases.yaml`,
 `testcases.xlsx`, `generation.json`, `summary.json`, `pipeline.log`; execution
 reports `results.json`, `results.csv`, `junit.xml`, `report.md` dưới `runs/<timestamp>/`.
 Evidence/trace giữ policy và secret protection hiện có. Xem `summary.json.artifacts`
@@ -256,7 +248,8 @@ Mỗi lượt chạy tạo `artifacts/<feature>/`:
 | `runs/<giờ>/junit.xml` | Đưa vào CI |
 | `runs/<giờ>/results.csv` | Mở Excel, tự làm pivot |
 | `evidence/` | Ảnh chụp + trace của test UI, đặt tên theo mã test |
-| `ui-map.yaml` | Webapp có những nút/element gì |
+| `app-model.yaml` | Trang agent đã thấy + macro đăng nhập (không chứa mật khẩu) |
+| `generation.json` | Agent đã gọi tool nào, sửa lỗi gì, tốn bao nhiêu token |
 
 `artifacts/` là output sinh lại được — không sửa tay, không commit.
 
@@ -343,8 +336,8 @@ uv run playwright show-trace artifacts/<feature>/evidence/TC_AUTH_001.trace.zip
 
 Nguyên tắc: **OpenAPI là nguồn ground cho API.** Endpoint/field không có trong OpenAPI hoặc
 tài liệu thì tool không được bịa — thà bỏ sót còn hơn sinh case gọi endpoint không tồn tại.
-Requirement không nêu endpoint thì case sinh ra ở dạng `perform.unmapped` và bị đánh dấu
-*chưa map*, không được đoán ra selector hay URL.
+Case prose mà agent không viết được qua gate + dry-run thì giữ dạng `perform.unmapped`,
+đánh dấu *chưa map* / thủ công — không được đoán ra selector hay URL.
 
 ## Phát triển
 
@@ -367,6 +360,7 @@ luật sinh ra để chặn chúng tái diễn.
 | UI map nhiều trang | Dò được nhiều trang, chưa bấm sâu vào menu |
 | Chạy song song | Chạy lần lượt, bộ test lớn sẽ chậm |
 | Upload file / iframe / dialog hệ thống | Chưa có verb cho nhóm này |
-| Track LLM | Mọi case hiện đều `generated_by: engine` |
+| Bước ghi dữ liệu (đặt hàng, xác nhận lịch…) | Agent không dry-run được thao tác ghi → case giữ thủ công; cần mutation policy đã review |
+| LLM ổn định | DeepSeek có lúc timeout/hết budget → vài case `Not Executed`; kết quả từng case dao động giữa các lượt |
 
 Xem `docs/tracking/todo.md` và `docs/tracking/milestones.md` để biết đang làm gì tiếp.

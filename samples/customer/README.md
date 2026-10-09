@@ -1,5 +1,7 @@
 # Chạy customer SalonHub — 7 intent từ source
 
+Kết quả V2 (2026-10-09): 5/7 executable, 5 Pass, 0 Fail — xem `docs/findings/agent-redesign.md`.
+
 Fixture này dùng source SalonHub thật, không phải app mock. Feature `customer`,
 module `CUSTOMER`. Không có testcase YAML viết tay; tool ingest AC và tự sinh.
 
@@ -13,21 +15,21 @@ uv run qctool run --config qctool.customer.e2e.yaml --llm
 ```
 
 `validate` chỉ preflight offline, không browser/model/API. `run` chạy toàn bộ
-pipeline: ingest → crawl → business coverage/generation → preparation dữ liệu tin cậy
-→ resolution/exploration qua DeepSeek nếu cần → runner Chromium → XLSX/report.
+pipeline: ingest → crawl (đăng nhập) → preparation dữ liệu tin cậy → agent DeepSeek
+viết từng case (quan sát → nháp → gate → dry-run) → runner Chromium → XLSX/report.
 Không bảo đảm cả 7 ca map được: thiếu bằng chứng hoặc dữ liệu phải unresolved,
 không được coi là Pass. Web UI đang mở để xem trực tiếp (`headless: false`).
 Không đóng terminal hoặc Chromium khi đang chạy.
 
-Nếu muốn giữ entrypoint cũ `all`, phải giữ business profile trong config:
+Entrypoint `all` dùng cùng pipeline agent:
 
 ```bash
 uv run qctool all --config qctool.customer.e2e.yaml --llm
 ```
 
-Ưu tiên `run` cho summary business và exit codes. Không chạy hai lệnh `run`/`all`
+Ưu tiên `run` cho summary và exit codes. Không chạy hai lệnh `run`/`all`
 cùng lúc; chúng dùng cùng thư mục output. `llm.enabled: false` nghĩa là phải thêm
-`--llm` để bật model tường minh. Bỏ flag sẽ chạy đường deterministic, có thể incomplete.
+`--llm` để bật model tường minh. Bỏ flag thì 7 case ở dạng thủ công (Not Executed).
 
 ## Env/config cần chú ý
 
@@ -50,7 +52,7 @@ Nếu account bị từ chối lúc thực thi, giữ nguyên expected và báo 
 Provisioning luôn tắt trên website này.
 
 - `feature: customer`: namespace requirement IDs.
-- `generation.profile: business`: chạy obligation business, không cộng legacy seeds.
+- `generation.profile: agent` (V2; `business` cũ là alias): mỗi AC một intent cho agent.
 - `web_url`: frontend Vercel; `run.base_url`: backend Render, không đảo hai URL.
   Host backend là default source; nếu deployment dùng host khác cần sửa cả config
   và `servers` OpenAPI theo host đã xác nhận.

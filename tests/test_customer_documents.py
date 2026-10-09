@@ -25,7 +25,7 @@ def test_customer_contract_excludes_mutations_and_registration():
 def test_customer_policy_uses_only_env_and_does_not_claim_role_verification():
     config = yaml.safe_load((ROOT / 'qctool.customer.e2e.yaml').read_text())
     assert config['feature'] == 'customer'
-    assert config['generation']['profile'] == 'business'
+    assert config['generation']['profile'] == 'agent'
     assert config['auth']['mode'] == 'manual'
     assert config['provisioning']['enabled'] is False
     assert config['llm']['enabled'] is False

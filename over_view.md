@@ -1,5 +1,13 @@
 # Báo Cáo Phân Tích Kiến Trúc Toàn Diện Repository qc-tool
 
+> **⚠ Tài liệu V1 — đã lỗi thời (cập nhật 2026-10-09).** Báo cáo này mô tả kiến trúc trước
+> QC-TOOL V2: mapper prose → action, semantic IR, proposal validator, resolution/coverage loop,
+> exploration plan. Các phần đó **đã bị gỡ khỏi code**. Kiến trúc hiện tại: authoring agent
+> tool-calling (`qctool/agent/`) — đọc `AGENTS.md` (mục *Authoring agent*), `README.md`,
+> `HUONG-DAN.md` và `docs/findings/agent-redesign.md`. Ingest, OpenAPI generator, runner,
+> browser, report và template 14 cột trong tài liệu này vẫn đúng.
+
+
 > **Tài liệu tham khảo kỹ thuật**: Dành cho việc nghiên cứu, tái sử dụng và phát triển QC Tool tự động hoá kiểm thử đa nền tảng (Web / API / E2E).
 > **Nguồn phân tích**: Repository `/home/soetie/Documents/2026_Document/qc-tool`.
 

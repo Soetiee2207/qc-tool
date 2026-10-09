@@ -54,8 +54,11 @@ Nếu muốn entrypoint `all` đang dùng:
 uv run qctool all --config qctool.order_product.e2e.yaml --llm
 ```
 
-Chỉ chạy một trong hai lệnh full. Config giữ `generation.profile: business`,
-không chạy diagnostic API seeds. `auth.mode: browser` cho phép đăng nhập
+Chỉ chạy một trong hai lệnh full. `generation.profile: business` là alias của `agent` (V2).
+
+> **Giới hạn V2:** agent không dry-run thao tác ghi (`Mutation cannot be dry-run twice`),
+> nên case đặt hàng hiện **không thành executable** dù có mutation policy — giữ thủ công.
+> Cần thay đổi tool (dry-run tới trước submit, runner submit một lần) trước khi dùng sample này. `auth.mode: browser` cho phép đăng nhập
 bootstrap; fixture aliases bind vào đúng `AC-order_product-001-1`. Một case
 generated thường có ID `TC_ORDER_PRODUCT_001`; source obligation là định danh
 ổn định, ID candidate có thể thay đổi theo generation pass.

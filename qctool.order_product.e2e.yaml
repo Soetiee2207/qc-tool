@@ -2,7 +2,7 @@
 feature: order_product
 module: ORDER_PRODUCT
 generation:
-  profile: business
+  profile: agent
 docs_dir: ./samples/order_product
 openapi: ./samples/order_product/openapi.yaml
 web_url: https://salonhub-soe.vercel.app

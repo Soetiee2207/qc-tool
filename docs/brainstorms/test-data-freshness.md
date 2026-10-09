@@ -2,9 +2,10 @@
 type: design
 status: implemented
 created: 2026-10-08
-updated: 2026-10-08
+updated: 2026-10-09
 lang: vi
 changelog:
+  - 2026-10-09 | claude | V2: chỉ run_generation dùng cache
   - 2026-10-08 | codex | Tách creation history và assurance freshness trong run
 ---
 
@@ -34,8 +35,8 @@ TTL của live evidence không biến declaration thành invalid hay nâng nó l
 ## Freshness và refresh
 
 `PreparationCache(freshness_seconds=300, clock=time.monotonic)` là mặc định.
-Run owner có thể truyền cache với freshness riêng vào `run_generation`/
-`run_coverage_loop`/`run_resolution_loop`. CLI hiện giữ default 300 giây.
+`run_generation` tạo một cache cho mỗi lượt chạy (coverage/resolution loop đã retire
+ở V2). CLI giữ default 300 giây.
 Clock injectable phục vụ test; không cần sleep hay đổi thời gian hệ thống.
 Không tăng TTL để che lỗi. Hết hạn không đồng nghĩa giả mạo receipt.
 

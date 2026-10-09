@@ -1,14 +1,19 @@
 ---
 type: design
-status: implemented
+status: superseded
 created: 2026-10-08
-updated: 2026-10-08
+updated: 2026-10-09
 lang: vi
 changelog:
+  - 2026-10-09 | claude | Đánh dấu superseded bởi agent V2
   - 2026-10-08 | codex | Thêm semantic IR và routing evidence need có kiểm chứng
 ---
 
 # Semantic resolution có kiểm chứng
+
+> **Đã thay thế (2026-10-09, V2).** Semantic IR, proposal validator và resolution loop
+> mô tả dưới đây đã bị gỡ khỏi code. Thay bằng authoring agent (`qctool/agent/`) —
+> xem `docs/findings/agent-redesign.md`. Giữ file này làm lịch sử quyết định.
 
 ## Trust boundary
 

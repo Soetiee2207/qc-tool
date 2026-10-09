@@ -4,7 +4,7 @@
 feature: smoke
 module: SMOKE
 generation:
-  profile: business # default primary run; legacy is explicit compatibility
+  profile: agent # V2 authoring agent; business/legacy are deprecated aliases
 docs_dir: ./docs
 openapi: ./openapi.yaml
 web_url: https://app.example.com

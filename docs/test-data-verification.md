@@ -2,9 +2,10 @@
 type: guide
 status: implemented
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-09
 lang: vi
 changelog:
+  - 2026-10-09 | claude | V2: preparation chạy trong run_generation; resolution loop retire
   - 2026-10-07 | codex | Liên kết provisioning opt-in, giữ verification độc lập
   - 2026-10-07 | codex | Nối preparation hữu hạn vào generation và resolution
   - 2026-10-07 | codex | Thêm verification có policy và receipt, không provisioning
@@ -162,11 +163,10 @@ nhiều backend khác nhau trong cùng phase giữ unresolved, không đoán hos
 Server API không bị thay bằng URL frontend. Một alternative unsafe không chặn
 rule độc lập an toàn đã được duyệt.
 
-`run_resolution_loop()` prepare trước executable short-circuit và dùng lại
-receipt qua các cycle; không lặp verification theo cycle. Blocker dừng loop với
-`NO_MORE_WORK` trước LLM/Playwright. `run_resolution_cycle()` gọi riêng cũng có
-preparation. `run_generation()` prepare existing cases trước coverage; generated
-candidates đi qua coverage pass → resolution loop như trước. Blockers có trong
+V2: `run_generation()` (`qctool/generation.py`) prepare dữ liệu cho từng intent trước
+khi agent viết case, dùng một `PreparationCache` cho cả lượt chạy; không lặp verification.
+Blocker dữ liệu giữ case ở trạng thái blocked trước khi gọi LLM/Playwright.
+(Resolution loop/cycle cũ đã retire.) Blockers có trong
 generation audit/issues và context; coverage pass dùng contextual executability.
 
 Case copy có blocker được đánh `execution: manual`, để runner hoặc coverage

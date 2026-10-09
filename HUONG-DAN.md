@@ -133,7 +133,8 @@ Sau mỗi lần chạy, trong `artifacts/<feature>/`:
 | `runs/<giờ>/junit.xml` | Đưa vào CI |
 | `runs/<giờ>/results.csv` | Mở Excel, tự làm pivot |
 | `evidence/` | Ảnh chụp + trace của test UI, đặt tên theo mã test |
-| `ui-map.yaml` | Webapp có những nút/element gì |
+| `generation.json` | Agent đã gọi tool nào, sửa lỗi gì, tốn bao nhiêu token |
+| `app-model.yaml` | Trang agent đã thấy + macro đăng nhập (không chứa mật khẩu) |
 
 Script in sẵn đường dẫn báo cáo ở cuối mỗi lần chạy.
 
@@ -156,13 +157,17 @@ Nếu bạn thấy `Lỗi` mà nguyên nhân là "thiếu tài khoản" — đó
 
 ---
 
-## Vì sao OAS là đầu vào quan trọng nhất
+## Tài liệu và OAS — mỗi thứ dùng để làm gì
 
-Không có nó, case sinh từ tài liệu phải **map** sang hành động cụ thể mới chạy được.
-Mà tài liệu viết *"sidebar chỉ hiện module tôi được phép"* — câu đó nói cần kiểm gì,
-không nói element nào. Tool giữ nguyên và đánh dấu *chưa map*, rồi báo `Bị chặn`.
+**Tài liệu (URD/SRS markdown)** là nguồn chính cho test giao diện: agent đọc từng
+acceptance criterion (Given/When/Then), tự mở website, tìm nút/ô bằng `data-testid`
+hoặc role + tên, viết testcase rồi chạy thử. Kết quả mong đợi **phải trích nguyên văn**
+tài liệu — agent không được lấy theo những gì website đang hiển thị. Câu mơ hồ
+(*"sidebar chỉ hiện module tôi được phép"*) không có giá trị cụ thể để trích → case
+`needs_review` hoặc thủ công, không bao giờ tự thành Đạt.
 
-Có OAS thì tool sinh thẳng case chạy được: giá trị biên, mã lỗi, ma trận xác thực.
+**OAS** cho phép: (1) sinh thẳng case API (giá trị biên, mã lỗi, ma trận xác thực) không
+cần LLM; (2) agent kiểm response API sau một thao tác UI (ví dụ POST login trả 200).
 
 > Lấy spec từ FastAPI:
 > ```bash
@@ -171,34 +176,24 @@ Có OAS thì tool sinh thẳng case chạy được: giá trị biên, mã lỗi
 
 ---
 
-## LLM tùy chọn cho generation
+## LLM (agent) cho generation
 
-Mặc định không gọi model. Adapter dùng endpoint Chat Completions tương thích
-OpenAI (`<base URL>/chat/completions`), cùng một model cho resolution và exploration
-planning. Chỉ hỗ trợ provider/model nhận `response_format: json_object`.
-
-Điền `.env` (gitignored) hoặc export biến môi trường:
+Mặc định không gọi model. Agent dùng Chat Completions tương thích OpenAI có **tool
+calling** (`<base URL>/chat/completions`) — đã kiểm với DeepSeek. Provider phải hỗ trợ `tools`.
 
 ```bash
-export QCTOOL_LLM_BASE_URL=https://api.openai.com/v1
-export QCTOOL_LLM_MODEL='your-model-id'
-# QCTOOL_LLM_API_KEY đặt qua .env hoặc secret manager, không commit vào repo.
-export QCTOOL_LLM_TIMEOUT_SECONDS=30
-uv run qctool all --config qctool.yaml --llm
+# .env (gitignored): QCTOOL_LLM_BASE_URL, QCTOOL_LLM_MODEL, QCTOOL_LLM_API_KEY
+QCTOOL_LLM_TIMEOUT_SECONDS=90 QCTOOL_LLM_THINKING=disabled \
+  uv run qctool run --config qctool.yaml --llm
 ```
 
 `--llm` bật tường minh; `--no-llm` tắt kể cả khi config/env đã bật. Cũng có thể đặt
-`llm.enabled: true` trong YAML, hoặc `QCTOOL_LLM_ENABLED=true` trong env khi YAML
-không ghi `llm.enabled`. Chỉ có API key/model không đủ để tự bật LLM.
-Python caller có thể dùng `PipelineConfig(llm_enabled=True, ...)`, hoặc truyền
-adapter qua `run_pipeline(..., resolution_llm=..., exploration_llm=...)`.
+`llm.enabled: true` trong YAML. Chỉ có API key không đủ để tự bật LLM.
 
-Provider không retry request. Timeout, lỗi HTTP và JSON sai/rỗng được báo có kiểm
-soát, không ghi API key/provider body vào lỗi. Proposal/plan vẫn phải qua parser,
-validator và applier hiện có; model không được sửa testcase trực tiếp. Chỉ phần
-context đã chọn được gửi đi. Xem `generation.json` để biết case unresolved/lỗi
-stage; pipeline hoàn tất không có nghĩa coverage đã hoàn tất. Replay offline
-không đọc/tạo provider này, kể cả khi env bật LLM.
+Mỗi call thử lại **đúng một lần** khi timeout/429/5xx. Lỗi được báo có kiểm soát,
+không ghi API key/nội dung phản hồi. Model không sửa testcase trực tiếp: mọi bản nháp
+phải qua gate (schema, an toàn, trích dẫn, thứ tự bước) và dry-run trên trình duyệt.
+Không có LLM thì case từ tài liệu ở dạng thủ công; case OpenAPI vẫn sinh bình thường.
 
 ## Giới hạn hiện tại
 

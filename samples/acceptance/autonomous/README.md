@@ -1,6 +1,6 @@
 ---
 type: acceptance
-status: implemented
+status: superseded
 created: 2026-10-07
 updated: 2026-10-07
 lang: vi
@@ -8,6 +8,9 @@ changelog:
   - 2026-10-07 | codex | Ghi nhận hai lượt live cache reuse đạt 4/4 Pass
   - 2026-10-07 | codex | Thêm acceptance autonomous trên ứng dụng loopback mới
 ---
+> **Đã retire ở V2 (2026-10-09).** Script chạy bộ này (`scripts/run_autonomous_acceptance.py`) và engine
+> resolution/exploration nó dùng đã bị gỡ. Giữ thư mục làm lịch sử. Kiểm chứng agent hiện
+> tại: `samples/customer_e2e_test_1/` và `docs/findings/agent-redesign.md`.
 
 # Acceptance autonomous — local, không dữ liệu production
 

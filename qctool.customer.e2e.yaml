@@ -4,7 +4,7 @@
 feature: customer
 module: CUSTOMER
 generation:
-  profile: business
+  profile: agent
 docs_dir: ./samples/customer
 openapi: ./samples/customer/openapi.yaml
 web_url: https://salonhub-soe.vercel.app

@@ -7,6 +7,9 @@ lang: vi
 changelog:
   - 2026-10-08 | codex | Sửa evidence/synchronization; Profile chạy Chromium Pass
 ---
+> Ghi chú 2026-10-09: finding này đo engine V1 (semantic resolution/exploration), đã retire ở
+> QC-TOOL V2. Số liệu đúng tại thời điểm ghi; kết quả hiện tại: `docs/findings/agent-redesign.md`.
+
 
 # Customer Profile: source → evidence → executable → Chromium
 

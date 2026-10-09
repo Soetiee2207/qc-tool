@@ -7,6 +7,7 @@ owner: "@binhhm"
 created: 2026-09-18
 updated: 2026-10-09
 changelog:
+  - 2026-10-09 | claude | V2: mapper retire, đã commit agent-redesign
   - 2026-10-09 | claude | Customer 7 intent: 5/7 Pass, 0 Fail; thêm việc tiếp theo
   - 2026-10-09 | codex | Agent redesign: gate/citation/dry-run, live acceptance chưa chốt
   - 2026-09-21 | manual | M06: tầng Playwright đầy đủ — 12 verb UI/UX, context mỗi case, retry+flake, evidence+trace, axe. 172 test
@@ -109,7 +110,7 @@ changelog:
 | [x] | **Bảng map ID** tài liệu ↔ canonical: `F-01` → `FR-login-sso-001`, `NFR-SEC-01` → `NFR-login-sso-001`. Giữ ID gốc trong `source_ids[]` | M01 | findings P10 |
 | [x] | Vocabulary đóng cho `action:` — 20 verb + schema tham số, validator chặn verb lạ | M02, M04 | brainstorm §5 Q1 |
 | [ ] | Golden fixture: manifest trỏ tới 6 file login-sso + hash, để regression mỗi lần đổi prompt | M01, M02 | brainstorm §10 |
-| [ ] | Map 17 case `needs_mapping` của login-sso sang hành động cụ thể — cần UI map hoặc OpenAPI thật | M06, M04 | kết quả generate |
+| [ ] | ~~Map 17 case `needs_mapping` login-sso bằng mapper~~ — mapper đã retire; chạy lại login-sso bằng agent V2 | M06, M04 | kết quả generate |
 | [ ] | Thử nghiệm: đo xem deterministic sinh được bao nhiêu % case so với LLM, để biết tỉ lệ thật | M02 | brainstorm §3.2 |
 | [x] | Chạy thử trên môi trường thật khi có OpenAPI spec + xác thực (D2) — **xong 09-21**: 8/8 case API đạt trên portal thật | M04 | D2 |
 
@@ -146,5 +147,5 @@ Chi tiết, lỗi đã sửa và số liệu từng lượt: finding mục "Ch�
 | [ ] | Timeout DeepSeek 2/37 call: cân nhắc timeout dài hơn hoặc giảm prompt mỗi turn | finding agent-redesign |
 | [ ] | QC gắn nhãn sheet Review cho case `needs_review` → đo tỉ lệ chấp nhận | plan Phase 3 |
 | [ ] | Chạy agent trên `order_product` (cần mutation policy đã review) và `smoke` | plan Phase 4 |
-| [ ] | Commit nhánh `agent-redesign` (hiện toàn bộ thay đổi chưa commit) | — |
+| [x] | Commit nhánh `agent-redesign` — `5e19097 QC-TOOL V2` | — |
 
