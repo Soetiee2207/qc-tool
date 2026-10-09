@@ -47,7 +47,7 @@ ui:
 # ── Đầu ra ──────────────────────────────────────────────────────────────────
 out:
   # Thư mục kết quả. Để trống thì mặc định artifacts/<feature>/
-  # dir: ./artifacts/login-sso
+  # dir: ../artifacts/login-sso
   created_by: "@binhhm"
 
   # true = chỉ sinh testcase, không chạy

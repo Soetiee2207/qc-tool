@@ -10,9 +10,9 @@ Xác nhận đặt lịch). Muốn test các bước đó cần mutation policy 
 ## Chạy
 
 ```bash
-uv run qctool validate --config qctool.customer_e2e_test_1.e2e.yaml          # offline
+uv run qctool validate --config qc_config/qctool.customer_e2e_test_1.e2e.yaml          # offline
 QCTOOL_LLM_TIMEOUT_SECONDS=90 QCTOOL_LLM_THINKING=disabled \
-  uv run qctool run --config qctool.customer_e2e_test_1.e2e.yaml --llm
+  uv run qctool run --config qc_config/qctool.customer_e2e_test_1.e2e.yaml --llm
 ```
 
 `.env` cần `QCTOOL_USERNAME` / `QCTOOL_PASSWORD` (customer có sẵn) và cấu hình DeepSeek.

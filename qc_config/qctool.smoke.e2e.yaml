@@ -1,8 +1,8 @@
 # Smoke từ source SalonHub; credential chỉ lấy từ .env.
 feature: salonhub-smoke
 module: SALON_AUTH
-docs_dir: ./samples/smoke
-openapi: ./samples/smoke/openapi.yaml
+docs_dir: ../samples/smoke
+openapi: ../samples/smoke/openapi.yaml
 web_url: https://salonhub-soe.vercel.app
 run:
   base_url: https://salonhub-3cg8.onrender.com
@@ -17,7 +17,7 @@ ui:
   evidence: always
   trace: true
 out:
-  dir: ./artifacts/salonhub-smoke-e2e
+  dir: ../artifacts/salonhub-smoke-e2e
   skip_run: false # review IR/XLSX trước khi thực thi trên deployment
   headless: false
 

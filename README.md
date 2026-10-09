@@ -40,8 +40,8 @@ action/locator, không cho model đọc actual assertion để sửa expected th
 Runner mới quyết định Pass/Fail. Weak oracle là `needs_review`, không generation success.
 
 ```bash
-uv run qctool validate --config qctool.agent.example.yaml --llm
-uv run qctool run --config qctool.agent.example.yaml --llm
+uv run qctool validate --config qc_config/qctool.agent.example.yaml --llm
+uv run qctool run --config qc_config/qctool.agent.example.yaml --llm
 ```
 
 Điền docs/OpenAPI/URL và provider env trước; bắt đầu với `generation.max_intents: 1`
@@ -63,7 +63,7 @@ không bao giờ tính là Pass. Chi tiết, giới hạn và lỗi đã sửa:
 
 ```bash
 QCTOOL_LLM_TIMEOUT_SECONDS=90 QCTOOL_LLM_THINKING=disabled \
-  uv run qctool run --config qctool.customer_e2e_test_1.e2e.yaml --llm
+  uv run qctool run --config qc_config/qctool.customer_e2e_test_1.e2e.yaml --llm
 ```
 
 **Xem bằng chứng:** `artifacts/<feature>/generation.json` (agent gọi tool nào),
@@ -100,7 +100,7 @@ Thay URL/paths mẫu bằng inputs của bạn. `docs` chứa `urd.md`, `srs.md`
 luồng bổ sung nằm trong `srs/*flow*.md` theo định dạng tool hỗ trợ. OpenAPI là tùy chọn nếu workflow không có
 API contract. Không cần tạo testcase YAML trước.
 
-Hoặc copy [qctool.run.example.yaml](qctool.run.example.yaml) thành `qctool.yaml`,
+Hoặc copy [qc_config/qctool.run.example.yaml](qc_config/qctool.run.example.yaml) thành `qctool.yaml`,
 điền inputs và chạy:
 
 ```bash
@@ -177,7 +177,7 @@ với `--docs/--config/--openapi/--url` của primary mode.
 uv run qctool all --config qctool.yaml
 ```
 
-`qctool.example.yaml` là mẫu đầy đủ, chú thích từng khoá. Không cần file cấu hình thì
+`qc_config/qctool.example.yaml` là mẫu đầy đủ, chú thích từng khoá. Không cần file cấu hình thì
 truyền thẳng tham số:
 
 ```bash
@@ -231,7 +231,7 @@ uv run qctool all --openapi samples/openapi/task-manager-sample.yaml \
 Kết quả mong đợi: `54 test · 29 đạt · 15 lỗi · 10 bị chặn`. Hoặc gọn hơn bằng script:
 
 ```bash
-./qc.sh --config qc-demo.yaml
+./qc.sh --config qc_config/qc-demo.yaml
 ```
 
 `./qc.sh` là lớp bọc quanh CLI cho người dùng cuối (`--docs --oas --link --acc`), có sẵn

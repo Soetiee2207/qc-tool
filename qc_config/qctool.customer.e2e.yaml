@@ -5,8 +5,8 @@ feature: customer
 module: CUSTOMER
 generation:
   profile: agent
-docs_dir: ./samples/customer
-openapi: ./samples/customer/openapi.yaml
+docs_dir: ../samples/customer
+openapi: ../samples/customer/openapi.yaml
 web_url: https://salonhub-soe.vercel.app
 run:
   base_url: https://salonhub-3cg8.onrender.com
@@ -24,7 +24,7 @@ ui:
   evidence: on-fail
   trace: false
 out:
-  dir: ./artifacts/customer-e2e
+  dir: ../artifacts/customer-e2e
   skip_run: false
   headless: false
 test_fixtures:

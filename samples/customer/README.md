@@ -10,8 +10,8 @@ module `CUSTOMER`. Không có testcase YAML viết tay; tool ingest AC và tự 
 Từ root qc-tool:
 
 ```bash
-uv run qctool validate --config qctool.customer.e2e.yaml --llm
-uv run qctool run --config qctool.customer.e2e.yaml --llm
+uv run qctool validate --config qc_config/qctool.customer.e2e.yaml --llm
+uv run qctool run --config qc_config/qctool.customer.e2e.yaml --llm
 ```
 
 `validate` chỉ preflight offline, không browser/model/API. `run` chạy toàn bộ
@@ -24,7 +24,7 @@ Không đóng terminal hoặc Chromium khi đang chạy.
 Entrypoint `all` dùng cùng pipeline agent:
 
 ```bash
-uv run qctool all --config qctool.customer.e2e.yaml --llm
+uv run qctool all --config qc_config/qctool.customer.e2e.yaml --llm
 ```
 
 Ưu tiên `run` cho summary và exit codes. Không chạy hai lệnh `run`/`all`

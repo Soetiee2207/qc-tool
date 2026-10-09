@@ -8,8 +8,8 @@ generation:
     max_tokens: 60000
     max_seconds: 480
     completion_tokens: 2200
-docs_dir: ./samples/customer_e2e_test_1
-openapi: ./samples/customer_e2e_test_1/openapi.yaml
+docs_dir: ../samples/customer_e2e_test_1
+openapi: ../samples/customer_e2e_test_1/openapi.yaml
 web_url: https://salonhub-soe.vercel.app
 run:
   base_url: https://salonhub-3cg8.onrender.com
@@ -27,7 +27,7 @@ ui:
   evidence: always
   trace: true
 out:
-  dir: ./artifacts/customer_e2e_test_1
+  dir: ../artifacts/customer_e2e_test_1
   skip_run: false
   headless: true
 test_fixtures:

@@ -27,14 +27,14 @@ là **pilot đầu tiên**, không phải phạm vi.
 | Template OpenAPI | `templates/api/` — anh điền, tool đọc |
 | Template báo cáo | `templates/report/` |
 | Dữ liệu hư cấu để dev/test | `samples/` — **không phải hệ thống thật**, trừ các fixture lấy từ source SalonHub thật: `samples/customer/`, `samples/customer_e2e_test_1/`, `samples/order_product/` |
-| Config chạy E2E SalonHub | `qctool.customer.e2e.yaml`, `qctool.customer_e2e_test_1.e2e.yaml` — credential chỉ ở `.env` |
+| Config chạy E2E SalonHub | `qc_config/qctool.customer.e2e.yaml`, `qc_config/qctool.customer_e2e_test_1.e2e.yaml` — credential chỉ ở `.env` |
 | API giả để chạy thử executor | `tests/mock_server.py` — 4 bug API + 4 bug giao diện cài sẵn |
 | Trình duyệt | Playwright + Chromium (đã cài). Bí mật ở `.env` (gitignored) |
 | Tầng điều khiển trình duyệt | `qctool/execute/browser.py` — context riêng mỗi case, assert auto-wait, bằng chứng |
 | Bản đồ element của webapp | `qctool/ui/crawl.py` → `<out.dir>/ui-map.yaml` (có `test_id`) |
 | Test | `tests/` — `test_browser.py` mở Chromium thật (marker `playwright`) |
 | Hướng dẫn người dùng | `HUONG-DAN.md` — đọc file này khi giải thích cho người mới |
-| File cấu hình mẫu | `qctool.example.yaml` |
+| File cấu hình mẫu | `qc_config/qctool.example.yaml` |
 | Output sinh ra | `artifacts/` — gitignored |
 
 ## Lệnh
@@ -54,9 +54,9 @@ uv run qctool run      artifacts/<f>/testcases.yaml \
                        --base-url <url> --xlsx artifacts/<f>/testcases.xlsx
 
 # ── V2: agent viết testcase từ tài liệu (cần DeepSeek trong .env) ──────────
-uv run qctool validate --config qctool.customer_e2e_test_1.e2e.yaml
+uv run qctool validate --config qc_config/qctool.customer_e2e_test_1.e2e.yaml
 QCTOOL_LLM_TIMEOUT_SECONDS=90 QCTOOL_LLM_THINKING=disabled \
-  uv run qctool run --config qctool.customer_e2e_test_1.e2e.yaml --llm
+  uv run qctool run --config qc_config/qctool.customer_e2e_test_1.e2e.yaml --llm
 uv run playwright show-trace artifacts/<f>/evidence/<MÃ>.trace.zip   # xem lại từng bước
 
 # ── Thử toàn bộ, không cần hệ thống thật ────────────────────────────────────

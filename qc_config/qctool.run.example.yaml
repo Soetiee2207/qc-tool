@@ -24,7 +24,7 @@ ui:
   trace: false
   retry: 0
 out:
-  dir: ./artifacts/run
+  dir: ../artifacts/run
   skip_run: false
 # Optional trusted existing fixtures: values ONLY from environment.
 # test_fixtures:

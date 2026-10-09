@@ -12,7 +12,7 @@ feature: demo
 module: DEMO
 
 # Chỉ có OpenAPI, không có tài liệu — để so sánh với qc.yaml
-openapi: ./samples/openapi/task-manager-sample.yaml
+openapi: ../samples/openapi/task-manager-sample.yaml
 
 run:
   base_url: http://127.0.0.1:8099/api/v1
@@ -23,5 +23,5 @@ auth:
   token: demo-token
 
 out:
-  dir: ./artifacts/demo
+  dir: ../artifacts/demo
   created_by: "@binhhm"

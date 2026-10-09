@@ -3,8 +3,8 @@ feature: order_product
 module: ORDER_PRODUCT
 generation:
   profile: agent
-docs_dir: ./samples/order_product
-openapi: ./samples/order_product/openapi.yaml
+docs_dir: ../samples/order_product
+openapi: ../samples/order_product/openapi.yaml
 web_url: https://salonhub-soe.vercel.app
 run:
   base_url: https://salonhub-3cg8.onrender.com
@@ -48,7 +48,7 @@ ui:
   evidence: off
   trace: true
 out:
-  dir: ./artifacts/order-product-e2e
+  dir: ../artifacts/order-product-e2e
   skip_run: false
   headless: true
 test_fixtures:

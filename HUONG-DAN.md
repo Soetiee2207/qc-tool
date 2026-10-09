@@ -54,7 +54,7 @@ dòng lệnh — vì tham số dòng lệnh hiện trong `ps` cho mọi user tr�
 ## Thử ngay không cần hệ thống thật
 
 ```bash
-./qc.sh --config qc-demo.yaml
+./qc.sh --config qc_config/qc-demo.yaml
 ```
 
 Chạy trên API giả có 4 bug cài sẵn — thấy đủ cả Đạt lẫn Lỗi.
@@ -63,10 +63,10 @@ Chạy trên API giả có 4 bug cài sẵn — thấy đủ cả Đạt lẫn L
 
 ## Chạy lặp lại nhiều lần
 
-Nếu ngày nào cũng chạy cùng một bộ đầu vào, ghi vào `qc.yaml` rồi gọi một lệnh:
+Nếu ngày nào cũng chạy cùng một bộ đầu vào, ghi vào `qc_config/qc.yaml` rồi gọi một lệnh:
 
 ```bash
-./qc.sh --config qc.yaml
+./qc.sh --config qc_config/qc.yaml
 ```
 
 Flags và config dùng chung một đường đi — cái nào cũng được.
@@ -89,7 +89,7 @@ Flags và config dùng chung một đường đi — cái nào cũng được.
 ## Test UI/UX bằng trình duyệt thật
 
 Khi có `--link`, tool mở Chromium thật: dò element, chạy case UI, chụp bằng chứng.
-Phần này không bật gì thêm cũng chạy, nhưng có mấy nút đáng biết — ghi trong `qc.yaml`:
+Phần này không bật gì thêm cũng chạy, nhưng có mấy nút đáng biết — ghi trong `qc_config/qc.yaml`:
 
 ```yaml
 ui:
@@ -220,7 +220,7 @@ Không có LLM thì case từ tài liệu ở dạng thủ công; case OpenAPI v
 | Case UI báo `Lỗi` vì không tìm thấy element | Nhãn trên trang đã đổi. Chạy lại `uv run qctool crawl <url>` rồi sinh lại testcase |
 | Case a11y báo `Bị chặn` với "axe-core" | Máy không ra được Internet — chép `axe.min.js` vào `qctool/execute/` hoặc đặt `QCTOOL_AXE_PATH` |
 | Báo cáo có mục "Test chập chờn" | Đọc Mục 6 và 7: trace + ảnh nằm trong `evidence/`, mở bằng `playwright show-trace` |
-| Tool tự đăng nhập dù không muốn | Đặt `auth.mode: manual` trong `qc.yaml` — chế độ này không bao giờ tự đăng nhập |
+| Tool tự đăng nhập dù không muốn | Đặt `auth.mode: manual` trong `qc_config/qc.yaml` — chế độ này không bao giờ tự đăng nhập |
 | Đăng nhập hỏng nhưng vẫn muốn chạy case UI khác | Cứ chạy: case cần xác thực báo `Bị chặn`, case còn lại vẫn chạy |
 
 ## Authoring agent (nhánh agent-redesign)
@@ -228,8 +228,8 @@ Không có LLM thì case từ tài liệu ở dạng thủ công; case OpenAPI v
 ```bash
 # .env: QCTOOL_LLM_BASE_URL / QCTOOL_LLM_MODEL / QCTOOL_LLM_API_KEY
 # Provider phải hỗ trợ OpenAI-compatible tools. Không ghi key trong YAML.
-uv run qctool validate --config qctool.agent.example.yaml --llm
-uv run qctool run --config qctool.agent.example.yaml --llm
+uv run qctool validate --config qc_config/qctool.agent.example.yaml --llm
+uv run qctool run --config qc_config/qctool.agent.example.yaml --llm
 ```
 
 Copy cấu hình mẫu và điền docs/OpenAPI/website. Với DeepSeek, có thể đặt
@@ -278,5 +278,5 @@ hoặc bắt request đăng nhập **không** có trace/ảnh — tool tắt có
 mật khẩu/token. Kết quả từng bước của các case đó vẫn có trong `results.json`.
 Trace chứa dữ liệu phiên: không chia sẻ, không commit.
 
-Ví dụ đầy đủ: `samples/customer_e2e_test_1/` + `qctool.customer_e2e_test_1.e2e.yaml`
+Ví dụ đầy đủ: `samples/customer_e2e_test_1/` + `qc_config/qctool.customer_e2e_test_1.e2e.yaml`
 (11 AC: đăng nhập, mua hàng, đặt lịch — dừng trước bước tạo dữ liệu).

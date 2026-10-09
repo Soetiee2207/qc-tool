@@ -69,6 +69,6 @@ ui:
 # ── Đầu ra ───────────────────────────────────────────────────────────────────
 out:
   # dir để trống thì mặc định là artifacts/<feature>/
-  # dir: ./artifacts/login-sso
+  # dir: ../artifacts/login-sso
   skip_run: false
   created_by: "@binhhm"

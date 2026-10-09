@@ -65,7 +65,7 @@ usage() {
     ./qc.sh --docs ./docs/login-sso --link https://portal.test --acc user@company.com -
 
     # Thử trên API giả, không cần hệ thống thật
-    ./qc.sh --config qc-demo.yaml
+    ./qc.sh --config qc_config/qc-demo.yaml
 
 EOF
 }

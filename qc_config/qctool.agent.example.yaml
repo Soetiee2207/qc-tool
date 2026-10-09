@@ -23,7 +23,7 @@ run:
 provisioning:
   enabled: false
 out:
-  dir: ./artifacts/example
+  dir: ../artifacts/example
   headless: true
   skip_run: false
 ui:
