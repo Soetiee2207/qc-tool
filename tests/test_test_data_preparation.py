@@ -11,40 +11,16 @@ from qctool.test_data_acquisition import acquire_test_data, DataRequirement, Dat
 from qctool.test_data_preparation import prepare_test_data, PreparationStatus
 from qctool.test_data_verification import VerificationResult, VerificationStatus
 from qctool.test_fixtures import FixtureStore
-from qctool.resolution_context import build_resolution_context
-from qctool.resolution_cycle import run_resolution_cycle
-from qctool.resolution_loop import run_resolution_loop
 from qctool.generation import run_generation
 from qctool.executability import analyze_executability
 from qctool.testcase import Step, StepKind
 from tests.test_test_data_verification import setup, rule, BASE, verify
 from tests.test_test_data_acquisition import inputs, FACTS, need
-from tests.test_generation import executable_case, flows
+from tests.test_generation import executable_case
 
 
 def success(*args):
     return {'status':200, 'body':{'success':True,'token':'SECRET-RESPONSE'}}
-
-
-def test_safe_reviewed_rule_prepares_all_facts_and_keeps_inputs_unchanged():
-    case,store,config,op,_=setup()
-    context=build_resolution_context(case,())
-    before=deepcopy((case,context,config,store.to_dict()))
-    calls=[]
-    def transport(*args):
-        calls.append(args)
-        return success()
-    result=prepare_test_data(case,fixture_store=store,endpoints=[op],base_url=BASE,transport=transport)
-    assert result.status==PreparationStatus.AVAILABLE and result.available
-    assert result.initial.status==DataStatus.MISSING_TEST_DATA
-    assert result.final.status==DataStatus.AVAILABLE
-    assert result.verification.status==VerificationStatus.VERIFIED
-    assert result.verification_attempted and len(calls)==1
-    assert [stage.stage for stage in result.stages]==['acquisition','verification','reacquisition']
-    assert not result.blockers
-    assert before==(case,context,config,store.to_dict())
-    packet=json.dumps(result.to_dict())
-    assert all(secret not in packet for secret in ['PRIVATE-PASSWORD','private@example.test','SECRET-RESPONSE'])
 
 
 def test_verified_receipt_is_reused_without_network():
@@ -111,18 +87,6 @@ def test_missing_fixture_with_creation_candidate_is_provisionable_never_provisio
     assert any(b['code']=='PROVISIONABLE' for b in result.blockers)
 
 
-def test_no_data_case_does_zero_acquisition_or_verification_work(monkeypatch):
-    case=executable_case()
-    monkeypatch.setattr(preparation,'acquire_test_data',lambda *a,**kw:pytest.fail('no acquisition needed'))
-    monkeypatch.setattr(preparation,'verify_test_data',lambda *a,**kw:pytest.fail('no verification needed'))
-    result=prepare_test_data(case)
-    assert result.status==PreparationStatus.NO_DATA_REQUIRED
-    assert result.available and result.case==case and result.case is not case
-    assert result.initial is result.final is result.verification is None
-    context=build_resolution_context(case,())
-    assert run_resolution_loop(case,context).executable
-
-
 def test_stale_or_fake_receipt_is_explicit_blocker_no_fallback_call():
     case,store,config,op,acquired=setup()
     receipt=verify(store,op,acquired)
@@ -136,86 +100,6 @@ def test_stale_or_fake_receipt_is_explicit_blocker_no_fallback_call():
         assert any(i['code']=='VERIFICATION_RECEIPT_REJECTED' for i in result.blockers)
     store._values['active_user.password']='NEW-SECRET'
     assert not prepare_test_data(acquired.case,fixture_store=store,verification=receipt).available
-
-
-def test_prepare_once_per_loop_no_new_probe_on_later_cycles(monkeypatch):
-    case,store,config,op,_=setup()
-    calls=[]
-    monkeypatch.setattr(verification_module,'_once',lambda *a:(calls.append(a) or success()))
-    # Force cycles by leaving logical steps unmapped; data acquisition completes first.
-    context=build_resolution_context(case,())
-    result=run_resolution_loop(case,context,fixture_store=store,endpoints=[op],base_url=BASE,max_cycles=5)
-    assert len(calls)==1
-    assert result.test_data_preparation.available
-    assert result.context.data_acquisition['status']=='AVAILABLE'
-    assert all(c.context.data_acquisition['status']=='AVAILABLE' for c in result.cycles)
-
-
-def test_standalone_cycle_automatically_prepares_before_model_work(monkeypatch):
-    case,store,config,op,_=setup()
-    calls=[]
-    monkeypatch.setattr(verification_module,'_once',lambda *a:(calls.append(a) or success()))
-    result=run_resolution_cycle(case,build_resolution_context(case,()),fixture_store=store,endpoints=[op],base_url=BASE)
-    assert len(calls)==1
-    assert result.test_data_preparation.available
-    assert result.audit[0].stage=='test_data_preparation'
-
-
-def test_invalid_data_stops_resolution_before_model_or_browser(monkeypatch):
-    case,store,config,op,_=setup()
-    calls=[]
-    def invalid(*args):
-        calls.append(args)
-        return {'status':401,'body':{'success':False}}
-    monkeypatch.setattr(verification_module,'_once',invalid)
-    class ForbiddenLLM:
-        def complete(self,prompt):pytest.fail('data blocker must not reach LLM')
-    result=run_resolution_loop(case,build_resolution_context(case,()),fixture_store=store,endpoints=[op],
-                               base_url=BASE,resolution_llm=ForbiddenLLM(),exploration_llm=ForbiddenLLM(),max_cycles=10)
-    assert len(calls)==1 and result.cycle_count==0
-    assert result.stop_reason=='NO_MORE_WORK'
-    assert not result.executable
-    assert any(i.code=='INVALID_TEST_DATA' for i in result.issues)
-    assert any(g.code=='INVALID_TEST_DATA' for g in result.executability.gaps)
-
-
-def test_generation_existing_mapped_case_is_not_executable_with_invalid_data(monkeypatch):
-    _,store,config,op,_=setup()
-    case=executable_case(); case.traces_to.append('AC-LOGIN')
-    requirement={'fixture':'active_user','aliases':['active_user.email','active_user.password'], 'facts':FACTS}
-    # Trusted config needs are explicit even for already mapped cases.
-    store=FixtureStore(config['fixtures'],config['bindings'],
-                       environ={'EMAIL':'private@example.test','PASSWORD':'PRIVATE-PASSWORD'},
-                       acquisition={'verification':[rule()],'requirements':{'AC-LOGIN':[requirement]}})
-    calls=[]
-    monkeypatch.setattr(verification_module,'_once',lambda *a:(calls.append(a) or {'status':401,'body':{'success':False}}))
-    result=run_generation([], [case], fixture_store=store,endpoints=[op],base_url=BASE,flows=flows(),max_passes=1)
-    assert calls and result.test_data_preparations[0].status==PreparationStatus.INVALID_TEST_DATA
-    assert case.id not in {c.id for c in result.executable_cases}
-    assert any(i.code=='INVALID_TEST_DATA' for i in result.issues)
-    assert case.execution=='auto'
-    assert all(c.execution=='manual' for c in result.unresolved_cases)
-    assert 'PRIVATE-PASSWORD' not in json.dumps(result.to_dict())
-
-
-def test_coverage_generated_case_preserves_data_blocker_with_real_resolution_loop(monkeypatch):
-    from qctool.coverage_resolution import run_coverage_resolution_pass
-    from tests.test_coverage_resolution import report, contexts_for, ui_map
-    _,_,config,op,_=setup()
-    # The planner's FLOW-1 is the exact trusted requirement binding, no ID special case.
-    store=FixtureStore(config['fixtures'],{'FLOW-1':{'email':'active_user.email','correct_password':'active_user.password'}},
-                       environ={'EMAIL':'private@example.test','PASSWORD':'PRIVATE-PASSWORD'},
-                       acquisition={'verification':[rule()], 'requirements':{'FLOW-1':[{
-                           'fixture':'active_user','aliases':['active_user.email','active_user.password'],'facts':FACTS}]}})
-    calls=[]
-    monkeypatch.setattr(verification_module,'_once',lambda *a:(calls.append(a) or {'status':401,'body':{'success':False}}))
-    result=run_coverage_resolution_pass(report(),contexts=contexts_for(report()),requirements=[],ui_map=ui_map(),
-                                        fixture_store=store,endpoints=[op],base_url=BASE)
-    assert len(calls)==1
-    assert not result.accepted_cases and result.unresolved_cases
-    candidate=result.case_results[0]
-    assert any(g.code=='INVALID_TEST_DATA' for g in candidate.executability.gaps)
-    assert candidate.resolution.test_data_preparation.status==PreparationStatus.INVALID_TEST_DATA
 
 
 def test_rule_selection_skips_verified_facts_and_preserves_maximum_calls():
@@ -296,20 +180,3 @@ def test_two_approved_backend_origins_are_ambiguous_without_any_call():
     result=prepare_test_data(case,fixture_store=store,endpoints=[op,other],transport=lambda *a:pytest.fail('ambiguous backend'))
     assert result.status==PreparationStatus.AMBIGUOUS
     assert not result.verification_attempted
-
-
-def test_requirements_registry_roundtrips_json_and_matches_context():
-    case,store,config,op,_=setup()
-    result=prepare_test_data(case,fixture_store=store,endpoints=[op],base_url=BASE,transport=success)
-    context=build_resolution_context(result.case,())
-    assert context.testcase['test_data']==result.case.test_data
-    assert json.loads(json.dumps(result.case.test_data))==result.case.test_data
-
-
-def test_resolution_data_blocker_updates_context_snapshot():
-    case,store,config,op,_=setup()
-    result=run_resolution_loop(case,build_resolution_context(case,()),fixture_store=store,endpoints=[op],
-                               data_verification=VerificationResult(()))
-    assert result.context.testcase['execution']==result.case.execution=='manual'
-    assert result.context.testcase['test_data']==result.case.test_data
-    assert result.context.gaps==result.executability.gaps

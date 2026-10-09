@@ -13,49 +13,49 @@ run:
 auth:
   mode: browser # Explicit bootstrap using the customer's existing env account.
 llm:
-  enabled: false # Add --llm for the real configured provider.
+  enabled: true # Add --llm for the real configured provider.
 provisioning:
-  enabled: false # Does not authorize order creation or override explorer safety.
+  enabled: true # Does not authorize order creation or override explorer safety.
   environment: production
 exploration:
   mutation:
-    enabled: false # Explicitly change to true to allow scoped REAL order exploration.
+    enabled: true # Explicitly change to true to allow scoped REAL order exploration.
     environment: production
     allowed_environment: production
     application_origin: https://salonhub-soe.vercel.app
     rules:
-    - id: cart-to-checkout
-      requirement_id: AC-order_product-001-1
-      page: /cart
-      target: cart-checkout-btn
-      expected_url: /checkout
-      max_attempts: 1
-    - id: create-cod-order
-      requirement_id: AC-order_product-001-1
-      page: /checkout
-      target: checkout-submit-btn
-      expected_url: /my-orders
-      max_attempts: 1
-      operation:
-        operation_id: createOrder
-        method: POST
-        path: /api/orders
-        origin: https://salonhub-3cg8.onrender.com
-        required_json: {paymentMethod: cod}
-        allowed_json_fields: [address, phone, paymentMethod, cartItemIds]
+      - id: cart-to-checkout
+        requirement_id: AC-order_product-001-1
+        page: /cart
+        target: cart-checkout-btn
+        expected_url: /checkout
+        max_attempts: 1
+      - id: create-cod-order
+        requirement_id: AC-order_product-001-1
+        page: /checkout
+        target: checkout-submit-btn
+        expected_url: /my-orders
+        max_attempts: 1
+        operation:
+          operation_id: createOrder
+          method: POST
+          path: /api/orders
+          origin: https://salonhub-3cg8.onrender.com
+          required_json: { paymentMethod: cod }
+          allowed_json_fields: [address, phone, paymentMethod, cartItemIds]
 ui:
   retry: 0
   evidence: off
-  trace: false
+  trace: true
 out:
   dir: ./artifacts/order-product-e2e
   skip_run: false
-  headless: false
+  headless: true
 test_fixtures:
   fixtures:
     active_user:
-      email: {env: QCTOOL_USERNAME}
-      password: {env: QCTOOL_PASSWORD}
+      email: { env: QCTOOL_USERNAME }
+      password: { env: QCTOOL_PASSWORD }
       facts:
         role: customer
         account_state: active
@@ -67,20 +67,20 @@ test_fixtures:
   acquisition:
     requirements:
       AC-order_product-001-1:
+        - fixture: active_user
+          aliases: [active_user.email, active_user.password]
+          facts:
+            account_exists: true
+            password_valid: true
+            account_state: active
+          require_verified: false
+          source_ref: samples/order_product/urd.md:AC-001-1
+    evidence:
       - fixture: active_user
-        aliases: [active_user.email, active_user.password]
         facts:
           account_exists: true
           password_valid: true
           account_state: active
-        require_verified: false
-        source_ref: samples/order_product/urd.md:AC-001-1
-    evidence:
-    - fixture: active_user
-      facts:
-        account_exists: true
-        password_valid: true
-        account_state: active
-        role: customer
-      assurance: DECLARED
-      source_ref: operator:confirmed-existing-customer-account
+          role: customer
+        assurance: DECLARED
+        source_ref: operator:confirmed-existing-customer-account

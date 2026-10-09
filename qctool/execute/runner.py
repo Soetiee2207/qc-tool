@@ -104,6 +104,8 @@ class CaseResult:
     # (của sản phẩm hoặc của test), không phải bằng chứng chất lượng.
     flaky: bool = False
     evidence: dict = field(default_factory=dict)
+    generation_status: str | None = None
+    review_reasons: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -119,6 +121,9 @@ class CaseResult:
             "duration_ms": round(self.duration_ms, 1),
             "steps": [s.to_dict() for s in self.steps],
         }
+        if self.generation_status:
+            out["generation_status"] = self.generation_status
+            out["review_reasons"] = self.review_reasons
         if self.step_count:
             out["step_count"] = self.step_count
         if self.manual:
@@ -443,7 +448,8 @@ def _run_once(case: TestCase, session: HttpSession,
               soft_assert: bool = False, fixture_store: FixtureStore | None = None) -> CaseResult:
     result = CaseResult(case_id=case.id, title=case.title, module=case.module,
                         status=STATUS_NOT_EXECUTED, step_count=len(case.steps),
-                        manual=case.execution == "manual")
+                        manual=case.execution == "manual", generation_status=case.generation_status,
+                        review_reasons=list(case.review_reasons))
 
     # Case thủ công: các bước viết cho NGƯỜI làm, máy không chạy được.
     #
@@ -510,6 +516,7 @@ def _run_once(case: TestCase, session: HttpSession,
     try:
         if browser is not None and has_ui:
             browser.start_case(case.id)
+            browser.strict_locators = case.generation_status in {"ready", "needs_review"}
             if soft_assert:
                 browser.set_assert_mode(True)
         for step in case.steps:

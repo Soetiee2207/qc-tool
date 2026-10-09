@@ -87,7 +87,7 @@ def test_minimal_docs_url_no_llm_no_provisioning(monkeypatch,tmp_path,capsys):
     monkeypatch.setattr(pipeline,'run_generation',spy)
     cfg=yaml.safe_load(path.read_text())
     assert main(['run','--docs',cfg['docs_dir'],'--url',BASE,'--out',str(out)])==0
-    assert seen[0]['resolution_llm'] is seen[0]['exploration_llm'] is None
+    assert seen[0]['resolution_llm'] is None
     assert seen[0]['allow_provisioning'] is False
     assert seen[0]['environment'] is None
 
@@ -103,7 +103,7 @@ def test_llm_enabled_factory_passes_shared_stub_and_executable_case_skips_calls(
     monkeypatch.setattr(pipeline,'run_generation',spy)
     assert main(['run','--config',str(path)])==0
     assert factories==[1]
-    assert seen[0]['resolution_llm'] is seen[0]['exploration_llm'] is stub
+    assert seen[0]['resolution_llm'] is stub
 
 
 def test_provisioning_explicit_gate_forwards_existing_engine_policy(monkeypatch,tmp_path):
@@ -245,7 +245,7 @@ def test_missing_locked_fixture_shows_exact_need_without_verifying_or_provisioni
             'aliases':['locked_user.email','locked_user.password'],
             'facts':{'account_exists':True,'role':'customer','account_state':'locked'}}]}}}}
     monkeypatch.delenv('MISSING_EMAIL',raising=False);monkeypatch.delenv('MISSING_PASSWORD',raising=False)
-    path,out=inputs(monkeypatch,tmp_path,options=options)
+    path,out=inputs(monkeypatch,tmp_path,options=options,cases=())
     assert main(['run','--config',str(path)])==3
     summary=json.loads((out/'summary.json').read_text())
     assert summary['counts']['Pass']==0 and summary['counts']['Not Executed']==summary['generated_testcases']
@@ -292,31 +292,6 @@ def test_provisioning_boolean_and_environment_are_explicit(monkeypatch,tmp_path,
     path.write_text(yaml.safe_dump(doc))
     assert main(['run','--config',str(path)])==2
     assert 'environment' in capsys.readouterr().out
-
-
-def test_enabled_stub_makes_real_resolution_call_and_can_abstain(monkeypatch,tmp_path):
-    from qctool.ui.crawl import Element
-    source={'requirements':[{'id':'AC-1','kind':'acceptance_criterion','title':'Search',
-        'given':'Open /login','when':'fill "orchid" into Search; Click Check','then':'URL /login'}],
-        'counts':{'total':1}}
-    path,out=inputs(monkeypatch,tmp_path,source=source,cases=(),options={'llm':{'enabled':True}})
-    import qctool.ui as ui
-    monkeypatch.setattr(ui,'crawl',lambda *a,**kw:UIMap(BASE,'recorded',[PageMap(BASE+'/login','Login',elements=[
-        Element('search','textbox','Search','input',test_id='search'),
-        Element('check','button','Check','button',test_id='check')])]))
-    class Stub:
-        calls=[]
-        def complete(self,prompt):
-            self.calls.append(prompt)
-            case=json.loads(prompt.split('TESTCASE\n',1)[1].split('\n\n',1)[0])
-            gaps=json.loads(prompt.split('EXECUTION GAPS\n',1)[1].split('\n\n',1)[0])
-            return json.dumps({'testcase_id':case['id'],'changes':[],
-                'unresolved':[{'code':g['code'],'step_seq':g['step_seq'],'reason':'Insufficient proof'} for g in gaps]})
-    stub=Stub();monkeypatch.setattr(pipeline,'load_llm_provider',lambda:stub)
-    assert main(['run','--config',str(path)])==3
-    assert 1 <= len(stub.calls) <= 3  # existing bounded cycles, not CLI retries
-    assert all('QC RESOLUTION PROTOCOL' in prompt for prompt in stub.calls)
-    assert json.loads((out/'summary.json').read_text())['counts']['Pass']==0
 
 
 def test_cli_overrides_config_disable_llm_and_provisioning(monkeypatch,tmp_path):

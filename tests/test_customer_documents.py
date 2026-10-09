@@ -4,29 +4,12 @@ from pathlib import Path
 import yaml
 
 from qctool.coverage import analyze_coverage
-from qctool.coverage_plan import plan_coverage
 from qctool.generate.loader import load_endpoints
 from qctool.ingest import ingest_feature
 from qctool.test_fixtures import FixtureStore
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / 'samples/customer'
-
-
-def test_customer_input_has_exactly_seven_explicit_obligations():
-    data = ingest_feature(DOCS, feature='customer')
-    report = analyze_coverage(data['requirements'], (), flows=data['flows'])
-    plan = plan_coverage(report, module='CUSTOMER')
-    criteria = {r['id']: r for r in data['requirements'] if r['kind'] == 'acceptance_criterion'}
-    assert set(criteria) == {f'AC-customer-001-{n}' for n in range(1, 8)}
-    assert len(report.missing_obligations) == len(plan.cases) == 7
-    assert all(c.traces_to for c in plan.cases)
-    empty = criteria['AC-customer-001-2']
-    for clause in ('Email và mật khẩu vẫn trống', 'Vui lòng điền đầy đủ thông tin',
-                   'không gửi POST /api/auth/login', 'URL vẫn ở /login'):
-        assert clause in empty['then']
-    assert criteria['AC-customer-001-6']['then'] == 'URL chuyển tới /'
-    assert criteria['AC-customer-001-7']['then'] == 'URL chuyển tới /login'
 
 
 def test_customer_contract_excludes_mutations_and_registration():
@@ -60,26 +43,3 @@ def test_customer_policy_uses_only_env_and_does_not_claim_role_verification():
     assert evidence['assurance'] == 'DECLARED'
     assert evidence['facts']['password_valid'] is True
     assert not policy['acquisition'].get('provisioning_rules')
-
-
-def test_confirmed_customer_is_available_without_verification(monkeypatch):
-    from qctool import test_data_preparation as preparation
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError('Operator-confirmed account must not trigger verification')
-
-    monkeypatch.setattr(preparation, 'verify_test_data', forbidden)
-    config = yaml.safe_load((ROOT / 'qctool.customer.e2e.yaml').read_text())['test_fixtures']
-    store = FixtureStore(config['fixtures'], config['bindings'],
-                         environ={'QCTOOL_USERNAME': 'customer@example.test',
-                                  'QCTOOL_PASSWORD': 'offline-secret-example'},
-                         acquisition=config['acquisition'])
-    data = ingest_feature(DOCS, feature='customer')
-    cases = plan_coverage(analyze_coverage(data['requirements'], ()), module='CUSTOMER').cases
-    for case in cases:
-        result = preparation.prepare_test_data(case, fixture_store=store)
-        assert result.available
-        assert not result.verification_attempted
-        assert result.to_dict()['executed_calls'] == 0
-        if case.traces_to != ['AC-customer-001-2'] and case.traces_to != ['AC-customer-001-7']:
-            assert all(f.status == 'DECLARED' for finding in result.final.findings for f in finding.facts)

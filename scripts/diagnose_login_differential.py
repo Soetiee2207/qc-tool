@@ -28,11 +28,6 @@ from qctool.execute.browser import BrowserSession
 from qctool.execute.runner import HttpSession, run_case
 from qctool.pipeline import PipelineConfig
 from qctool.executability import ExecutionGap
-from qctool.exploration_plan import validate_exploration_plan
-from qctool.exploration_execution import execute_validated_exploration
-from qctool.llm_exploration import parse_exploration_plan
-from qctool.resolution_context import ResolutionContext
-from qctool.resolution_evaluation import _case_from_dict
 from qctool.response_capture import matches_request, origin_of, validate_capture
 from qctool.ui.explore import _safe_url
 
@@ -254,141 +249,8 @@ def differential(manual, automated):
             'differences':checks}
 
 
-def main():
-    parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config',type=Path,required=True)
-    parser.add_argument('--testcases',type=Path,required=True)
-    parser.add_argument('--case-id',required=True)
-    parser.add_argument('--manual-wait-seconds',type=int,default=300)
-    parser.add_argument('--exploration-audit',type=Path)
-    parser.add_argument('--exploration-trace',help='Exact requirement trace identifying an already-approved recorded prerequisite.')
-    parser.add_argument('--out',type=Path,required=True)
-    args=parser.parse_args()
-    if not 1<=args.manual_wait_seconds<=600:parser.error('Manual wait must be 1–600 seconds.')
-    cfg=PipelineConfig.from_file(args.config)
-    if cfg.fixture_store is None:parser.error('Configured trusted fixtures are required.')
-    raw=yaml.safe_load(args.testcases.read_text())
-    rows=raw.get('testcases',raw.get('cases',[])) if isinstance(raw,dict) else raw
-    case=_case_from_dict(next(c for c in rows if c['id']==args.case_id));case.validate()
-    capture=next(s for s in case.steps if s.action=='ui.click' and s.args.get('capture_response'))
-    spec=capture.args['capture_response'];validate_capture(spec)
-    fills=[s for s in case.steps if s.action=='ui.fill' and s.seq<capture.seq]
-    if len(fills)!=2:parser.error('Diagnostic requires exactly two existing credential fills before capture.')
-    aliases={s.args['value'].rsplit('.',1)[-1]:s.args['value'] for s in fills}
-    if set(aliases)!={'email','password'}:parser.error('Existing fills must use trusted email/password aliases.')
-    if not all(cfg.fixture_store.trusts(alias,case.test_data.get('_fixture_refs',{})) for alias in aliases.values()):
-        parser.error('Case aliases must match the current trusted fixture metadata.')
-    comparison=Comparison(cfg.fixture_store,aliases)
-    controls={s.args['value'].rsplit('.',1)[-1]:s.args for s in fills}
-    entry=next(s.args['url'] for s in case.steps if s.action=='ui.goto' and s.seq<capture.seq)
-    manual=None;automated=None;report={'llm_calls':0,'case_unchanged':True,'credential_comparison':'ephemeral HMAC-SHA256; key/digests never persisted'}
-    class DiagnosticBrowser(BrowserSession):
-        def start_case(self,case_id):
-            nonlocal automated
-            super().start_case(case_id)
-            self._capture_private=True
-            automated=Observation(self,comparison,spec,controls,'QCTOOL')
-        def fill(self,step_args):
-            detail=super().fill(step_args)
-            alias=step_args.get('_fixture_alias')
-            automated.data.setdefault('fills',[]).append({'alias':alias,'target':step_args['target'],
-                'runtime_value_matches_fixture':alias in aliases.values() and comparison.equal(step_args['value'],cfg.fixture_store.resolve(alias)),
-                'dom_value_matches_runtime':comparison.equal(self.locate(step_args).input_value(),step_args['value'])})
-            automated.capture_snapshot()
-            return detail
-        def note_submit(self,step_args,step_seq):
-            automated.capture_snapshot()
-            automated.data['submit']={'step_seq':step_seq,'target':step_args['target'],
-                                      'count':self.locate(step_args).count(), 'tag':self.locate(step_args).evaluate('e => e.tagName.toLowerCase()')}
-            return len(automated.raw_logins)
-        def click_and_capture(self,step_args,step_seq):
-            first=self.note_submit(step_args,step_seq)
-            result=super().click_and_capture(step_args,step_seq)
-            automated.data['captured_response']={'status':result['status'],'body':result['body'],'trigger':result['_ui_trigger']}
-            matching=[r for r in automated.raw_logins[first:] if r['record']['matches_expected_capture']]
-            automated.data['capture_belongs_to_submit']=len(matching)==1 and matching[0]['record'].get('response_status')==result['status']
-            return result
-        def click_and_observe_requests(self,step_args,step_seq):
-            first=self.note_submit(step_args,step_seq)
-            result=super().click_and_observe_requests(step_args,step_seq)
-            matching=[r for r in automated.raw_logins[first:] if r['record']['matches_expected_capture']]
-            automated.data['capture_belongs_to_submit']=len(matching)==result['body']['request_count']
-            return result
-        def end_case(self,status=''):
-            if automated is not None and self._context is automated.context:automated.finish()
-            super().end_case(status)
-        def close(self):
-            if automated is not None and self._context is automated.context:
-                try:automated.finish()
-                except Exception:automated.data['issues'].append('FINAL_SESSION_UNAVAILABLE')
-            super().close()
-    try:
-        with BrowserSession(cfg.web_url,headless=False,timeout_ms=cfg.timeout_seconds*1000,trace=False) as browser:
-            browser.start_case('MANUAL_LOGIN_REFERENCE');browser._capture_private=True
-            manual=Observation(browser,comparison,spec,controls,'MANUAL_PENDING')
-            browser.goto(entry)
-            browser.page.bring_to_front()
-            print('MANUAL WINDOW READY: type intended active account and submit once. Credentials will not be printed.',flush=True)
-            deadline=time.monotonic()+args.manual_wait_seconds
-            while time.monotonic()<deadline:
-                browser.page.wait_for_timeout(200)
-                manual.process()
-                if any(r['record'].get('response_status')==200 and r['record'].get('success') is True for r in manual.raw_logins):
-                    browser.page.wait_for_timeout(2000);break
-                manual.capture_snapshot()
-            manual.data['label']='MANUAL SUCCESS' if any(r['record'].get('response_status')==200 and r['record'].get('success') is True for r in manual.raw_logins) else 'MANUAL SUCCESS NOT CAPTURED'
-            report['manual']=manual.finish()
-        original=deepcopy(case)
-        with DiagnosticBrowser(cfg.web_url,headless=False,timeout_ms=cfg.timeout_seconds*1000,trace=False) as browser:
-            result=run_case(case,HttpSession(cfg.base_url,timeout=cfg.timeout_seconds,verify_ssl=cfg.verify_ssl),browser,retry=0,fixture_store=cfg.fixture_store)
-            report['qctool']=deepcopy(automated.data) if automated else {'issues':['NO_BROWSER_CONTEXT']}
-            report['runner']=result.to_dict()
-        report['case_unchanged']=case==original
-        report['contexts_distinct']=manual.context is not automated.context if automated else None
-        report['comparison']=differential(manual,automated) if automated else {'status':'INCOMPLETE_REFERENCE','root_cause':'UNKNOWN'}
-        if args.exploration_audit:
-            if not args.exploration_trace:parser.error('--exploration-trace is required with --exploration-audit.')
-            audit=json.loads(args.exploration_audit.read_text())
-            found=[]
-            for history in audit['coverage_loop']['history']:
-                for item in history['resolution']['case_results']:
-                    loop=item.get('resolution') or {}
-                    if args.exploration_trace not in loop.get('case',{}).get('traces_to',[]):continue
-                    for cycle in loop.get('cycles',[]):
-                        if cycle.get('exploration_plan') and (cycle.get('exploration_validation') or {}).get('valid_requests'):
-                            found.append((item,cycle))
-            if not found:raise ValueError('No recorded approved prerequisite exists.')
-            item,cycle=found[0];d=cycle['context']
-            context=ResolutionContext(d['testcase'],tuple(ExecutionGap(**x) for x in d['gaps']),d['specification'],d['interface_contract'],d['observations'],d['allowed_actions'],tuple(d['constraints']),d.get('data_acquisition',{}),d.get('semantics',{}),tuple(d.get('evidence_needs',[])))
-            prerequisite=_case_from_dict(item['case'])
-            from qctool.testcase import Step,StepKind
-            for key,value in d['testcase'].items():
-                if key=='steps':value=[Step(**{**s,'kind':StepKind(s['kind'])}) for s in value]
-                setattr(prerequisite,key,deepcopy(value))
-            plan=parse_exploration_plan(json.dumps(cycle['exploration_plan']))
-            validation=validate_exploration_plan(plan,context,prerequisite,cfg.web_url,fixture_store=cfg.fixture_store)
-            report['prerequisite_validation']={'status':validation.status,'issues':[i.code for i in validation.issues]}
-            if validation.valid_requests:
-                # Instrument only, retaining the existing explorer/validator unchanged.
-                automated=None
-                import qctool.ui.explore as explorer
-                with patch.object(explorer,'BrowserSession',DiagnosticBrowser):
-                    execution=execute_validated_exploration(validation,context,base_url=cfg.web_url,fixture_store=cfg.fixture_store)
-                report['prerequisite']=deepcopy(automated.data) if automated else {'issues':['NO_BROWSER_CONTEXT']}
-                report['prerequisite_issues']=[i.code for i in execution.issues]
-                report['prerequisite_comparison']=differential(manual,automated) if automated else {'status':'INCOMPLETE_REFERENCE','root_cause':'UNKNOWN'}
-    except Exception as exc:
-        # Neither repr(exception) nor tracebacks may contain user credentials.
-        report['issue']={'code':'DIAGNOSTIC_FAILED','category':type(exc).__name__}
-        if manual is not None:report['manual']=manual.data
-        if automated is not None:report['qctool']=automated.data
-    payload=cfg.fixture_store.redact(report)
-    args.out.parent.mkdir(parents=True,exist_ok=True)
-    args.out.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+'\n')
-    print(json.dumps({'report':str(args.out),'manual':report.get('manual',{}).get('label'),
-                      'qctool_result':report.get('runner',{}).get('status'),'comparison':report.get('comparison'),
-                      'issue':report.get('issue')},ensure_ascii=False),flush=True)
-    return 0 if report.get('comparison',{}).get('status')=='COMPARED' else 2
+def main(*args):
+    raise SystemExit('Legacy diagnosis retired; use qctool run and agent audit.')
 
 
 if __name__=='__main__':

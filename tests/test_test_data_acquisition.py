@@ -9,10 +9,6 @@ import pytest
 from qctool.config import ConfigError
 from qctool.executability import analyze_executability
 from qctool.generate.loader import load_endpoints
-from qctool.llm_exploration import build_exploration_prompt
-from qctool.llm_resolution import build_resolution_prompt
-from qctool.resolution_context import build_resolution_context
-from qctool.resolution_cycle import run_resolution_cycle
 from qctool.test_data_acquisition import DATA_REQUIREMENTS, DataRequirement, DataStatus, acquire_test_data
 from qctool.test_fixtures import FixtureStore, load_fixture_store
 from qctool.testcase import TestCase, Step, StepKind
@@ -102,24 +98,6 @@ def test_public_requirement_literal_id_is_not_proof_of_entity_existence():
     assert absent.status==DataStatus.MISSING_TEST_DATA
 
 
-@pytest.mark.parametrize('unsafe', [None,'admin','seed','delete','external','auth'])
-def test_creation_contract_is_a_candidate_only_never_called(unsafe,monkeypatch):
-    import urllib.request
-    monkeypatch.setattr(urllib.request,'urlopen',lambda *a,**kw:pytest.fail('No network permitted'))
-    op=load_endpoints(Path('samples/smoke/openapi.yaml'))[0][0]
-    op=replace(op,operation_id='createCustomer',method='POST',path='/users',requires_auth=False,responses={'201':{}})
-    if unsafe in {'admin','seed','delete'}: op=replace(op,path='/'+unsafe+'/users')
-    if unsafe=='auth': op=replace(op,requires_auth=True)
-    config={'provisioning':[{'fixture':'active_user','operation_id':'createCustomer','provides':FACTS,'external_interaction':unsafe=='external'}]}
-    case,store,_=inputs(env={})
-    result=acquire_test_data(case,fixture_store=store,sources=config,endpoints=[op])
-    assert result.status==(DataStatus.PROVISIONABLE if unsafe is None else DataStatus.UNSAFE_TO_PROVISION)
-    assert result.findings[0].provisioning[0]['execution_allowed'] is False
-    assert not result.to_dict()['provisioning_performed']
-    context=replace(build_resolution_context(result.case,()),data_acquisition=result.to_dict())
-    assert not analyze_executability(result.case,context=context).executable
-
-
 def test_no_fuzzy_endpoint_guessing_or_incomplete_creation_contract():
     case,store,_=inputs(env={})
     op=replace(load_endpoints(Path('samples/smoke/openapi.yaml'))[0][0],operation_id='createCustomer',method='POST',path='/users',requires_auth=False,responses={'201':{}})
@@ -142,30 +120,6 @@ def test_conflicting_bindings_are_structured_ambiguity():
     case.test_data['email']='other_user.email'
     result=acquire_test_data(case,fixture_store=store)
     assert result.status==DataStatus.AMBIGUOUS and result.case==case
-
-
-def test_secrets_not_serialized_and_all_inputs_unchanged():
-    case,store,config=inputs(acquisition=declarations())
-    context=build_resolution_context(case,())
-    before=deepcopy((case,context,config)); store_before=store.to_dict()
-    result=acquire_test_data(case,fixture_store=store)
-    packet=replace(context,data_acquisition=result.to_dict())
-    public=json.dumps(result.to_dict())+build_resolution_prompt(packet)+build_exploration_prompt(packet)+repr(result)
-    assert 'PRIVATE-PASSWORD' not in public and 'private@example.test' not in public
-    assert (case,context,config)==before and store.to_dict()==store_before
-
-
-def test_opt_in_resolution_integration_and_gap_types():
-    case,store,config=inputs()
-    # Nonempty acquisition config enables the gate without changing legacy facts validation.
-    store=FixtureStore(config['fixtures'],config['bindings'],environ={'EMAIL':'private@example.test','PASSWORD':'PRIVATE-PASSWORD'},acquisition={'requirements':{'AC-LOGIN':[{'fixture':'active_user','aliases':['active_user.email','active_user.password'],'facts':FACTS,'step_seq':1}]}})
-    context=build_resolution_context(case,())
-    before=deepcopy((case,context))
-    cycle=run_resolution_cycle(case,context,fixture_store=store)
-    assert cycle.context.data_acquisition['status']=='MISSING_TEST_DATA'
-    assert 'UNVERIFIED_TEST_DATA' in {g.code for g in cycle.after.gaps}
-    assert not cycle.after.executable
-    assert (case,context)==before
 
 
 @pytest.mark.parametrize('index,name,password_key', [(0,'active_user','correct_password'),(1,'invalid_user','wrong_password'),(2,'locked_user','non_empty_password')])

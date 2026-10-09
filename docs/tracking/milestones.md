@@ -5,8 +5,9 @@ lang: vi
 status: living
 owner: "@binhhm"
 created: 2026-09-18
-updated: 2026-09-21
+updated: 2026-10-09
 changelog:
+  - 2026-10-09 | codex | Agent redesign: gate/citation/dry-run, live acceptance chưa chốt
   - 2026-09-21 | manual | M04/M06: tầng Playwright đầy đủ — 12 verb UI/UX, retry+flake, evidence+trace, axe
   - 2026-09-18 | manual | thêm `qctool serve` (UI) + `qctool all` (pipeline) + HUONG-DAN.md; tool dùng được
 ---
@@ -66,3 +67,13 @@ changelog:
 - **Đóng milestone:** phải đủ cả 4 điều kiện của Definition-of-complete (xem `README.md`).
   Nếu cần, tách one-pager `milestones/M<id>-<slug>.md`.
 - Cập nhật luôn Mục 2 bảng tổng hợp và `INDEX.md`.
+
+## Agent redesign — 2026-10-09
+
+Nhánh `agent-redesign`: prose authoring bằng tool calling, giữ native runner và
+14 cột XLSX. Không đánh dấu milestone Done chỉ vì có code. Xem
+[Finding agent redesign](../findings/agent-redesign.md).
+
+Cần xác nhận: live testcase ready chạy thật; độ đầy đủ ngữ nghĩa của action/oracle
+qua QC review; false-fail/semantic benchmark có labels. Không thay business expectation
+theo observation để tăng runnable count.

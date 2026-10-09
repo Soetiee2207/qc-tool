@@ -181,7 +181,7 @@ def test_pipeline_shares_provider_only_when_explicitly_enabled(monkeypatch, tmp_
     monkeypatch.setattr(pipeline, "run_generation", spy)
     result = pipeline.run_pipeline(cfg)
     assert result.ok and not result.generation_success
-    assert received[0]["resolution_llm"] is received[0]["exploration_llm"] is adapter
+    assert received[0]["resolution_llm"] is adapter
     assert factory.call_count == 1
     assert opener.open.call_count == 0  # Unsupported source work is blocked before the model.
     assert KEY not in "\n".join(result.log) + result.generation_path.read_text()
@@ -235,18 +235,6 @@ def test_yaml_disabled_overrides_env_and_cli_can_enable(monkeypatch, tmp_path):
         PipelineConfig.from_file(path)
 
 
-def test_offline_replay_ignores_enabled_provider_environment(monkeypatch):
-    from qctool.generation_evaluation import evaluate_generation, load_generation_suite
-    monkeypatch.setenv("QCTOOL_LLM_ENABLED", "true")
-    monkeypatch.setenv("QCTOOL_LLM_MODEL", "model")
-    monkeypatch.setenv("QCTOOL_LLM_API_KEY", KEY)
-    monkeypatch.setattr(pipeline, "load_llm_provider", lambda: pytest.fail("Replay must stay offline"))
-    path = Path(__file__).resolve().parents[1] / "samples/evaluation/generation-benchmark.yaml"
-    report = evaluate_generation(load_generation_suite(path))
-    assert report.summary["replay_errors"] == 0
-    assert report.summary["semantic_scenarios"] == {"correct": 25, "incorrect": 0, "unknown": 0}
-
-
 @pytest.mark.parametrize("failure", [TimeoutError(KEY),
     HTTPError("https://provider.test", 429, KEY, {}, io.BytesIO()),
     HTTPError("https://provider.test", 503, KEY, {}, io.BytesIO())])
@@ -276,22 +264,6 @@ def test_failed_incomplete_completion_preserves_safe_metadata_without_retry(monk
     assert records[0]["usage"] == {"completion_tokens": 2048}
     assert records[0]["parser_failure"]["path"] == "choices[0].finish_reason"
     assert KEY not in json.dumps(records)
-
-
-def test_schema_parser_path_persisted_in_cycle(monkeypatch):
-    from tests.test_resolution_cycle import _inputs
-    from qctool.resolution_cycle import run_resolution_cycle
-    case, context, _ = _inputs()
-    completion = {"testcase_id": case.id, "changes": [{"step_seq": 2}], "unresolved": []}
-    opener, _ = http(monkeypatch, envelope(json.dumps(completion)))
-    result = run_resolution_cycle(case, context, resolution_llm=client())
-    issue = next(i for i in result.issues if i.stage == "resolution_llm")
-    assert issue.diagnostics["category"] == "FIELD_SET"
-    assert issue.diagnostics["path"] == "changes[0]"
-    stage = next(i for i in result.audit if i.stage == "resolution_llm")
-    assert stage.provider_attempts[0]["http_status"] == 200
-    assert stage.provider_attempts[0]["parser_failure"] == issue.diagnostics
-    assert opener.open.call_count == 1
 
 
 def test_invalid_completion_json_records_position_without_content_or_retry(monkeypatch):

@@ -20,11 +20,14 @@ là **pilot đầu tiên**, không phải phạm vi.
 | Milestone registry | `docs/tracking/milestones.md` |
 | Việc còn lại / chờ quyết định | `docs/tracking/todo.md` |
 | Phát hiện về hệ thống được test | `docs/findings/` |
-| Mã nguồn | `qctool/` — `ingest/` `generate/` `execute/` `ui/` `report/` `render/` `web/` `pipeline.py` |
+| Mã nguồn | `qctool/` — `ingest/` `generate/` `execute/` `ui/` `report/` `render/` `web/` `agent/` `pipeline.py` |
+| Authoring agent (V2) | `qctool/agent/` — `loop.py` (hội thoại tool-calling), `tools.py` (browser/dry-run), `gate.py` (schema/citation/thứ tự), `safety.py` (origin/write/alias), `knowledge.py` (`app-model.yaml`) |
+| Kết quả kiểm chứng V2 | `docs/findings/agent-redesign.md` |
 | Template testcase (14 cột) | `templates/testcase/` — sinh từ script, **không sửa tay `.xlsx`** |
 | Template OpenAPI | `templates/api/` — anh điền, tool đọc |
 | Template báo cáo | `templates/report/` |
-| Dữ liệu hư cấu để dev/test | `samples/` — **không phải hệ thống thật** |
+| Dữ liệu hư cấu để dev/test | `samples/` — **không phải hệ thống thật**, trừ các fixture lấy từ source SalonHub thật: `samples/customer/`, `samples/customer_e2e_test_1/`, `samples/order_product/` |
+| Config chạy E2E SalonHub | `qctool.customer.e2e.yaml`, `qctool.customer_e2e_test_1.e2e.yaml` — credential chỉ ở `.env` |
 | API giả để chạy thử executor | `tests/mock_server.py` — 4 bug API + 4 bug giao diện cài sẵn |
 | Trình duyệt | Playwright + Chromium (đã cài). Bí mật ở `.env` (gitignored) |
 | Tầng điều khiển trình duyệt | `qctool/execute/browser.py` — context riêng mỗi case, assert auto-wait, bằng chứng |
@@ -47,6 +50,12 @@ uv run qctool generate --requirements artifacts/<f>/requirements.yaml \
                        --openapi <spec.yaml> --xlsx artifacts/<f>/testcases.xlsx
 uv run qctool run      artifacts/<f>/testcases.yaml \
                        --base-url <url> --xlsx artifacts/<f>/testcases.xlsx
+
+# ── V2: agent viết testcase từ tài liệu (cần DeepSeek trong .env) ──────────
+uv run qctool validate --config qctool.customer_e2e_test_1.e2e.yaml
+QCTOOL_LLM_TIMEOUT_SECONDS=90 QCTOOL_LLM_THINKING=disabled \
+  uv run qctool run --config qctool.customer_e2e_test_1.e2e.yaml --llm
+uv run playwright show-trace artifacts/<f>/evidence/<MÃ>.trace.zip   # xem lại từng bước
 
 # ── Thử toàn bộ, không cần hệ thống thật ────────────────────────────────────
 uv run python -m tests.mock_server --port 8099 &
@@ -96,9 +105,9 @@ Vòng lặp quan trọng nhất: file `.xlsx` 14 cột là **bản ghi hai pha**
 lần, rồi chạy điền kết quả vào chính file đó (4 cột runtime). QC không phải đối
 chiếu hai file.
 
-Nguyên tắc xuyên suốt: **LLM không bao giờ sinh ra thứ không chạy được.**
-LLM chỉ làm 2 việc — prose → mô hình test, và prose → step theo vocabulary đóng.
-Hiện tại **chưa có track LLM**; mọi case đều `generated_by: engine`.
+Nguyên tắc xuyên suốt: **Chỉ case qua gate và dry-run mới được chấp nhận tự động.**
+LLM thiết kế intent và viết toàn bộ case theo vocabulary đóng trong một phiên có feedback.
+Prose dùng authoring agent tool-calling (`generated_by: llm`); OpenAPI giữ generator deterministic (`generated_by: engine`).
 
 ## Lệnh — quy tắc
 
@@ -230,3 +239,43 @@ Các luật còn lại:
 - Không hard-code credential vào repo. Bí mật đi qua env / secrets, không qua YAML commit.
 - **Sửa mock server thì phải sửa cả docstring của nó.** `tests/mock_server.py` ghi rõ 4 bug
   cài sẵn; test dựa vào những bug đó để biết runner có thật sự phát hiện lỗi.
+
+## Authoring agent — cập nhật 2026-10-09
+
+- `pipeline.py` → `generation.py` → `agent/loop.py`; không dùng patch resolver cũ.
+- Tool browser/HTTP áp dụng `agent/safety.py` bên trong từng lệnh: origin, mutation, alias.
+- `agent/gate.py` dùng ACTION_SPECS và trích dẫn nguyên văn source cho assertion. Citation
+  chứng minh nguồn, **không** chứng minh đầy đủ tương đương ngữ nghĩa.
+- `draft_case` hợp lệ được dry-run trên context mới: chạy action, kiểm locator/adapter;
+  không trả actual của assertion cho agent. Runner sau đó mới so expected thật.
+- `ready`, `needs_review`, `manual`, `blocked_env` là trạng thái generation; không
+  thay thế Pass/Fail/Blocked/Not Executed. Needs review vẫn chạy nhưng chưa thành success.
+- ARIA snapshot là observation; không thay expected theo DOM. Stable ID luôn ưu tiên,
+  không dùng `.first()` để che ambiguity.
+- `app-model.yaml` chỉ chứa public hints/macros alias; reuse phải kiểm live. Không lưu
+  token/cookie/receipt; hash DOM không chứng minh account state. Preparation cache backend
+  vẫn run-scoped và kiểm freshness, tách khỏi knowledge base.
+- Budget theo intent: turns/tokens/time. Chạy 1–2 intent đầu tiên, không retry vô hạn.
+- Sheet Review trong XLSX ghi accepted/rejected làm label; không tự đổi runtime status.
+- Gate chặn ba kiểu case "chạy được nhưng không kiểm gì" (lộ khi chạy customer 7/7, 2026-10-09):
+  1. **Bỏ qua bước nguồn.** Route nêu trong Given/When (`mở /admin`) phải có `ui.goto`/HTTP/capture
+     tương ứng — nếu không, case đăng nhập rồi assert `/` là `Pass` giả.
+  2. **Assert trước hành động cuối.** Mỗi mệnh đề expected phải được assert *sau* bước hành
+     động cuối cùng; assert URL trước khi mở trang đích không chứng minh outcome.
+  3. **Văn xuôi làm regex.** `assert.url_matches` phải là regex path/URL hợp lệ, không khoảng
+     trắng — `pattern: "URL chuyển tới /"` từng sinh `Fail` giả cho sản phẩm.
+- Route có vẻ nguy hiểm (`/admin`) chỉ được mở read-only khi Given/When nêu đúng route đó;
+  expected URL không cấp quyền. Write/click nguy hiểm vẫn bị chặn riêng.
+- `expected: ""` là oracle hợp lệ (ô vẫn trống). Lỗi validate phải nói rõ dạng đúng — lỗi
+  mơ hồ ("không hợp lệ") làm agent lặp lại tới hết budget.
+
+- **Bằng chứng của một lượt chạy** (`artifacts/<out.dir>/`): `generation.json` → `agent_history`
+  (agent gọi tool nào, lỗi gate/dry-run gì, token mỗi call); `testcases.yaml` (bước runner chạy);
+  `runs/<t>/results.json` (Playwright chạy từng bước ra sao); `evidence/` (ảnh, `.trace.zip`).
+  Case có điền mật khẩu (fixture alias) hoặc `capture_*` **cố ý không có trace/ảnh**
+  (`runner.py` tắt) — trace sẽ chứa mật khẩu/token thật. Không gỡ chặn này mặc định.
+
+Changelog:
+- 2026-10-09 | claude | V2: bảng file agent/, lệnh chạy, nơi xem bằng chứng/trace
+- 2026-10-09 | claude | Gate: route nguồn phải thực hiện, assert sau action, URL regex
+- 2026-10-09 | codex | Agent authoring, citation, dry-run và review tier

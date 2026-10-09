@@ -13,9 +13,6 @@ from qctool.test_data_verification import (
     verify_test_data, VerificationStatus as Status, VerificationResult,
     MAX_VERIFICATION_CALLS, _once,
 )
-from qctool.resolution_context import build_resolution_context
-from qctool.resolution_cycle import run_resolution_cycle
-from qctool.resolution_loop import run_resolution_loop
 from tests.test_test_data_acquisition import inputs, need, FACTS
 
 BASE = 'https://verification.example.test'
@@ -167,19 +164,6 @@ def test_missing_or_ambiguous_operation_never_guessed():
         assert result.status == status
 
 
-def test_result_and_inputs_are_immutable_and_secrets_not_in_any_public_packet():
-    case, store, config, op, acquired = setup()
-    before = deepcopy((case, config, acquired.to_dict(), store.to_dict(), asdict(op)))
-    result = verify(store, op, acquired, {'status': 200, 'body': {'success': True, 'token': 'RESPONSE-SECRET', 'password': 'PRIVATE-PASSWORD'}})
-    after = acquire_test_data(acquired.case, fixture_store=store, verification=result)
-    assert before == (case, config, acquired.to_dict(), store.to_dict(), asdict(op))
-    context = replace(build_resolution_context(after.case, ()), data_acquisition=after.to_dict())
-    from qctool.llm_resolution import build_resolution_prompt
-    packet = json.dumps(after.to_dict()) + build_resolution_prompt(context)
-    assert all(secret not in packet for secret in ['PRIVATE-PASSWORD', 'private@example.test', 'RESPONSE-SECRET'])
-    assert 'active_user.password' in packet
-
-
 def test_forged_dict_tampered_receipt_or_changed_credentials_cannot_prove_facts():
     case, store, config, op, acquired = setup()
     result = verify(store, op, acquired)
@@ -201,19 +185,6 @@ def test_receipt_cannot_transfer_to_another_case_or_fixture_store():
     _, other_store, _, _, _ = setup()
     with pytest.raises(ConfigError):
         acquire_test_data(acquired.case, fixture_store=other_store, verification=result)
-
-
-def test_resolution_integration_consumes_receipt_without_new_calls():
-    case, store, config, op, acquired = setup()
-    result = verify(store, op, acquired)
-    context = build_resolution_context(case, ())
-    original = deepcopy((case, context))
-    cycle = run_resolution_cycle(acquired.case, context, fixture_store=store, endpoints=[op], data_verification=result)
-    assert cycle.context.data_acquisition['status'] == 'AVAILABLE'
-    assert not any(g.code == 'UNVERIFIED_TEST_DATA' for g in cycle.after.gaps)
-    loop = run_resolution_loop(acquired.case, context, fixture_store=store, endpoints=[op], data_verification=result, max_cycles=1)
-    assert loop.context.data_acquisition['status'] == 'AVAILABLE'
-    assert (case, context) == original
 
 
 @pytest.mark.parametrize('index,required,proof,expected_status', [

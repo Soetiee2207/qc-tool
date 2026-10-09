@@ -16,13 +16,11 @@ from .crawl import (
     _slug, _test_id, _wait_for_render,
 )
 
-if TYPE_CHECKING:
-    from ..exploration_plan import ValidatedExplorationRequest
 
 # Includes interaction controls AND text witnesses. Keep a bounded snapshot
 # large enough for an ordinary detail page; omissions still block name-only
 # uniqueness proofs rather than being silently treated as complete evidence.
-MAX_ELEMENTS = 120
+MAX_ELEMENTS = 160
 MAX_TEXT = 40
 MAX_FORMS = 10
 MAX_NETWORK = 40
@@ -261,455 +259,62 @@ def _inspect(page, collect_text: bool, truncated: set[str], *, redact=_redact, s
     return PageMap(safe_url(page.url), redact(page.title()), text, elements), tuple(forms)
 
 
-def explore_page(
-    request: ExplorationRequest | ValidatedExplorationRequest, *, base_url: str,
-    storage_state: Path | None = None, timeout_ms: int = 10000, render_wait_ms: int = 2000, fixture_store=None,
-    mutation_policy=None, mutation_budget=None,
-) -> ExplorationResult:
-    """Inspect exactly one same-origin target in a fresh, owned browser context.
+def explore_page(request: ExplorationRequest, *, base_url: str,
+                 storage_state: Path | None = None, timeout_ms: int = 10000,
+                 render_wait_ms: int = 2000, fixture_store=None, **unused) -> ExplorationResult:
+    """Compatibility observation API. Interactive authoring uses agent tools.
 
-    Storage state is read only for authenticated requests. Foreign frame/document
-    navigation is blocked before inspection; the attempted redirect is reported.
-    Interactions require a ValidatedExplorationRequest wrapper and deterministic
-    source/control checks; raw action-bearing requests never open a browser.
-    Navigated pages still run their own normal application code.
+    Raw or obsolete authority wrappers cannot authorize interaction. Same-origin
+    and background/write interception are shared with the agent SafetyPolicy.
     """
-    observed_at = datetime.now(timezone(timedelta(hours=7))).isoformat()
-    from ..exploration_plan import ValidatedExplorationRequest
-    approved = request if isinstance(request, ValidatedExplorationRequest) else None
-    request = approved.request if approved is not None else request
-    final_url = redirect_url = unexpected_url = None
-    page_map = None
-    forms: tuple[dict, ...] = ()
-    network: list[dict] = []
-    issues: list[ExplorationIssue] = []
-    truncated: set[str] = set()
-    action_observations: list[dict] = []
-    states: list[dict] = []
-    active_action_index = None
-    def redact(value):
-        return _redact(fixture_store.redact(value) if fixture_store else value)
-    def safe_url(value):
-        return _safe_url(fixture_store.redact(value) if fixture_store else value)
-
-    def inspect_state():
-        # Completeness belongs to this snapshot, not to an earlier page in the
-        # workflow. Keep the aggregate flags separately for the overall audit.
-        flags = set()
-        snapshot, snapshot_forms = _inspect(page, request.collect_text, flags, redact=redact, safe_url=safe_url)
-        truncated.update(flags)
-        return snapshot, snapshot_forms, sorted(flags)
-
-    def result() -> ExplorationResult:
-        safe_request = replace(request, target=safe_url(request.target), reason=redact(request.reason))
-        return ExplorationResult(safe_request, final_url, page_map, forms, tuple(network),
-                                 tuple(issues), observed_at, redirect_url, tuple(sorted(truncated)),
-                                 tuple(action_observations), tuple(states))
-
-    if request.actions and approved is None:
-        issues.append(ExplorationIssue("ACTION_NOT_VALIDATED", "Interactions require an approved exploration wrapper."))
-        return result()
-    if len(request.actions) > MAX_EXPLORATION_ACTIONS:
-        issues.append(ExplorationIssue("ACTION_BUDGET_EXCEEDED", "Too many exploration actions."))
-        return result()
-    v2 = approved is not None and any(g.get('source') == 'validated_action' for g in approved.grounding)
-    bindings = [g for g in approved.grounding if g.get('source') == 'validated_action'] if v2 else []
-    if v2:
-        from ..exploration_actions import action_fingerprint, forbidden
-        if not approved.action_fingerprint or approved.action_fingerprint != action_fingerprint(request, bindings):
-            issues.append(ExplorationIssue('ACTION_NOT_VALIDATED', 'Approved sequence was altered.'))
-            return result()
-        from ..exploration_actions import mutation_permission
-        for binding in bindings:
-            permission = binding.get('mutation_permission')
-            if permission and (mutation_budget is None or permission != mutation_permission(
-                    mutation_policy, page=binding['page'], target=binding['target'],
-                    destination=binding['expected_url'], requirement_ids=binding['requirement_ids'], base_url=base_url)):
-                issues.append(ExplorationIssue('MUTATION_NOT_AUTHORIZED', 'Mutation requires matching trusted policy and run budget.'))
-                return result()
-
-    target, request_issues = validate_exploration_request(
-        request, base_url=base_url, timeout_ms=timeout_ms, render_wait_ms=render_wait_ms,
-    )
-    if request_issues:
-        issues.extend(request_issues)
-        return result()
-
-    if request.session == "authenticated" and (storage_state is None or not Path(storage_state).is_file()):
-        issues.append(ExplorationIssue("AUTH_STATE_REQUIRED", "Authenticated exploration needs existing storage state."))
-        return result()
-
-    session = BrowserSession(base_url, timeout_ms=timeout_ms,
-                             storage_state=storage_state if request.session == "authenticated" else None)
-    phase = "browser"
-    try:
-        session.start()
-        session.start_case("__exploration__")
-        page = session.page
-
-        # Chromium Fetch reports redirected document requests as well. Ordinary
-        # Playwright routing can miss later requests in an HTTP redirect chain.
-        cdp = page.context.new_cdp_session(page)
-        main_frame_id = cdp.send("Page.getFrameTree")["frameTree"]["frame"]["id"]
-        mutation_redirect_blocked = False
-        mutation_network_ids = set()
-
-        def guard(event):
-            nonlocal redirect_url, unexpected_url, mutation_redirect_blocked
-            outgoing = event["request"]["url"]
-            if (any(g.get('mutation_permission') for g in bindings) and active_action_index is None
-                    and event['request']['method'] not in {'GET', 'HEAD', 'OPTIONS'}):
-                mutation_redirect_blocked = True
-                issues.append(ExplorationIssue('MUTATION_REQUEST_BLOCKED', 'Unapproved bootstrap mutation was blocked.'))
-                cdp.send('Fetch.failRequest', {'requestId': event['requestId'], 'errorReason': 'Aborted'})
-                return
-            # Playwright routing does not see subsequent HTTP redirect requests.
-            # Fetch interception blocks them before a second write reaches a host.
-            if v2 and active_action_index is not None and bindings[active_action_index].get('mutation_permission'):
-                method = event['request']['method']
-                operation = bindings[active_action_index]['mutation_permission']['rule'].get('operation')
-                if event.get('redirectedRequestId') and (method not in {'GET', 'HEAD', 'OPTIONS'}
-                        or event['redirectedRequestId'] in mutation_network_ids):
-                    mutation_redirect_blocked = True
-                    issues.append(ExplorationIssue('MUTATION_REDIRECT_BLOCKED', 'Approved mutation cannot follow an HTTP redirect.'))
-                    cdp.send('Fetch.failRequest', {'requestId': event['requestId'], 'errorReason': 'Aborted'})
-                    return
-                if operation and method == operation['method'] and outgoing == operation['origin'] + operation['path']:
-                    mutation_network_ids.add(event['requestId'])
-            if event.get('resourceType') != 'Document':
-                cdp.send('Fetch.continueRequest', {'requestId': event['requestId']})
-                return
-            if _origin(outgoing) != _origin(base_url):
-                if event["frameId"] == main_frame_id:
-                    redirect_url = safe_url(outgoing)
-                cdp.send("Fetch.failRequest", {"requestId": event["requestId"], "errorReason": "Aborted"})
-            elif (v2 and event['frameId'] == main_frame_id
-                  and outgoing not in ({target} if active_action_index is None else {bindings[active_action_index]['expected_url'], bindings[active_action_index].get('url', bindings[active_action_index]['expected_url'])})):
-                unexpected_url = safe_url(outgoing)
-                cdp.send('Fetch.failRequest', {'requestId': event['requestId'], 'errorReason': 'Aborted'})
-            else:
-                cdp.send("Fetch.continueRequest", {"requestId": event["requestId"]})
-
-        cdp.on("Fetch.requestPaused", guard)
-        cdp.send("Fetch.enable", {"patterns": [({"requestStage": "Request"} if any(g.get('mutation_permission') for g in bindings)
-                                                else {"resourceType": "Document", "requestStage": "Request"})]})
-
-        def response_metadata(response):
-            from ..response_capture import matches_request
-            if _origin(response.url) != _origin(base_url):
-                if approved is None or not any(
-                    g.get("source") in {"validated_click", "validated_action"} and g.get("capture_requests") and
-                    matches_request(response.request, g["capture_requests"])
-                    for g in approved.grounding
-                ) and not any(matches_request(response.request, selector)
-                              for g in bindings for selector in g.get('read_requests', [])):
-                    return
-            if len(network) >= MAX_NETWORK:
-                truncated.add("network")
-                return
-            record = {"method": response.request.method, "url": safe_url(response.url),
-                      "status": response.status, "resource_type": response.request.resource_type}
-            if active_action_index is not None:
-                record["action_index"] = active_action_index
-            network.append(record)
-
-        if request.collect_network:
-            page.on("response", response_metadata)
-        phase = "navigation"
-        response = page.goto(target, wait_until="load", timeout=timeout_ms)
-        final_url = safe_url(page.url)
-        if redirect_url or _origin(page.url) != _origin(base_url):
-            issues.append(ExplorationIssue("CROSS_ORIGIN_REDIRECT", "External navigation stopped; no foreign page inspected."))
-            return result()
-        if response is not None and response.status >= 400:
-            issues.append(ExplorationIssue("PAGE_UNAVAILABLE", f"Page returned HTTP {response.status}."))
-            return result()
-        phase = "inspection"
-        if render_wait_ms:
-            _wait_for_render(page, max_wait_ms=render_wait_ms)
-        if v2:
-            if mutation_redirect_blocked:
-                return result()
-            if unexpected_url or page.url != target:
-                states.append({'state_id': observed_at + ':0', 'valid': False, 'triggering_action': None,
-                               'source_clause': None, 'page': {'url': unexpected_url or safe_url(page.url)}, 'network': [],
-                               'source': {'type': 'playwright_exploration', 'observed_at': observed_at}})
-                issues.append(ExplorationIssue('UNEXPECTED_TRANSITION', 'Entry page did not match the approved target.'))
-                return result()
-            # Bind DOM nodes per state; handles never cross an approved navigation.
-            nodes = {}
-            node_page = None
-            initial_page, _, initial_flags = inspect_state()
-            states.append({'state_id': observed_at + ':0', 'valid': True, 'page': initial_page.to_dict(),
-                           'triggering_action': None, 'source_clause': None, 'network': list(network),
-                           'truncated': initial_flags,
-                           'source': {'type': 'playwright_exploration', 'observed_at': observed_at}})
-            unsafe_network = False
-            mutation_requests = set()
-            def safe_request(route):
-                nonlocal unsafe_network
-                from ..response_capture import matches_request
-                req = route.request
-                binding = bindings[active_action_index] if active_action_index is not None else {}
-                permission = binding.get('mutation_permission')
-                allowed_mutation = False
-                if permission and req.method not in {'GET', 'HEAD', 'OPTIONS'}:
-                    operation = permission['rule'].get('operation')
-                    valid = (operation and matches_request(req, operation) and not urlsplit(req.url).query
-                             and req.redirected_from is None and active_action_index not in mutation_requests)
-                    if valid:
-                        try:
-                            body = req.post_data_json if len(req.post_data or '') <= 65536 else None
-                            valid = (req.headers.get('content-type', '').split(';')[0].strip().lower() == 'application/json'
-                                     and isinstance(body, dict) and set(body) <= set(operation['allowed_json_fields'])
-                                     and all(k in body and type(body[k]) is type(v) and body[k] == v
-                                             for k, v in operation['required_json'].items()))
-                        except Exception:
-                            valid = False
-                    if valid:
-                        mutation_requests.add(active_action_index)
-                        allowed_mutation = True
+    from ..agent.safety import SafetyPolicy
+    observed = datetime.now(timezone(timedelta(hours=7))).isoformat()
+    issues, flags, network = [], set(), []
+    final, page_map, forms, redirect = None, None, (), None
+    if not isinstance(request, ExplorationRequest):
+        raise TypeError('explore_page requires an observation-only ExplorationRequest')
+    target, invalid = validate_exploration_request(request, base_url=base_url,
+                            timeout_ms=timeout_ms, render_wait_ms=render_wait_ms)
+    issues.extend(invalid)
+    if request.actions:
+        issues.append(ExplorationIssue('ACTION_NOT_VALIDATED', 'Interactions now belong to guarded agent tools.'))
+    if request.session == 'authenticated' and (storage_state is None or not Path(storage_state).is_file()):
+        issues.append(ExplorationIssue('AUTH_STATE_REQUIRED', 'Authenticated observation requires trusted state.'))
+    if not issues:
+        policy = SafetyPolicy(base_url)
+        try:
+            with BrowserSession(base_url, timeout_ms=timeout_ms,
+                                storage_state=storage_state if request.session == 'authenticated' else None) as browser:
+                browser.start_case('__observation__')
+                policy.attach(browser._context)
+                def response(resp):
+                    if request.collect_network and len(network) < MAX_NETWORK:
+                        network.append({'method': resp.request.method, 'url': _safe_url(resp.url),
+                                        'status': resp.status, 'resource_type': resp.request.resource_type})
+                browser.page.on('response', response)
+                try:
+                    navigation = browser.page.goto(target,wait_until='domcontentloaded',timeout=timeout_ms)
+                except Exception:
+                    if policy.redirect_url:
+                        redirect = _safe_url(policy.redirect_url)
+                        issues.append(ExplorationIssue('CROSS_ORIGIN_REDIRECT', 'External navigation blocked.'))
                     else:
-                        unsafe_network = True
-                        issues.append(ExplorationIssue('MUTATION_REQUEST_BLOCKED', 'Mutation request differs from approved operation/body or repeats a write.'))
-                        route.abort()
-                        return
-                allowed_login = any(g.get("action_index") == active_action_index and g.get("capture_requests")
-                                    and not g.get('mutation_permission') and matches_request(req, g["capture_requests"]) for g in bindings)
-                approved_navigation = (active_action_index is not None and bindings[active_action_index]['action'] == 'ui.goto'
-                                       and req.is_navigation_request() and req.method == 'GET'
-                                       and req.url in {bindings[active_action_index]['url'], bindings[active_action_index]['expected_url']})
-                approved_navigation = approved_navigation or (bool(permission) and req.is_navigation_request()
-                                       and req.method == 'GET' and req.url == binding['expected_url'])
-                approved_preflight = req.method == 'OPTIONS' and any(
-                    g.get('capture_requests') and matches_request(req, {**g['capture_requests'], 'method': 'OPTIONS'}) for g in bindings)
-                approved_read = any(matches_request(req, selector)
-                                    or req.method == 'OPTIONS' and matches_request(req, {**selector, 'method': 'OPTIONS'})
-                                    for g in bindings for selector in g.get('read_requests', []))
-                safe_read = req.method in {"GET", "HEAD", "OPTIONS"} and _origin(req.url) == _origin(base_url) and not forbidden(urlsplit(req.url).path)
-                if active_action_index is not None and not (allowed_mutation or allowed_login or approved_navigation or approved_preflight or approved_read or safe_read):
-                    # A split-origin SPA may load background resources after an
-                    # approved transition. Keep denying unapproved requests;
-                    # denied passive reads are not a failed action/transition.
-                    # Never exempt navigation, writes or dangerous API reads.
-                    passive_read = (req.method in {"GET", "HEAD", "OPTIONS"}
-                                    and not req.is_navigation_request()
-                                    and (not forbidden(urlsplit(req.url).path)
-                                         or req.resource_type in {"image", "font", "stylesheet"}))
-                    if passive_read:
-                        issue = ExplorationIssue('BACKGROUND_REQUEST_BLOCKED',
-                            f'Unapproved background {req.method} {safe_url(req.url)} blocked; no response inspected.')
-                        if issue not in issues and len(issues) < MAX_NETWORK:
-                            issues.append(issue)
+                        issues.append(ExplorationIssue('NAVIGATION_FAILED','Navigation did not complete.'))
+                final = _safe_url(browser.page.url)
+                if not issues:
+                    if navigation and navigation.status >= 400:
+                        issues.append(ExplorationIssue('PAGE_UNAVAILABLE',f'HTTP {navigation.status}'))
                     else:
-                        unsafe_network = True
-                    route.abort()
-                else:
-                    route.continue_()
-            page.route("**/*", safe_request)
-        for index, action in enumerate(request.actions):
-            if v2:
-                phase = "action"
-                binding = next((g for g in bindings if g["action_index"] == index), None)
-                if binding is None or page.url != binding['page'] or redirect_url or unexpected_url:
-                    issues.append(ExplorationIssue("ACTION_PAGE_CHANGED", "Approved current page changed."))
-                    return result()
-                if action.action != 'ui.goto':
-                    if node_page != binding['page']:
-                        nodes = {}
-                        for upcoming in bindings[index:]:
-                            if upcoming['page'] != binding['page']:
-                                break
-                            if upcoming['action'] == 'ui.goto':
-                                continue
-                            control = page.get_by_test_id(upcoming['target'])
-                            if control.count() != 1:
-                                issues.append(ExplorationIssue('ACTION_PRECONDITION_FAILED', 'New state lacks a unique approved control.'))
-                                return result()
-                            nodes[upcoming['target']] = control.element_handle()
-                        node_page = binding['page']
-                    locator = page.get_by_test_id(action.target)
-                    tag = locator.evaluate("e => e.tagName.toLowerCase()") if locator.count() == 1 else None
-                    role = (locator.get_attribute("role") or INTERACTIVE.get(tag, tag)) if tag else None
-                    if (locator.count() != 1 or not locator.is_visible() or locator.is_disabled()
-                            or not locator.evaluate("(e, original) => e === original && e.isConnected", nodes[action.target])
-                            or tag != binding['tag'] or role != binding['role']
-                            or _name(locator, tag, redact) != binding['name']
-                            or tag == 'input' and (locator.get_attribute('type') or 'text') != binding['input_type']
-                            or tag == 'a' and locator.get_attribute('href') != binding.get('href')):
-                        issues.append(ExplorationIssue("ACTION_PRECONDITION_FAILED", "Approved control state or DOM identity changed."))
-                        return result()
-                active_action_index = index
-                network_start = len(network)
-                observation = None
-                if action.action == 'ui.goto':
-                    page.goto(binding['url'], wait_until='load', timeout=timeout_ms)
-                elif action.action == 'ui.fill':
-                    if not locator.is_editable():
-                        issues.append(ExplorationIssue('ACTION_PRECONDITION_FAILED', 'Approved input is not editable.'))
-                        return result()
-                    value = action.value
-                    if binding.get('fixture_metadata'):
-                        if fixture_store is None or not fixture_store.trusts(value, {value: binding['fixture_metadata']}):
-                            issues.append(ExplorationIssue('FIXTURE_UNAVAILABLE', 'Trusted runtime fixture is unavailable.'))
-                            return result()
-                        value = fixture_store.resolve(value)
-                    session.fill({'target': action.target, 'value': value, '_fixture_alias': action.value})
-                    value = None
-                elif action.action == 'ui.select':
-                    options = locator.locator('option')
-                    matches = [o for o in options.all() if (o.get_attribute('value') or o.inner_text()) == action.value and not o.is_disabled()]
-                    if len(matches) != 1 or forbidden(matches[0].inner_text()):
-                        issues.append(ExplorationIssue('ACTION_PRECONDITION_FAILED', 'Approved option is unavailable or ambiguous.'))
-                        return result()
-                    session.select({'target': action.target, 'value': action.value})
-                elif action.action == 'ui.click':
-                    if binding.get('mutation_permission') and not mutation_budget.claim(binding['mutation_permission']):
-                        issues.append(ExplorationIssue('MUTATION_BUDGET_EXCEEDED', 'Run-scoped approved action budget is exhausted; no click performed.'))
-                        return result()
-                    if binding.get('mutation_permission'):
-                        permission = binding['mutation_permission']
-                        states[-1].setdefault('mutation_attempts', []).append({
-                            'action_index': index, 'step_seq': action.step_seq, 'target': action.target,
-                            'source_clause': binding['source_clause'], 'rule_id': permission['rule']['id'],
-                            'environment': permission['environment'], 'policy_fingerprint': permission['fingerprint'],
-                            'status': 'ATTEMPTED', 'observed_at': datetime.now(timezone(timedelta(hours=7))).isoformat()})
-                    form = locator.locator('xpath=ancestor::form[1]')
-                    if form.count() and (form.get_attribute('method') or 'GET').upper() != 'GET' and not binding.get('capture_requests'):
-                        issues.append(ExplorationIssue('ACTION_PRECONDITION_FAILED', 'Unapproved form submission.'))
-                        return result()
-                    if binding.get('capture_requests'):
-                        observation = session.click_and_observe_requests({'target': action.target, 'capture_requests': binding['capture_requests']}, action.step_seq)
-                    else:
-                        session.click({'target': action.target})
-                else:
-                    issues.append(ExplorationIssue('ACTION_NOT_VALIDATED', 'Unsupported action.'))
-                    return result()
-                page.wait_for_timeout(250)
-                if render_wait_ms:
-                    _wait_for_render(page, max_wait_ms=render_wait_ms if binding['expected_url'] != binding['page'] else min(render_wait_ms, 1000))
-                if unsafe_network or mutation_redirect_blocked:
-                    issues.append(ExplorationIssue('UNSAFE_NETWORK_REQUEST', 'Unapproved write or foreign request was blocked; remaining actions stopped.'))
-                    return result()
-                if redirect_url or _origin(page.url) != _origin(base_url):
-                    states.append({'state_id': observed_at + ':' + str(len(states)), 'valid': False,
-                                   'triggering_action': index, 'source_clause': binding['source_clause'],
-                                   'page': {'url': redirect_url or safe_url(page.url)}, 'network': list(network[network_start:]),
-                                   'source': {'type': 'playwright_exploration', 'observed_at': datetime.now(timezone(timedelta(hours=7))).isoformat()}})
-                    issues.append(ExplorationIssue('CROSS_ORIGIN_REDIRECT', 'External navigation stopped.'))
-                    return result()
-                valid_transition = not unexpected_url and page.url == binding['expected_url']
-                final_url = safe_url(page.url)
-                post_page, _, state_flags = inspect_state() if valid_transition else (None, (), [])
-                state_id = observed_at + ':' + str(len(states))
-                record = {'action_index': index, 'action': action.action, 'target': action.target,
-                          'source_step_seq': action.step_seq, 'source_clause': binding['source_clause'],
-                          'value_ref': action.value if binding.get('fixture_metadata') else None,
-                          'state_id': state_id, 'from_state_id': states[-1]['state_id'],
-                          'final_url': unexpected_url or final_url, 'page': post_page.to_dict() if post_page else {'url': unexpected_url or final_url},
-                          'valid_transition': valid_transition, 'network': list(network[network_start:]),
-                          'truncated': state_flags,
-                          'source': {'type': 'playwright_exploration', 'observed_at': datetime.now(timezone(timedelta(hours=7))).isoformat()}}
-                if observation:
-                    record.update(request_count=observation['body']['request_count'], selector=observation['_ui_trigger'])
-                if binding.get('mutation_permission'):
-                    permission = binding['mutation_permission']
-                    record['mutation'] = {'rule_id': permission['rule']['id'], 'environment': permission['environment'],
-                                          'policy_fingerprint': permission['fingerprint'], 'status': 'ATTEMPTED'}
-                action_observations.append(record)
-                states.append({'state_id': state_id, 'from_state_id': record['from_state_id'],
-                               'valid': valid_transition, 'triggering_action': index,
-                               'source_step_seq': action.step_seq,
-                               'source_clause': binding['source_clause'], 'page': record['page'],
-                               'truncated': state_flags,
-                               'network': record['network'], 'source': record['source']})
-                if not valid_transition:
-                    issues.append(ExplorationIssue('UNEXPECTED_TRANSITION', 'Observed or attempted destination did not match the approved state.'))
-                    return result()
-                if binding['expected_url'] != binding['page']:
-                    node_page = None
-                continue
-            phase = "action"
-            bindings = [g for g in approved.grounding if g.get("source") == "validated_click"
-                        and g.get("action_index") == index and g.get("target") == action.target
-                        and g.get("step_seq") == action.step_seq]
-            if len(bindings) != 1 or action.action != "ui.click":
-                issues.append(ExplorationIssue("ACTION_NOT_VALIDATED", "No exact approved click binding."))
-                return result()
-            binding = bindings[0]
-            if binding.get("page") != target:
-                issues.append(ExplorationIssue("ACTION_NOT_VALIDATED", "Approved click belongs to a different page."))
-                return result()
-            if page.url != target or redirect_url:
-                issues.append(ExplorationIssue("ACTION_PAGE_CHANGED", "Approved click page changed."))
-                return result()
-            button = page.get_by_test_id(action.target)
-            inputs = [page.get_by_test_id(value) for value in binding["empty_inputs"]]
-            form = button.locator("xpath=ancestor::form[1]")
-            if (button.count() != 1 or not button.is_visible()
-                    or button.is_disabled()
-                    or " ".join(button.inner_text().split()) != binding["name"]
-                    or form.count() != 1 or any(form.get_by_test_id(value).count() != 1
-                                               for value in binding["empty_inputs"])
-                    or any(handle.count() != 1 or not handle.is_visible()
-                           or handle.input_value() != "" for handle in inputs)):
-                issues.append(ExplorationIssue("ACTION_PRECONDITION_FAILED", "Exact control and empty inputs could not be verified."))
-                return result()
-            active_action_index = index
-            observation = session.click_and_observe_requests({
-                "target": action.target, "capture_requests": binding["capture_requests"],
-            }, step_seq=action.step_seq)
-            final_url = safe_url(page.url)
-            if redirect_url or _origin(page.url) != _origin(base_url):
-                issues.append(ExplorationIssue("CROSS_ORIGIN_REDIRECT", "External navigation stopped; no foreign page inspected."))
-                return result()
-            post_page, _ = _inspect(page, request.collect_text, truncated, redact=redact, safe_url=safe_url)
-            action_observations.append({
-                "action_index": index, "action": action.action, "target": redact(action.target),
-                "source_step_seq": action.step_seq, "credential_inputs_empty": True,
-                "request_count": observation["body"]["request_count"],
-                "selector": observation["_ui_trigger"], "final_url": final_url,
-                "page": {"url": post_page.url, "title": post_page.title,
-                         "elements": [element.to_dict() for element in post_page.elements],
-                         "text": list(post_page.text)},
-                "source": {"type": "playwright_exploration",
-                           "observed_at": datetime.now(timezone(timedelta(hours=7))).isoformat()},
-            })
-        final_url = safe_url(page.url)
-        if redirect_url or _origin(page.url) != _origin(base_url):
-            issues.append(ExplorationIssue("CROSS_ORIGIN_REDIRECT", "External navigation stopped; no foreign page inspected."))
-            return result()
-        if v2 and (unexpected_url or page.url != bindings[-1]['expected_url']):
-            states.append({'state_id': observed_at + ':' + str(len(states)), 'valid': False,
-                           'triggering_action': active_action_index,
-                           'source_clause': bindings[-1]['source_clause'],
-                           'page': {'url': unexpected_url or final_url}, 'network': [],
-                           'source': {'type': 'playwright_exploration', 'observed_at': datetime.now(timezone(timedelta(hours=7))).isoformat()}})
-            issues.append(ExplorationIssue('UNEXPECTED_TRANSITION', 'Page changed after the approved sequence.'))
-            return result()
-        page_map, forms = _inspect(page, request.collect_text, truncated, redact=redact, safe_url=safe_url)
-        if v2 and unsafe_network:
-            page_map = None
-            forms = ()
-            issues.append(ExplorationIssue('UNSAFE_NETWORK_REQUEST', 'Unapproved write or foreign request was blocked.'))
-    except Exception:  # Browser errors may contain credentials/URLs: report a fixed message.
-        if (redirect_url or unexpected_url) and v2:
-            states.append({'state_id': observed_at + ':' + str(len(states)), 'valid': False,
-                           'triggering_action': active_action_index,
-                           'source_clause': bindings[active_action_index]['source_clause'] if active_action_index is not None else None,
-                           'page': {'url': redirect_url or unexpected_url}, 'network': [],
-                           'source': {'type': 'playwright_exploration', 'observed_at': datetime.now(timezone(timedelta(hours=7))).isoformat()}})
-        if unexpected_url:
-            issues.append(ExplorationIssue('UNEXPECTED_TRANSITION', 'Unapproved destination was blocked.'))
-        elif redirect_url:
-            final_url = safe_url(page.url)
-            issues.append(ExplorationIssue("CROSS_ORIGIN_REDIRECT", "External navigation stopped; no foreign page inspected."))
-        elif phase == "navigation":
-            issues.append(ExplorationIssue("NAVIGATION_FAILED", "Target navigation failed or timed out."))
-        elif phase == "action":
-            issues.append(ExplorationIssue("ACTION_FAILED", "Approved interaction or observation failed."))
-        else:
-            issues.append(ExplorationIssue("BROWSER_ERROR", "Browser setup or page inspection failed."))
-    finally:
-        session.close()
-    return result()
+                        _wait_for_render(browser.page, max_wait_ms=render_wait_ms)
+                        if policy.redirect_url:
+                            redirect = _safe_url(policy.redirect_url)
+                            issues.append(ExplorationIssue('CROSS_ORIGIN_REDIRECT','External navigation blocked.'))
+                        else:
+                            page_map, forms = _inspect(browser.page,request.collect_text,flags,
+                                redact=lambda v: _redact(fixture_store.redact(v) if fixture_store else v))
+        except Exception:
+            issues.append(ExplorationIssue('BROWSER_ERROR', 'Browser observation failed; private details omitted.'))
+    safe_request = replace(request, target=_safe_url(request.target), reason=_redact(request.reason))
+    result = ExplorationResult(safe_request, final, page_map, forms, tuple(network), tuple(issues), observed,
+                               redirect, tuple(sorted(flags)))
+    return result

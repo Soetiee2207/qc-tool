@@ -1,0 +1,32 @@
+# Input paths are relative to this config. Credentials stay in .env.
+feature: example
+module: EXAMPLE
+docs_dir: ./docs/input
+openapi: ./openapi.yaml
+web_url: https://app.example.com
+llm:
+  enabled: false # explicit --llm enables the configured tool-calling provider
+auth:
+  mode: manual # browser uses configured env login; manual never logs in automatically
+generation:
+  profile: agent
+  critic: false
+  max_intents: 2 # remove after reviewing a small acceptance run
+  budget:
+    max_turns: 10
+    max_tokens: 60000
+    max_seconds: 360
+    completion_tokens: 2000
+run:
+  base_url: https://api.example.com
+  timeout_seconds: 30
+provisioning:
+  enabled: false
+out:
+  dir: ./artifacts/example
+  headless: true
+  skip_run: false
+ui:
+  retry: 0
+  evidence: always
+  trace: true

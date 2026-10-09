@@ -367,6 +367,7 @@ class BrowserSession:
         context = self._context
         if context is not None:
             context.storage_state(path=str(path))
+            path.chmod(0o600)
 
     # ── Đăng nhập ───────────────────────────────────────────────────────────
     def session_alive(self) -> bool:
@@ -402,6 +403,7 @@ class BrowserSession:
         Không thu nội dung console, URL query hay trace chứa credentials.
         """
         self.authenticated = False
+        self.login_controls = None
         private_before = self._capture_private
         self._capture_private = True
         traced = False
@@ -454,6 +456,9 @@ class BrowserSession:
         if len(submits) != 1:
             raise LoginError("LOGIN_FORM_AMBIGUOUS", "Không xác định duy nhất nút submit của form")
         initial_url = self.page.url
+        ids = [control.get_attribute('data-testid') for control in (candidates[0], password_field, submits[0])]
+        self.login_controls = ({'url': initial_url, 'email': ids[0], 'password': ids[1], 'submit': ids[2]}
+            if all(isinstance(i, str) and i and self.page.get_by_test_id(i).count() == 1 for i in ids) else None)
         candidates[0].fill(username, timeout=self.timeout_ms)
         password_field.fill(password, timeout=self.timeout_ms)
         submits[0].click(timeout=self.timeout_ms)
@@ -627,6 +632,24 @@ class BrowserSession:
         target = str(args.get("target") or "").strip()
         name = str(args.get("by_name") or "").strip()
 
+        if getattr(self, "strict_locators", False):
+            result = self.page.get_by_test_id(target)
+            if result.count() == 0 and args.get("role"):
+                result = self.page.get_by_role(args["role"], name=name or target, exact=True)
+            elif result.count() == 0 and args.get("by_name") and not _looks_like_test_id(target):
+                result = self.page.get_by_text(name, exact=True)
+            # Preserve the strict locator; Playwright expect/action reports zero
+            # or multiple matches without selecting an arbitrary .first().
+            return result
+        if args.get("role"):
+            # Agent-generated cases use the exact accessible role/name observed
+            # live. Preserve Playwright strictness rather than choosing .first.
+            if target and _looks_like_test_id(target):
+                exact_id = self.page.get_by_test_id(target)
+                if exact_id.count():
+                    return exact_id
+            return self.page.get_by_role(args["role"], name=name or target, exact=True)
+
         if target and _looks_like_test_id(target):
             locator = self._test_id_locator(target)
             with contextlib.suppress(Exception):
@@ -709,6 +732,19 @@ class BrowserSession:
                         "() => { try { localStorage.clear(); sessionStorage.clear(); }"
                         " catch (e) {} }"
                     )
+            # A context loaded from storage_state already contains localStorage
+            # even while its first page is about:blank. Clear those known origins
+            # without visiting them (visiting /login could immediately redirect).
+            origins = {self.base_url}
+            if self.storage_state and Path(self.storage_state).is_file():
+                with contextlib.suppress(Exception):
+                    state = json.loads(Path(self.storage_state).read_text())
+                    origins.update(o['origin'] for o in state.get('origins', []) if o.get('origin'))
+            with contextlib.suppress(Exception):
+                cdp = context.new_cdp_session(self.page)
+                for origin in origins:
+                    cdp.send('Storage.clearDataForOrigin', {'origin': origin, 'storageTypes': 'all'})
+                cdp.detach()
             with contextlib.suppress(Exception):
                 context.clear_cookies()
             with contextlib.suppress(Exception):

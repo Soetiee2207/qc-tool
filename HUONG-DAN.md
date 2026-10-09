@@ -227,3 +227,61 @@ không đọc/tạo provider này, kể cả khi env bật LLM.
 | Báo cáo có mục "Test chập chờn" | Đọc Mục 6 và 7: trace + ảnh nằm trong `evidence/`, mở bằng `playwright show-trace` |
 | Tool tự đăng nhập dù không muốn | Đặt `auth.mode: manual` trong `qc.yaml` — chế độ này không bao giờ tự đăng nhập |
 | Đăng nhập hỏng nhưng vẫn muốn chạy case UI khác | Cứ chạy: case cần xác thực báo `Bị chặn`, case còn lại vẫn chạy |
+
+## Authoring agent (nhánh agent-redesign)
+
+```bash
+# .env: QCTOOL_LLM_BASE_URL / QCTOOL_LLM_MODEL / QCTOOL_LLM_API_KEY
+# Provider phải hỗ trợ OpenAI-compatible tools. Không ghi key trong YAML.
+uv run qctool validate --config qctool.agent.example.yaml --llm
+uv run qctool run --config qctool.agent.example.yaml --llm
+```
+
+Copy cấu hình mẫu và điền docs/OpenAPI/website. Với DeepSeek, có thể đặt
+`QCTOOL_LLM_THINKING=disabled` để dùng tool calling không reasoning; không bắt buộc.
+`auth.mode: browser` mới cho phép bootstrap login bằng env. `manual` không tự login.
+Provisioning mặc định OFF; thao tác ghi cần policy được review.
+
+Agent quan sát ARIA → viết case có source quote → thử action/locator trên context
+riêng → nhận lỗi để sửa trong cùng hội thoại. Dry-run **chưa** là Pass: runner mới
+kiểm expected. Khi không chạy được, case vẫn manual/blocked và giữ source.
+
+- `ready`: gate + dry-run đủ, expected literal có nguồn.
+- `needs_review`: oracle yếu/nonliteral/critic nghi ngờ; vẫn chạy, có nhãn trong report
+  và Description. QC ghi quyết định tại sheet Review; 14 cột Test Cases không đổi.
+- `manual` / `blocked_env`: chưa chấp nhận chạy tự động; xem `generation.json`.
+
+Dùng `generation.max_intents: 1` hoặc `2` lúc kiểm chứng để giới hạn chi phí; có thể
+chọn `generation.intent_ids` từ obligation IDs trong coverage audit. Coverage vẫn
+hiển thị toàn bộ nguồn; chạy subset không có nghĩa toàn bộ tài liệu đã covered.
+Budget `max_turns`, `max_tokens`, `max_seconds`, `completion_tokens` áp dụng mỗi
+intent; có thêm một call thiết kế intent trước authoring. Timeout/call lỗi vẫn tốn
+chi phí nếu provider đã xử lý; xem metadata, không giả định usage thiếu là zero.
+
+Artifact: requirements.yaml, app-model.yaml, generation.json, testcases.yaml/xlsx,
+results.json/csv, junit.xml, report.md. Knowledge không chứa phiên đăng nhập;
+`.auth-state.json` / `.token` là runtime private, không chia sẻ hay commit.
+
+```bash
+# Benchmark offline: đọc artifact, không gọi model/browser
+uv run python scripts/run_agent_benchmark.py artifacts/<feature>
+```
+
+Bộ patch/resolution-loop cũ đã retire; không còn flag chạy nhánh legacy.
+
+### Xem lại agent và Playwright đã làm gì
+
+| Muốn xem | Mở file |
+|---|---|
+| Agent gọi tool nào, lỗi gì, tốn bao nhiêu token | `generation.json` → `agent_history[i].history`, `provider_attempts` |
+| Các bước của testcase | `testcases.yaml` hoặc `testcases.xlsx` |
+| Playwright chạy từng bước ra sao | `runs/<thời gian>/results.json`, `report.md` |
+| Xem lại trực quan (DOM, mạng, console) | `uv run playwright show-trace evidence/<MÃ>.trace.zip` |
+
+Bật trace trong config: `ui: {evidence: always, trace: true}`. Case có điền mật khẩu
+hoặc bắt request đăng nhập **không** có trace/ảnh — tool tắt có chủ ý để file không chứa
+mật khẩu/token. Kết quả từng bước của các case đó vẫn có trong `results.json`.
+Trace chứa dữ liệu phiên: không chia sẻ, không commit.
+
+Ví dụ đầy đủ: `samples/customer_e2e_test_1/` + `qctool.customer_e2e_test_1.e2e.yaml`
+(11 AC: đăng nhập, mua hàng, đặt lịch — dừng trước bước tạo dữ liệu).

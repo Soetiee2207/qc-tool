@@ -91,7 +91,8 @@ def analyze_executability(case: TestCase, *, context=None) -> ExecutabilityRepor
 
         before = len(gaps)
         for name in ACTION_SPECS[action].required:
-            if name not in args or args[name] in (None, ""):
+            # Same rule as Step.validate: `expected: ""` is a real oracle (empty field).
+            if name not in args or args[name] is None or (args[name] == "" and name != "expected"):
                 if name == "target" and action in UI_VERBS:
                     code, message = "MISSING_LOCATOR", "Missing UI locator: target"
                 elif action == "http.request" and name == "method":
@@ -149,10 +150,4 @@ def analyze_executability(case: TestCase, *, context=None) -> ExecutabilityRepor
     if not executable_assertion:
         gaps.append(ExecutionGap("MISSING_ASSERTION", "No executable assertion in testcase."))
 
-    if context is not None:
-        from .workflow_evidence import incomplete_outcomes
-        gaps.extend(ExecutionGap('SOURCE_OUTCOME_INCOMPLETE', message, seq) for seq, message in incomplete_outcomes(case, context))
-        from .source_grounding import SEMANTIC_GAP, semantic_mismatches
-        gaps.extend(ExecutionGap(SEMANTIC_GAP, message, seq)
-                    for seq, message in semantic_mismatches(case, context))
     return ExecutabilityReport(not gaps and validation_error is None, tuple(gaps), validation_error)

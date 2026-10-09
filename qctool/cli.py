@@ -258,7 +258,7 @@ def _load_cases(path: Path) -> list[TestCase]:
                 kind=StepKind(s.get("kind", "when")),
                 action=s["action"],
                 args=s.get("args", {}),
-                note=s.get("note", ""),
+                note=s.get("note", ""), source=s.get("source", {}),
             ))
         provenance = raw.get("provenance", {})
         cases.append(TestCase(
@@ -274,6 +274,9 @@ def _load_cases(path: Path) -> list[TestCase]:
             source_ref=provenance.get("source_ref", ""),
             generated_by=raw.get("generated_by", "engine"),
             requires=raw.get("requires"),
+            execution=raw.get("execution", "auto"),
+            generation_status=raw.get("generation_status"), review_reasons=raw.get("review_reasons", []),
+            obligation_ids=raw.get("obligation_ids", []), source_intent=raw.get("source_intent", {}),
         ))
     return cases
 
@@ -509,7 +512,7 @@ def _project_flags(parser):
     parser.add_argument('--url', help='HTTP(S) URL ứng dụng')
     parser.add_argument('--config', help='YAML config; CLI flags ghi đè các giá trị đã chọn')
     parser.add_argument('--out', help='Thư mục artifacts')
-    parser.add_argument('--profile', choices=('business','legacy'), help='Business coverage (mặc định); legacy chạy thêm diagnostic seeds')
+    parser.add_argument('--profile', choices=('agent',), help='Agent authoring (mặc định); không còn nhánh legacy')
     parser.add_argument('--feature', help='Tên feature/namespace requirement')
     parser.add_argument('--module', help='Module testcase')
     parser.add_argument('--llm', action=argparse.BooleanOptionalAction, default=None,

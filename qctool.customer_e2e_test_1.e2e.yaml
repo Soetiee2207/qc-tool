@@ -1,0 +1,129 @@
+# customer_e2e_test_1 — login, mua hàng, đặt lịch (read-only). Credentials chỉ ở .env.
+feature: customer_e2e_test_1
+module: CUSTOMER_E2E_TEST_1
+generation:
+  profile: agent
+  budget:
+    max_turns: 12
+    max_tokens: 60000
+    max_seconds: 480
+    completion_tokens: 2200
+docs_dir: ./samples/customer_e2e_test_1
+openapi: ./samples/customer_e2e_test_1/openapi.yaml
+web_url: https://salonhub-soe.vercel.app
+run:
+  base_url: https://salonhub-3cg8.onrender.com
+  timeout_seconds: 45
+  verify_ssl: true
+auth:
+  mode: browser
+llm:
+  enabled: true
+provisioning:
+  enabled: false
+  environment: production
+ui:
+  retry: 0
+  evidence: always
+  trace: true
+out:
+  dir: ./artifacts/customer_e2e_test_1
+  skip_run: false
+  headless: true
+test_fixtures:
+  fixtures:
+    active_user:
+      email:
+        env: QCTOOL_USERNAME
+      password:
+        env: QCTOOL_PASSWORD
+      facts:
+        role: customer
+        account_state: active
+  bindings:
+    AC-customer_e2e_test_1-001-1:
+      email: active_user.email
+      password: active_user.password
+      correct_password: active_user.password
+    AC-customer_e2e_test_1-002-3:
+      email: active_user.email
+      password: active_user.password
+      correct_password: active_user.password
+    AC-customer_e2e_test_1-002-4:
+      email: active_user.email
+      password: active_user.password
+      correct_password: active_user.password
+    AC-customer_e2e_test_1-003-3:
+      email: active_user.email
+      password: active_user.password
+      correct_password: active_user.password
+    AC-customer_e2e_test_1-003-4:
+      email: active_user.email
+      password: active_user.password
+      correct_password: active_user.password
+  acquisition:
+    requirements:
+      AC-customer_e2e_test_1-001-1:
+      - fixture: active_user
+        aliases:
+        - active_user.email
+        - active_user.password
+        facts:
+          account_exists: true
+          password_valid: true
+          account_state: active
+        require_verified: false
+        source_ref: samples/customer_e2e_test_1/urd.md:AC-001-1
+      AC-customer_e2e_test_1-002-3:
+      - fixture: active_user
+        aliases:
+        - active_user.email
+        - active_user.password
+        facts:
+          account_exists: true
+          password_valid: true
+          account_state: active
+        require_verified: false
+        source_ref: samples/customer_e2e_test_1/urd.md:AC-002-3
+      AC-customer_e2e_test_1-002-4:
+      - fixture: active_user
+        aliases:
+        - active_user.email
+        - active_user.password
+        facts:
+          account_exists: true
+          password_valid: true
+          account_state: active
+        require_verified: false
+        source_ref: samples/customer_e2e_test_1/urd.md:AC-002-4
+      AC-customer_e2e_test_1-003-3:
+      - fixture: active_user
+        aliases:
+        - active_user.email
+        - active_user.password
+        facts:
+          account_exists: true
+          password_valid: true
+          account_state: active
+        require_verified: false
+        source_ref: samples/customer_e2e_test_1/urd.md:AC-003-3
+      AC-customer_e2e_test_1-003-4:
+      - fixture: active_user
+        aliases:
+        - active_user.email
+        - active_user.password
+        facts:
+          account_exists: true
+          password_valid: true
+          account_state: active
+        require_verified: false
+        source_ref: samples/customer_e2e_test_1/urd.md:AC-003-4
+    evidence:
+    - fixture: active_user
+      facts:
+        account_exists: true
+        password_valid: true
+        account_state: active
+        role: customer
+      assurance: DECLARED
+      source_ref: operator:confirmed-existing-customer-account

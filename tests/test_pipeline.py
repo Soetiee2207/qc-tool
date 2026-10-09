@@ -263,10 +263,9 @@ def test_manual_auth_mode_never_logs_in(tmp_path, monkeypatch):
     )
     run_pipeline(cfg)
     assert calls == [], f"auth.mode=manual mà vẫn đăng nhập: {calls}"
-    # Và phải chắc chắn lượt chạy này thật sự đi qua nhánh crawl — nếu không,
-    # test xanh chỉ vì lối vào đó không được chạm tới.
-    assert (cfg.out_dir / "ui-map.yaml").is_file(), \
-        "lượt chạy không crawl ⇒ test này không chứng minh được gì"
+    # Agent without opt-in LLM performs no browser work at all.
+    assert (cfg.out_dir / 'testcases.yaml').is_file()
+    assert not (cfg.out_dir / 'ui-map.yaml').exists()
 
 
 # ── Web UI ───────────────────────────────────────────────────────────────────

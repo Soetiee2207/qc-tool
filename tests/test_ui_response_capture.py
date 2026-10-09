@@ -12,11 +12,8 @@ from qctool.execute.browser import BrowserSession, ResponseCaptureError
 from qctool.execute.runner import HttpSession, run_case
 from qctool.executability import analyze_executability
 from qctool.testcase import Step, StepKind, TestCase, ValidationError
-from qctool.proposal_validation import validate_resolution_proposal
-from qctool.llm_resolution import AtomicProposal, EvidenceReference, ResolutionProposal
-from qctool.apply_resolution import apply_validated_resolution
-from tests.test_fixture_facts import inputs, GIVEN
-from tests.test_step_expansion import expansion, atom, BASE, HAPPY
+from tests.test_fixture_facts import GIVEN
+from tests.fixture_samples import BASE, HAPPY
 
 SECRET = 'FICTIONAL_TOKEN_SECRET_DO_NOT_PERSIST'
 
@@ -96,59 +93,6 @@ def test_missing_or_duplicate_matching_response_is_structured_blocked(capture_si
         browser.close()
 
 
-def resolution_inputs():
-    case, context, store, given = inputs({'role': 'customer', 'account_state': 'active'})
-    context.interface_contract['api_operations'][0]['servers'] = [BASE]
-    page = deepcopy(context.observations['ui_pages'][0]); page['url'] = BASE + '/'
-    page['elements'] = []
-    context.observations['ui_pages'].append(page)
-    op = EvidenceReference('openapi', {'operation_id': 'login'})
-    when = expansion()
-    atoms = list(when.expansion)
-    atoms[0] = replace(atoms[0], args={'target':'email','value':'active_user.email'})
-    atoms[1] = replace(atoms[1], args={'target':'password','value':'active_user.password'})
-    atoms[2] = replace(atoms[2], args={**atoms[2].args,'capture_response':capture()}, evidence=(*atoms[2].evidence,op))
-    when = replace(when, expansion=tuple(atoms))
-    then = expansion([
-        atom('assert.http_status', {'expected':200,'source':'login'}, refs=(op,)),
-        atom('assert.json_field', {'path':'$.success','expected':True,'source':'login'}, refs=(op,)),
-        atom('assert.url_matches', {'pattern':'/$'}, refs=(EvidenceReference('ui-map',{'page':BASE+'/'}),)),
-    ], 3, True)
-    return case,context,store,ResolutionProposal(case.id,(given,when,then),())
-
-
-def test_full_source_login_outcome_grounded_by_ui_captured_response():
-    case,context,store,proposal = resolution_inputs()
-    snapshot = deepcopy((case,context,proposal))
-    validation = validate_resolution_proposal(proposal,context,case,fixture_store=store)
-    assert len(validation.valid_changes) == 3, validation.issues
-    result = apply_validated_resolution(case,validation)
-    assert not result.issues
-    assert result.after.executable
-    assert [s.action for s in result.case.steps] == ['ui.session','ui.goto','ui.fill','ui.fill','ui.click',
-        'assert.http_status','assert.json_field','assert.url_matches']
-    assert (case,context,proposal) == snapshot
-
-
-@pytest.mark.parametrize('field,value', [('path','/invented'),('origin','https://foreign.test'),('method','GET')])
-def test_untrusted_capture_operation_or_origin_rejected(field,value):
-    case,context,store,proposal = resolution_inputs()
-    when = proposal.changes[1]; atoms = list(when.expansion)
-    atoms[2] = replace(atoms[2], args={**atoms[2].args,'capture_response':capture(**{field:value})})
-    proposal = replace(proposal,changes=(proposal.changes[0],replace(when,expansion=tuple(atoms)),proposal.changes[2]))
-    result = validate_resolution_proposal(proposal,context,case,fixture_store=store)
-    assert not any(c.step_seq in (2,3) for c in result.valid_changes)
-
-
-def test_no_capture_cannot_ground_http_assertions_from_ui_observations():
-    case,context,store,proposal = resolution_inputs()
-    when = proposal.changes[1]; atoms=list(when.expansion)
-    atoms[2] = replace(atoms[2],args={'target':'login'})
-    proposal=replace(proposal,changes=(proposal.changes[0],replace(when,expansion=tuple(atoms)),proposal.changes[2]))
-    result=validate_resolution_proposal(proposal,context,case,fixture_store=store)
-    assert not any(c.step_seq == 3 for c in result.valid_changes)
-
-
 @pytest.mark.parametrize('bad', [{'method':'POST'}, capture(timeout_ms=0), capture(path='//foreign'),capture(origin='file://local')])
 def test_structural_capture_validation(bad):
     with pytest.raises(ValidationError):
@@ -174,27 +118,6 @@ def test_wrong_status_is_real_assertion_failure_without_token_url_leak(capture_s
         assert SECRET not in json.dumps(result.to_dict())
     finally:
         browser.close()
-
-
-def test_root_contract_server_is_retained_without_changing_http_base_override():
-    from qctool.generate.loader import load_endpoints
-    from qctool.resolution_context import build_resolution_context
-    ep = load_endpoints(Path('samples/smoke/openapi.yaml'))[0][0]
-    assert ep.servers == []  # normal http.request continues using configured base
-    assert ep.contract_servers == ['https://salonhub-3cg8.onrender.com']
-    case, _, _, _ = resolution_inputs()
-    context = build_resolution_context(case, analyze_executability(case).gaps, endpoints=[ep])
-    assert context.interface_contract['api_operations'][0]['servers'] == ep.contract_servers
-
-
-@pytest.mark.parametrize('replacement', ['success=false', 'URL not /', 'URL chuyển tới /admin'])
-def test_login_capture_does_not_rewrite_expected_outcomes(replacement):
-    case,context,store,proposal = resolution_inputs()
-    text = HAPPY.replace('success=true', replacement) if replacement=='success=false' else HAPPY.replace('URL chuyển tới /',replacement)
-    case.steps[2].args['expected'] = text
-    context.testcase['steps'][2]['args']['expected'] = text
-    result = validate_resolution_proposal(proposal,context,case,fixture_store=store)
-    assert not any(c.step_seq == 3 for c in result.valid_changes)
 
 
 @pytest.mark.playwright

@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 
 
@@ -269,6 +269,9 @@ ACTION_SPECS: dict[str, ActionSpec] = {
     ),
 }
 
+# Exact ARIA role/name locators are first-class alongside stable test IDs.
+ACTION_SPECS = {action: replace(spec, optional=(*spec.optional, "role"))
+                if "target" in spec.required else spec for action, spec in ACTION_SPECS.items()}
 ACTION_VERBS = frozenset(ACTION_SPECS)
 
 # ── Ngưỡng hiệu năng ────────────────────────────────────────────────────────
@@ -307,6 +310,7 @@ class Step:
     action: str
     args: dict = field(default_factory=dict)
     note: str = ""
+    source: dict = field(default_factory=dict)
 
     def validate(self) -> None:
         if self.action not in ACTION_SPECS:
@@ -317,7 +321,9 @@ class Step:
                 f"Verb hợp lệ: {', '.join(sorted(ACTION_VERBS))}"
             )
         spec = ACTION_SPECS[self.action]
-        missing = [a for a in spec.required if a not in self.args or self.args[a] in (None, "")]
+        # `expected: ""` là kỳ vọng hợp lệ (ô vẫn trống); các tham số khác rỗng là thiếu.
+        missing = [a for a in spec.required if a not in self.args or self.args[a] is None
+                   or (self.args[a] == "" and a != "expected")]
         if missing:
             raise ValidationError(
                 f"Bước {self.seq} (`{self.action}`): thiếu tham số bắt buộc {missing}. "
@@ -337,8 +343,10 @@ class Step:
             from .response_capture import validate_capture
             try:
                 validate_capture(self.args[capture_key])
-            except (ValueError, TypeError):
-                raise ValidationError(f"Bước {self.seq}: {capture_key} không hợp lệ") from None
+            except (ValueError, TypeError) as exc:
+                raise ValidationError(
+                    f"Bước {self.seq}: {capture_key} không hợp lệ — {exc}. "
+                    "Dạng đúng: {method, path, origin[, save_as, timeout_ms]}") from None
         if "operator" in self.args and self.args["operator"] not in _OPERATORS:
             raise ValidationError(
                 f"Bước {self.seq}: operator `{self.args['operator']}` không hợp lệ. "
@@ -351,6 +359,8 @@ class Step:
             out["args"] = self.args
         if self.note:
             out["note"] = self.note
+        if self.source:
+            out["source"] = self.source
         return out
 
     def _label(self) -> str:
@@ -629,6 +639,10 @@ class TestCase:
     executed_at: str | None = None
     created_by: str | None = None
     created_at: str | None = None
+    generation_status: str | None = None
+    review_reasons: list[str] = field(default_factory=list)
+    obligation_ids: list[str] = field(default_factory=list)
+    source_intent: dict = field(default_factory=dict)
 
     def validate(self) -> None:
         if not self.id:
@@ -752,6 +766,9 @@ class TestCase:
         out["expected"] = self.expected
         out["content_hash"] = self.content_hash
         out["provenance"] = {"source_quote": self.source_quote, "source_ref": self.source_ref}
+        for key in ("generation_status", "review_reasons", "obligation_ids", "source_intent"):
+            if getattr(self, key):
+                out[key] = getattr(self, key)
         for key in ("status", "actual", "environment", "executed_by", "executed_at",
                     "created_by", "created_at"):
             value = getattr(self, key)

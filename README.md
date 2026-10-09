@@ -34,9 +34,46 @@ OpenAPI  ─┼─► requirements.yaml ─► testcases.yaml ─► runner ─�
 ra một lần, rồi chạy điền kết quả vào chính file đó (4 cột runtime). QC không phải đối
 chiếu hai file.
 
-**LLM output luôn là untrusted proposal/plan.** Deterministic validators quyết định
-changes/actions được phép. Chỉ testcase đã được analyzer xác nhận executable mới
-được chấp nhận vào automation; phần chưa đủ source/evidence/data vẫn unresolved.
+**Agent authoring:** LLM dùng tools để quan sát ARIA, viết testcase có source quote,
+nhận lỗi và sửa trong cùng session. Gate giữ schema/safety/citation; dry-run chỉ kiểm
+action/locator, không cho model đọc actual assertion để sửa expected theo sản phẩm.
+Runner mới quyết định Pass/Fail. Weak oracle là `needs_review`, không generation success.
+
+```bash
+uv run qctool validate --config qctool.agent.example.yaml --llm
+uv run qctool run --config qctool.agent.example.yaml --llm
+```
+
+Điền docs/OpenAPI/URL và provider env trước; bắt đầu với `generation.max_intents: 1`
+hoặc `2`. Xem [hướng dẫn](HUONG-DAN.md) và [kết quả kiểm chứng giới hạn](docs/findings/agent-redesign.md).
+Không còn patch engine/legacy execution flag. API-only generation vẫn deterministic.
+
+### V2 — kết quả kiểm chứng (2026-10-09)
+
+Trên SalonHub thật (role Customer, DeepSeek, Chromium):
+
+| Bộ tài liệu | Executable | Pass | Fail |
+|---|---|---|---|
+| `samples/customer` (7 AC) | 5/7 | 5 | 0 |
+| `samples/customer_e2e_test_1` (11 AC: đăng nhập, mua hàng, đặt lịch — read-only) | 9/11 | 9 | 0 |
+
+Trước V2: 3–4/7 với ~330k token. Case không chạy được giữ `Not Executed` kèm lý do,
+không bao giờ tính là Pass. Chi tiết, giới hạn và lỗi đã sửa:
+[docs/findings/agent-redesign.md](docs/findings/agent-redesign.md).
+
+```bash
+QCTOOL_LLM_TIMEOUT_SECONDS=90 QCTOOL_LLM_THINKING=disabled \
+  uv run qctool run --config qctool.customer_e2e_test_1.e2e.yaml --llm
+```
+
+**Xem bằng chứng:** `artifacts/<feature>/generation.json` (agent gọi tool nào),
+`runs/<t>/results.json` + `report.md` (từng bước Playwright), `evidence/*.trace.zip`
+(`uv run playwright show-trace <file>`). Case đăng nhập không có trace — cố ý, vì trace
+sẽ chứa mật khẩu thật.
+
+**Giới hạn hiện tại:** chưa test bước ghi dữ liệu (đặt hàng, xác nhận lịch) — cần mutation
+policy; DeepSeek đôi khi timeout; kết quả từng case dao động giữa các lượt.
+
 
 ## Cài đặt
 

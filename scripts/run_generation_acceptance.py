@@ -40,35 +40,17 @@ def verify_acceptance(result: PipelineResult) -> dict:
 
     packet = json.loads(result.generation_path.read_text(encoding="utf-8"))
     ir = yaml.safe_load(result.testcases_path.read_text(encoding="utf-8"))
-    ui_map = yaml.safe_load((result.out_dir / "ui-map.yaml").read_text(encoding="utf-8"))
-    assert any(p["url"].endswith("/ui/du-an") for p in ui_map["pages"])
     generation = result.generation_result
-    assert packet["status"] == result.generation_status and packet["success"] is False
+    assert packet['status'] == result.generation_status and packet['success'] is False
     accepted = generation.accepted_generated_cases
-    assert len(accepted) == 1, "Một obligation route phải được sinh và resolve"
+    assert len(accepted) == 1
     generated = accepted[0]
     assert analyze_executability(generated).executable
-    assert flow["id"] in generated.traces_to
-    assert generated.source_ref.startswith("srs/acceptance-flows.md:")
-
-    histories = [p.resolution for p in generation.history if p.resolution]
-    links = [link for history in histories for link in history.audit
-             if link.testcase_id == generated.id]
-    assert len(links) == 1
-    obligation = links[0].obligation
-    assert obligation.id == f"{flow['id']}:steps[0].expected"
-    assert obligation.source.file == "srs/acceptance-flows.md"
-    assert obligation.source.line and obligation.source.quote
-    assert obligation.status.value == "uncovered"  # planner input, not a preexisting covered intent
-    record = next(record for history in histories for record in history.case_results
-                  if record.testcase_id == generated.id)
-    cycle = record.resolution.cycles[0]
-    assert len(cycle.deterministic.changes) == 2
-    assert cycle.proposal is None and cycle.exploration_execution is None
-    pages = {p["url"] for p in ui_map["pages"]}
-    assert all(change.evidence["source"] == "ui-map" and change.evidence["page"] in pages
-               for change in cycle.deterministic.changes)
-    assert cycle.context.observations["ui_pages"]
+    assert flow['id'] in generated.traces_to
+    record = next(h for h in generation.agent_history if h.case.id == generated.id)
+    assert record.dry_run_passed
+    assert generated.source_intent['expected'] == flow['steps'][0]['expected']
+    obligation_id = generated.obligation_ids[0]
 
     results = {case.case_id: case for case in result.run_result.cases}
     emitted = {case["id"]: case for case in ir["testcases"]}
@@ -78,8 +60,8 @@ def verify_acceptance(result: PipelineResult) -> dict:
     execution = results[generated.id]
     assert execution.status == "Pass" and not execution.manual
     assert [(s.action, s.ok) for s in execution.steps] == [
-        ("ui.goto", True), ("assert.url_matches", True)]
-    assert "/ui/du-an" in execution.steps[0].detail
+        ("ui.session", True), ("ui.goto", True), ("assert.url_matches", True)]
+    assert "/ui/du-an" in execution.steps[1].detail
     assert execution.evidence.get("trace")
     assert (result.out_dir / "evidence" / execution.evidence["trace"]).is_file()
     for case in results.values():
@@ -126,15 +108,35 @@ def verify_acceptance(result: PipelineResult) -> dict:
         "pipeline_ok": result.ok, "generation_success": result.generation_success,
         "generation_status": result.generation_status,
         "requirements": sorted(expected), "generated_executable_case": generated.id,
-        "obligation": obligation.id, "source": generated.source_ref,
+        "obligation": obligation_id, "source": generated.source_ref,
         "counts": result.counts, "cases": {id: c.status for id, c in results.items()},
         "generation_passes": len(generation.history),
         "artifacts": [str(path) for path in (
-            result.requirements_path, result.out_dir / "ui-map.yaml", result.generation_path,
+            result.requirements_path, result.out_dir / "app-model.yaml", result.generation_path,
             result.testcases_path, result.xlsx_path, result.run_dir / "results.json",
             result.run_dir / "results.csv", result.run_dir / "junit.xml", result.report_path)],
         "verified": True,
     }
+
+
+class RouteReplay:
+    """Recorded tool fixture for a declared route. Never a live model claim."""
+    def __init__(self, route):
+        self.route = route
+    def chat(self, messages, tools, **kwargs):
+        if tools[0]['function']['name'] == 'design_tests':
+            intents = json.loads(messages[-1]['content'])
+            name, args = 'design_tests', {'intents':[{'id':i['id'], 'title':i['title'], 'source_quote':i['expected']} for i in intents]}
+        else:
+            intent = json.loads(messages[1]['content'])['intent']
+            if intent['expected'] != 'URL ' + self.route:
+                return {'role':'assistant','content':'No recorded safe draft for this source','tool_calls':[]}
+            name, args = 'draft_case', {'title':'Declared route', 'steps':[
+                {'seq':1,'kind':'given','action':'ui.session','args':{'mode':'anonymous'}},
+                {'seq':2,'kind':'when','action':'ui.goto','args':{'url':self.route}},
+                {'seq':3,'kind':'then','action':'assert.url_matches','args':{'pattern':self.route+'$'},
+                 'source':{'req_id':intent['req_id'],'quote':intent['expected']}}]}
+        return {'role':'assistant','content':None,'tool_calls':[{'id':name,'type':'function','function':{'name':name,'arguments':json.dumps(args)}}]}
 
 
 def run_acceptance(out_dir: Path, on_progress=None) -> tuple[PipelineResult, dict]:
@@ -148,7 +150,7 @@ def run_acceptance(out_dir: Path, on_progress=None) -> tuple[PipelineResult, dic
             docs_dir=SAMPLE, openapi=SAMPLE / "openapi.yaml", feature="acceptance",
             module="ACCEPTANCE", web_url=base, base_url=base + "/api/v1",
             auth_mode="manual", timeout_seconds=8, out_dir=out_dir,
-            ui_evidence="always", ui_trace=True), on_progress=on_progress)
+            ui_evidence="always", ui_trace=True), on_progress=on_progress, resolution_llm=RouteReplay("/ui/du-an"))
         checks = verify_acceptance(result)
         (out_dir / "acceptance-checks.json").write_text(
             json.dumps(checks, ensure_ascii=False, indent=2), encoding="utf-8")

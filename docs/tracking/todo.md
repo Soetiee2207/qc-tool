@@ -5,8 +5,10 @@ lang: vi
 status: living
 owner: "@binhhm"
 created: 2026-09-18
-updated: 2026-09-21
+updated: 2026-10-09
 changelog:
+  - 2026-10-09 | claude | Customer 7 intent: 5/7 Pass, 0 Fail; thêm việc tiếp theo
+  - 2026-10-09 | codex | Agent redesign: gate/citation/dry-run, live acceptance chưa chốt
   - 2026-09-21 | manual | M06: tầng Playwright đầy đủ — 12 verb UI/UX, context mỗi case, retry+flake, evidence+trace, axe. 172 test
   - 2026-09-21 | manual | thêm `ui.session`: test được login/redirect/guard; khử 63 bước đệm + 19 case bịa. 111 test
   - 2026-09-21 | manual | theo phản hồi user: đọc cả cây tài liệu, parser luồng nghiệp vụ, case thủ công. 25 → 92 case
@@ -123,3 +125,26 @@ changelog:
 | W38-11 | Dựng template OpenAPI + script kiểm tra (3 operation thật của login-sso) | 09-18 | `templates/api/` |
 | W38-12 | Dựng template báo cáo ngôn ngữ đơn giản + ví dụ đã điền | 09-18 | `templates/report/` |
 | W38-15 | **M01 xong phần parser**: tài liệu login-sso → `requirements.yaml`, 44 requirement, 3 tính chất đã verify | 09-18 | `qctool/ingest/`, `artifacts/login-sso/requirements.yaml` |
+
+## Agent redesign — 2026-10-09
+
+Nhánh `agent-redesign`: prose authoring bằng tool calling, giữ native runner và
+14 cột XLSX. Không đánh dấu milestone Done chỉ vì có code. Xem
+[Finding agent redesign](../findings/agent-redesign.md).
+
+Cần xác nhận: live testcase ready chạy thật; độ đầy đủ ngữ nghĩa của action/oracle
+qua QC review; false-fail/semantic benchmark có labels. Không thay business expectation
+theo observation để tăng runnable count.
+
+Đã chạy đủ 7 intent customer (lượt `final4`): **5/7 executable, 5 Pass, 0 Fail**.
+Chi tiết, lỗi đã sửa và số liệu từng lượt: finding mục "Chạy đủ 7 intent customer".
+
+| # | Việc | Nguồn |
+|---|---|---|
+| [ ] | Profile: agent lặp locator không duy nhất tới hết budget — hướng agent dùng `role`+name khi text trùng; không nới uniqueness | finding agent-redesign |
+| [ ] | Đo tỉ lệ qua nhiều lượt (≥3) thay vì một lượt; báo median + dao động | finding agent-redesign |
+| [ ] | Timeout DeepSeek 2/37 call: cân nhắc timeout dài hơn hoặc giảm prompt mỗi turn | finding agent-redesign |
+| [ ] | QC gắn nhãn sheet Review cho case `needs_review` → đo tỉ lệ chấp nhận | plan Phase 3 |
+| [ ] | Chạy agent trên `order_product` (cần mutation policy đã review) và `smoke` | plan Phase 4 |
+| [ ] | Commit nhánh `agent-redesign` (hiện toàn bộ thay đổi chưa commit) | — |
+

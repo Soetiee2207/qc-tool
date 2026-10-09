@@ -28,7 +28,6 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from qctool.generate.mapper import map_testcases  # noqa: E402
 from qctool.pipeline import (  # noqa: E402
     PipelineConfig,
     _api_paths_from,
@@ -185,152 +184,10 @@ def test_base_url_falls_back_to_spec_when_empty():
 API_PATHS = {"/api/v1/auth/config", "/api/v1/auth/me"}
 
 
-def test_perf_nfr_maps_to_http_request(ui_map):
-    """Hồi quy: `/auth/config p95 < 100ms` từng ở `manual` mãi mãi.
-
-    Câu này khớp `RE_API_HINT` (có `p95` và `ms`) nên `_looks_like_api` chặn nó
-    khỏi mọi nhánh map — trong khi tool **đã có** đủ verb để kiểm
-    (`http.request` + `assert.response_time`). NFR hiệu năng vì thế không bao giờ
-    được kiểm, dù đó là loại yêu cầu dễ kiểm tự động nhất.
-
-    Tài liệu viết `/auth/config` còn API thật ở `/api/v1/auth/config`; bước sinh ra
-    phải dùng đường dẫn **thật** trong spec.
-    """
-    case = TestCase(id="TC_AUTH_900", module="AUTH", title="/auth/config p95 < 100ms",
-                    objective="o", traces_to=["NFR-PERF-01"], source_quote="q")
-    case.steps = [Step(1, StepKind.WHEN, "perform.unmapped",
-                       {"description": "/auth/config p95 < 100ms"})]
-
-    map_testcases([case], ui_map, "https://x.test", API_PATHS)
-
-    assert case.execution == "auto", "NFR hiệu năng phải chạy được tự động"
-    assert [s.action for s in case.steps] == ["http.request", "assert.response_time"]
-    assert case.steps[0].args["path"] == "/api/v1/auth/config"
-    assert case.steps[1].args["max_ms"] == 100.0
-    # Phải lấy nhiều mẫu: `p95 < 100ms` cho phép 5% số lần gọi vượt ngưỡng, nên
-    # so một lần gọi với ngưỡng là kiểm chặt hơn yêu cầu (xem L9).
-    assert case.steps[1].args["percentile"] == 95
-    assert case.steps[1].args["samples"] > 1
-
-
 # ── L9: ngưỡng phân vị phải đo bằng phân vị ─────────────────────────────────
-def test_perf_threshold_measures_percentile(ui_map, monkeypatch):
-    """Hồi quy: `TC_NFR_001` từng báo `Fail` trên portal vì lấy **một** mẫu 162ms.
-
-    Đo lại 30 lần trên cùng endpoint đó: p95 = 84ms — trong ngưỡng 100ms. Con số
-    162ms gồm cả 109ms bắt tay TLS của một kết nối mới, và dù sao một lần gọi cũng
-    không nói được gì về phân vị thứ 95.
-
-    Test này khoá cả hai vế: (a) bước sinh ra yêu cầu lấy mẫu, (b) kết luận dựa
-    trên phân vị của các mẫu, không phải mẫu đầu tiên.
-    """
-    from qctool.execute.runner import HttpSession, _percentile, _run_step
-
-    case = TestCase(id="TC_AUTH_903", module="AUTH", title="/auth/config p95 < 100ms",
-                    objective="o", traces_to=["NFR-PERF-01"], source_quote="q")
-    case.steps = [Step(1, StepKind.WHEN, "perform.unmapped",
-                       {"description": "/auth/config p95 < 100ms"})]
-    map_testcases([case], ui_map, "https://x.test", API_PATHS)
-    perf = next(s for s in case.steps if s.action == "assert.response_time")
-
-    # Ngưỡng p95 của 20 mẫu: **một** mẫu chậm (900ms) vẫn nằm trong 5% cho phép,
-    # nên p95 = 95.5ms < 100ms → ĐẠT. Cách đo cũ — lấy đúng mẫu đầu tiên, 900ms —
-    # sẽ báo hỏng. Đây chính là chỗ sai đã gặp trên portal.
-    calls = {"n": 0}
-
-    def fake_request(self, method, path, **kw):
-        calls["n"] += 1
-        return {"status": 200, "body": {}, "raw": "", "duration_ms": 50.0,
-                "server_ms": 50.0, "error": None, "_path": path, "_args": {"method": "GET"}}
-
-    monkeypatch.setattr(HttpSession, "request", fake_request)
-    session = HttpSession("https://x.test")
-    saved = {"res": {"status": 200, "body": {}, "raw": "", "duration_ms": 900.0,
-                     "server_ms": 900.0, "error": None, "_path": "/api/v1/auth/config",
-                     "_args": {"method": "GET"}}}
-
-    ok, detail = _run_step(perf, session, saved)
-    # Lần gọi đầu đã xảy ra ở bước `http.request`, nên chỉ lấy thêm `samples - 1`.
-    assert calls["n"] == perf.args["samples"] - 1, "phải lấy đủ số mẫu đã khai"
-    assert "p95" in detail and "lần gọi" in detail, f"chi tiết phải nói rõ cách đo: {detail}"
-
-    # Với 19/20 mẫu ở 50ms, p95 = 95.5ms < 100ms → ĐẠT (một mẫu chậm nằm trong 5%
-    # mà yêu cầu p95 cho phép). Cách đo cũ lấy đúng mẫu 900ms nên báo hỏng.
-    assert ok, f"p95 thật phải nằm trong ngưỡng, nhưng: {detail}"
-    assert _percentile([900.0] + [50.0] * 19, 95) < 100
-
-
-def test_perf_nfr_refuses_unknown_endpoint(ui_map):
-    """Đường dẫn không có trong spec → không map. Đo hiệu năng một endpoint không
-    tồn tại là vô nghĩa, và tệ hơn: `assert.http_status` sẽ đỏ vì lý do của tool."""
-    case = TestCase(id="TC_AUTH_901", module="AUTH", title="x", objective="o",
-                    traces_to=["NFR-PERF-99"], source_quote="q")
-    case.steps = [Step(1, StepKind.WHEN, "perform.unmapped",
-                       {"description": "/auth/khong-co-that p95 < 50ms"})]
-
-    map_testcases([case], ui_map, "https://x.test", API_PATHS)
-
-    assert case.needs_mapping and case.execution == "manual"
-
-
-def test_perf_nfr_without_spec_stays_unmapped(ui_map):
-    """Không có OpenAPI → không đoán. `ui.goto` tới một endpoint API sẽ nhận HTML
-    rồi báo `Fail` sai (đúng lỗi L1 đã gặp)."""
-    case = TestCase(id="TC_AUTH_902", module="AUTH", title="x", objective="o",
-                    traces_to=["NFR-PERF-01"], source_quote="q")
-    case.steps = [Step(1, StepKind.WHEN, "perform.unmapped",
-                       {"description": "/auth/config p95 < 100ms"})]
-
-    map_testcases([case], ui_map, "https://x.test", set())
-
-    assert case.needs_mapping and case.execution == "manual"
-    assert not any(s.action.startswith("ui.") for s in case.steps), \
-        "không được mở trình duyệt tới một endpoint API"
 
 
 # ── L10: kỳ vọng của case luồng chính phải là thứ kiểm được ─────────────────
-def test_flow_case_uses_documented_destination():
-    """Hồi quy: generator tự bịa kỳ vọng rỗng cho mọi case luồng chính.
-
-    Câu «Chức năng X hoàn tất đúng như tài liệu mô tả» không sai, nhưng không
-    kiểm gì cả — nên case mãi ở `manual` **dù tài liệu có nêu đích đến rõ ràng**
-    (`Unauthenticated → /login?callback=`). Đó là tool tự làm mất thông tin mà
-    chính nó vừa đọc được.
-    """
-    from qctool.generate.from_functions import generate_from_functions
-    from qctool.generate.from_openapi import IdAllocator
-
-    reqs = [{
-        "id": "FR-x-008", "kind": "functional", "title": "Route auth guard",
-        "api": {"flow": ["Unauthenticated → /login?callback=; loading spinner while isLoading"]},
-        "source": {"file": "srs.md", "line": 1},
-    }]
-    cases = generate_from_functions(reqs, IdAllocator(), "AUTH")
-    assert len(cases) == 1
-    then = [s for s in cases[0].steps if s.kind is StepKind.THEN]
-    assert then, "case luồng chính phải có vế THEN"
-    assert then[0].args["expected"] == "Chuyển tới /login?callback=", \
-        "phải dùng đích đến tài liệu đã ghi, không bịa câu mô tả rỗng"
-
-
-def test_flow_case_without_destination_stays_honest():
-    """Không có đích đến trong tài liệu → giữ câu mô tả, case ở lại `manual`.
-
-    Đây là vế còn lại của nguyên tắc: không đoán. `persistReturnPath` là mô tả cơ
-    chế bên trong, không quan sát được từ ngoài — sinh assertion từ nó là bịa.
-    """
-    from qctool.generate.from_functions import generate_from_functions
-    from qctool.generate.from_openapi import IdAllocator
-
-    reqs = [{
-        "id": "FR-x-003", "kind": "functional", "title": "SSO login redirect",
-        "api": {"flow": ["LoginScreen button → persistReturnPath → redirectUri = origin + safe path"]},
-        "source": {"file": "srs.md", "line": 1},
-    }]
-    cases = generate_from_functions(reqs, IdAllocator(), "AUTH")
-    expected = [s for s in cases[0].steps if s.kind is StepKind.THEN][0].args["expected"]
-    assert "hoàn tất đúng như tài liệu" in expected, \
-        "không có đích đến quan sát được thì phải giữ câu mô tả, không bịa assertion"
 
 
 # ── L6: câu điều kiện không phải là nút ─────────────────────────────────────
@@ -343,52 +200,6 @@ def ui_map() -> UIMap:
             Element(id="signin", role="button", name="Sign in", tag="button"),
         ])],
     )
-
-
-def test_condition_text_is_not_a_button(ui_map):
-    """Hồi quy: `refresh fail no upload` (điều kiện) từng khớp nút `Refresh`.
-
-    Nhánh *nhãn trần* của mapper coi câu mô tả là tên element, nên case
-    `Refreshing → Unauthenticated khi refresh fail no upload` sinh ra bước
-    `ui.click «Refresh»` — hành động không ai nói tới. Bấm nút đó rồi kiểm sai chỗ
-    là bịa hành động, tệ hơn là để case chưa map.
-    """
-    case = TestCase(id="TC_X_001", module="X", title="Refreshing → Unauthenticated",
-                    objective="o", traces_to=["S-1"], source_quote="q")
-    case.steps = [
-        Step(1, StepKind.WHEN, "perform.unmapped",
-             {"description": "refresh fail no upload"}),
-        Step(2, StepKind.THEN, "assert.unmapped", {"expected": "Redirect /login"}),
-    ]
-    map_testcases([case], ui_map, "https://x.test")
-
-    clicks = [s for s in case.steps if s.action == "ui.click"]
-    assert not clicks, f"câu điều kiện bị map thành bấm nút: {clicks}"
-
-
-def test_direct_click_command_still_maps(ui_map):
-    """Ngược lại: lệnh bấm tường minh vẫn phải map — đừng siết quá tay."""
-    case = TestCase(id="TC_X_002", module="X", title="t", objective="o",
-                    traces_to=["S-1"], source_quote="q")
-    case.steps = [
-        Step(1, StepKind.WHEN, "perform.unmapped",
-             {"description": "Click Sign in with Keycloak"}),
-        Step(2, StepKind.THEN, "assert.unmapped", {"expected": "Redirect /login"}),
-    ]
-    map_testcases([case], ui_map, "https://x.test")
-    assert any(s.action == "ui.click" for s in case.steps)
-
-
-def test_bare_label_with_filler_maps(ui_map):
-    """`Sign in button` (nhãn + loại phần tử) vẫn phải khớp."""
-    case = TestCase(id="TC_X_003", module="X", title="t", objective="o",
-                    traces_to=["S-1"], source_quote="q")
-    case.steps = [
-        Step(1, StepKind.WHEN, "perform.unmapped", {"description": "Sign in button"}),
-        Step(2, StepKind.THEN, "assert.unmapped", {"expected": "Redirect /login"}),
-    ]
-    map_testcases([case], ui_map, "https://x.test")
-    assert any(s.action == "ui.click" for s in case.steps)
 
 
 # ── L4: UI map nghèo không được ghi đè bản tốt ──────────────────────────────

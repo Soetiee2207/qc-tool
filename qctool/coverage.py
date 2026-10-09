@@ -93,6 +93,13 @@ def _source(row: dict, field: str) -> CoverageSource:
 
 def _matches(case: TestCase, condition: str, action: str, expected: str,
              data: dict) -> bool:
+    # Validated agent metadata preserves the exact original obligation; no
+    # prose grammar is used to equate DOM labels with requirement phrases.
+    intent = case.source_intent
+    if intent and case.generation_status in {'ready', 'needs_review'}:
+        return (intent.get('given', '') == condition and intent.get('when', '') == action
+                and intent.get('expected', '') == expected
+                and all(case.test_data.get(k) == v for k, v in data.items()))
     def descriptions(kind):
         return {_text(s.args.get("description")) for s in case.steps
                 if s.kind == kind and s.action == "perform.unmapped"}

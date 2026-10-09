@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 import json
+import hashlib
 import math
 import os
 from typing import Callable
@@ -18,8 +19,18 @@ from urllib.parse import urlsplit
 
 from .config import ConfigError, load_dotenv
 from .execute.runner import USER_AGENT
-from .llm_resolution import _reject_constant, _unique_keys
-from .llm_prompt import current_prompt_composition, describe_prompt, prompt_cache_diagnostics
+
+def _reject_constant(value):
+    raise ValueError("Non-finite JSON")
+
+
+def _unique_keys(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("Duplicate JSON key")
+        value[key] = item
+    return value
 
 MAX_RESPONSE_BYTES = 1_048_576
 _ATTEMPTS = ContextVar("llm_provider_attempts", default=None)
@@ -34,7 +45,6 @@ def capture_provider_attempts():
         yield records
     finally:
         _ATTEMPTS.reset(token)
-
 
 
 class LLMConfigurationError(ConfigError):
@@ -76,6 +86,7 @@ class OpenAICompatibleLLM:
     model: str
     api_key: str = field(repr=False)
     timeout: float = 30.0
+    thinking: str | None = None
     on_response_metadata: Callable[[dict], None] | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
@@ -90,6 +101,8 @@ class OpenAICompatibleLLM:
                              and math.isfinite(self.timeout) and self.timeout > 0)
         except (ValueError, TypeError, AttributeError):
             raise LLMConfigurationError("Invalid LLM base URL or timeout.") from None
+        if self.thinking not in {None, "enabled", "disabled"}:
+            raise LLMConfigurationError("LLM thinking must be enabled or disabled.")
         if not valid_url or not valid_timeout:
             raise LLMConfigurationError("Invalid LLM base URL or timeout.")
         if (not isinstance(self.model, str) or not self.model.strip()
@@ -101,9 +114,6 @@ class OpenAICompatibleLLM:
         for number in (1, 2):
             metadata = {"attempt": number, "http_status": None, "transport_category": None,
                         "finish_reason": None, "response_content_length": None, "usage": {}}
-            if isinstance(prompt, str):
-                metadata["prompt_composition"] = current_prompt_composition() or describe_prompt(prompt)
-                metadata.update(prompt_cache_diagnostics(prompt))
             try:
                 content = self._complete_once(prompt, metadata)
             except LLMProviderError as exc:
@@ -117,6 +127,38 @@ class OpenAICompatibleLLM:
             metadata.update(error_code=None, retry_scheduled=False)
             self._record(metadata)
             return content
+        raise AssertionError("Unreachable bounded provider attempt")
+
+    def chat(self, messages: list[dict], tools: list[dict], *,
+             tool_choice="auto", max_tokens: int = 1600) -> dict:
+        """OpenAI-compatible tool calling; same bounded transient retry as complete().
+
+        A single slow provider reply must not discard a whole authoring session.
+        Conversation and tool arguments remain runtime-only. Telemetry contains
+        counts/status/cache usage, never prompts, tool arguments or reasoning.
+        """
+        family = 'agent-authoring' if messages and 'You author' in str(messages[0].get('content', '')) else 'agent-design'
+        prefix = hashlib.sha256(json.dumps(messages[:1], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        tail = hashlib.sha256(json.dumps(messages[1:], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        for number in (1, 2):
+            metadata = {"attempt": number, "http_status": None, "transport_category": None,
+                        "finish_reason": None, "response_content_length": None, "usage": {},
+                        "capability": "agent", "cache_family": family, "protocol_version": "agent-v1",
+                        "stable_prefix_fingerprint": prefix, "dynamic_tail_fingerprint": tail}
+            try:
+                result = self._complete_once("agent", metadata, messages=messages, tools=tools,
+                                             tool_choice=tool_choice, max_tokens=max_tokens)
+            except LLMProviderError as exc:
+                transient = exc.code == "TIMEOUT" or (exc.code == "HTTP_ERROR" and
+                            (exc.http_status == 429 or (exc.http_status is not None and exc.http_status >= 500)))
+                metadata.update(error_code=exc.code, retry_scheduled=transient and number == 1)
+                self._record(metadata)
+                if transient and number == 1:
+                    continue
+                raise
+            metadata.update(error_code=None, retry_scheduled=False)
+            self._record(metadata)
+            return result
         raise AssertionError("Unreachable bounded provider attempt")
 
     def _record(self, metadata):
@@ -136,15 +178,25 @@ class OpenAICompatibleLLM:
         if self.on_response_metadata is not None:
             self.on_response_metadata(deepcopy(metadata))
 
-    def _complete_once(self, prompt: str, metadata: dict) -> str:
+    def _complete_once(self, prompt: str, metadata: dict, *, messages=None,
+                       tools=None, tool_choice="auto", max_tokens=1600):
         if not isinstance(prompt, str) or not prompt.strip():
             raise LLMProviderError("INVALID_PROMPT", "Completion requires a nonempty prompt.")
-        body = json.dumps({
+        payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "response_format": {"type": "json_object"},
             "stream": False,
-        }, ensure_ascii=False).encode("utf-8")
+        }
+        if messages is not None:
+            if (not isinstance(messages, list) or not messages or not isinstance(tools, list)
+                    or type(max_tokens) is not int or not 1 <= max_tokens <= 8000):
+                raise LLMProviderError("INVALID_PROMPT", "Invalid bounded tool request.")
+            payload.pop("response_format")
+            payload.update(messages=messages, tools=tools, tool_choice=tool_choice, max_tokens=max_tokens)
+        if self.thinking is not None:
+            payload["thinking"] = {"type": self.thinking}
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = request.Request(self.base_url.rstrip("/") + "/chat/completions", data=body,
                               headers={"Authorization": f"Bearer {self.api_key}",
                                        "Content-Type": "application/json", "User-Agent": USER_AGENT},
@@ -195,14 +247,14 @@ class OpenAICompatibleLLM:
                 metadata["response_content_length"] = len(content)
             metadata["parser_failure"]["path"] = "choices[0].finish_reason"
 
-            if finish not in (None, "stop"):
+            if finish not in ((None, "stop", "tool_calls") if messages is not None else (None, "stop")):
                 metadata["parser_failure"]["category"] = "INCOMPLETE_FINISH"
                 raise ValueError
             if message.get("refusal"):
                 metadata["parser_failure"] = {"category": "REFUSAL", "path": "choices[0].message.refusal"}
                 raise ValueError
             metadata["parser_failure"]["path"] = "choices[0].message.content"
-            content = message["content"]
+            content = message.get("content")
             if content is not None and not isinstance(content, str):
                 raise ValueError
         except (ValueError, TypeError, KeyError, AttributeError, UnicodeError, RecursionError) as exc:
@@ -210,6 +262,25 @@ class OpenAICompatibleLLM:
                 metadata["parser_failure"].update(category="JSON_SYNTAX", position=exc.pos)
             raise LLMProviderError("INVALID_RESPONSE", "Malformed or incomplete provider response.") from None
         metadata.pop("parser_failure", None)
+        if messages is not None:
+            calls = message.get("tool_calls") or []
+            if not isinstance(calls, list) or len(calls) > 8:
+                raise LLMProviderError("INVALID_RESPONSE", "Invalid tool call envelope.")
+            result = {"role": "assistant", "content": content}
+            if calls:
+                for call in calls:
+                    if (not isinstance(call, dict) or not isinstance(call.get("id"), str)
+                            or call.get("type") != "function" or not isinstance(call.get("function"), dict)
+                            or not isinstance(call["function"].get("name"), str)
+                            or not isinstance(call["function"].get("arguments"), str)):
+                        raise LLMProviderError("INVALID_RESPONSE", "Invalid tool call envelope.")
+                result["tool_calls"] = deepcopy(calls)
+            elif not content:
+                raise LLMProviderError("EMPTY_RESPONSE", "Provider returned no completion.")
+            if isinstance(message.get("reasoning_content"), str):
+                result["reasoning_content"] = message["reasoning_content"]
+            # API key echo protection also covers tool arguments and reasoning.
+            return json.loads(json.dumps(result, ensure_ascii=False).replace(self.api_key, "[REDACTED]"))
         if not content or not content.strip():
             metadata["parser_failure"] = {"category": "EMPTY_CONTENT", "path": "choices[0].message.content"}
             raise LLMProviderError("EMPTY_RESPONSE", "Provider returned no completion text.")
@@ -243,4 +314,4 @@ def load_llm_provider() -> OpenAICompatibleLLM:
     except ValueError:
         raise LLMConfigurationError("Invalid QCTOOL_LLM_TIMEOUT_SECONDS.") from None
     return OpenAICompatibleLLM(os.environ.get("QCTOOL_LLM_BASE_URL", "https://api.openai.com/v1").strip(),
-                               model, key, timeout)
+                               model, key, timeout, thinking=os.environ.get("QCTOOL_LLM_THINKING") or None)

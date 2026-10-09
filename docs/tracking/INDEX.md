@@ -5,8 +5,9 @@ lang: vi
 status: living
 owner: "@binhhm"
 created: 2026-09-18
-updated: 2026-09-18
+updated: 2026-10-09
 changelog:
+  - 2026-10-09 | codex | Agent redesign: gate/citation/dry-run, live acceptance chưa chốt
   - 2026-09-18 | manual | tool dùng được: `qctool serve` mở UI bấm-là-chạy; `qctool all` một lệnh cả pipeline
 ---
 
@@ -78,3 +79,13 @@ Chi tiết ở [`todo.md`](todo.md) §1:
 | "Sao lại thiết kế thế này?" | [`../brainstorms/2026-09-18-qc-automation-tool.md`](../brainstorms/2026-09-18-qc-automation-tool.md) §5 |
 | "Chạy thử thế nào?" | `AGENTS.md` §Lệnh |
 | "Template nằm ở đâu?" | Mục 4 ở trên |
+
+## Agent redesign — 2026-10-09
+
+Nhánh `agent-redesign`: prose authoring bằng tool calling, giữ native runner và
+14 cột XLSX. Không đánh dấu milestone Done chỉ vì có code. Xem
+[Finding agent redesign](../findings/agent-redesign.md).
+
+Cần xác nhận: live testcase ready chạy thật; độ đầy đủ ngữ nghĩa của action/oracle
+qua QC review; false-fail/semantic benchmark có labels. Không thay business expectation
+theo observation để tăng runnable count.

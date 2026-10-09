@@ -23,8 +23,7 @@ from . import execute, generate, ingest, render, report, validate
 from .generation import GenerationResult, GenerationStatus, run_generation
 from .coverage import analyze_coverage
 from .executability import analyze_executability
-from .llm_resolution import ResolutionLLM
-from .llm_exploration import ExplorationLLM
+from .agent.loop import AgentLLM
 from .llm_provider import load_llm_provider
 from .test_fixtures import FixtureStore, load_fixture_store
 
@@ -62,10 +61,15 @@ class PipelineConfig:
     created_by: str = "qc-tool"
     fixture_store: FixtureStore | None = field(default=None, repr=False)
     llm_enabled: bool = False          # chỉ bật tường minh; không suy từ credential
-    generation_profile: str = "legacy" # direct/all callers retain compatibility
+    generation_profile: str = "agent" # direct/all callers retain compatibility
     allow_provisioning: bool = False   # opt-in, vẫn phải qua reviewed engine policy
     data_environment: str | None = None
     exploration_mutation: dict = field(default_factory=dict)
+
+    agent_critic: bool = False
+    agent_budget: dict = field(default_factory=dict)
+    intent_ids: tuple[str, ...] | None = None
+    max_intents: int | None = None
 
     # ── UI/UX test (Playwright) ────────────────────────────────────────────
     ui_retry: int = 0                   # số lần chạy lại case hỏng (tối đa 3)
@@ -91,9 +95,11 @@ class PipelineConfig:
         out = data.get("out", {}) or {}
         ui = data.get("ui", {}) or {}
         llm = data.get("llm", {}) or {}
-        generation_profile = (data.get("generation") or {}).get("profile", "legacy")
-        if generation_profile not in {"business", "legacy"}:
-            raise cfg_mod.ConfigError("generation.profile must be business or legacy.")
+        generation_profile = (data.get("generation") or {}).get("profile", "agent")
+        if generation_profile not in {"agent", "business", "legacy"}:
+            raise cfg_mod.ConfigError("generation.profile must be agent (business/legacy are deprecated aliases).")
+        if type((data.get('generation') or {}).get('critic', False)) is not bool:
+            raise cfg_mod.ConfigError('generation.critic must be a boolean.')
         provisioning = data.get("provisioning", {}) or {}
         allow_provisioning = provisioning.get("enabled", False)
         if type(allow_provisioning) is not bool:
@@ -145,6 +151,10 @@ class PipelineConfig:
             created_by=out.get("created_by") or "qc-tool",
             llm_enabled=llm_enabled,
             generation_profile=generation_profile,
+            agent_critic=(data.get("generation") or {}).get("critic", False),
+            agent_budget=(data.get("generation") or {}).get("budget", {}),
+            intent_ids=tuple((data.get("generation") or {})["intent_ids"]) if "intent_ids" in (data.get("generation") or {}) else None,
+            max_intents=(data.get("generation") or {}).get("max_intents"),
             allow_provisioning=allow_provisioning,
             data_environment=provisioning.get("environment"),
             exploration_mutation=exploration_mutation,
@@ -204,7 +214,7 @@ class PipelineResult:
     generation_result: GenerationResult | None = None
     generation_path: Path | None = None
 
-    generation_profile: str = "legacy"
+    generation_profile: str = "agent"
     case_scopes: dict = field(default_factory=dict)
     legacy_testcases_path: Path | None = None
 
@@ -223,12 +233,12 @@ class PipelineResult:
 
 
 def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
-                 resolution_llm: ResolutionLLM | None = None,
-                 exploration_llm: ExplorationLLM | None = None) -> PipelineResult:
+                 resolution_llm: AgentLLM | None = None,
+                 exploration_llm: AgentLLM | None = None) -> PipelineResult:
     """Chạy toàn bộ pipeline. Không bao giờ ném lỗi ra ngoài — trả về `error`."""
     progress = on_progress or _noop
     result = PipelineResult(feature=cfg.feature, generation_profile=cfg.generation_profile)
-    if cfg.generation_profile not in {"business", "legacy"}:
+    if cfg.generation_profile not in {"agent", "business", "legacy"}:
         result.error = "Unsupported generation profile"
         return result
 
@@ -246,7 +256,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
             adapter = load_llm_provider()
             resolution_llm = resolution_llm if resolution_llm is not None else adapter
             exploration_llm = exploration_llm if exploration_llm is not None else adapter
-            log("LLM provider bật tường minh; proposal/plan vẫn qua deterministic validator")
+            log("LLM authoring bật tường minh; tool safety/schema/citation được kiểm tra trước khi chạy")
         out_dir = cfg.out_dir or Path("artifacts") / cfg.feature
         result.out_dir = out_dir
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -296,47 +306,16 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
             log(f"  ⚠ {warning}")
             openapi_path = None
 
-        # Không truyền module mặc định: `generate_all` tự suy module theo từng
-        # feature. Truyền cứng ở đây sẽ dồn 29 feature vào một module duy nhất và
-        # làm ID testcase đụng nhau.
-        # Compatibility seeds retain existing API/NFR/flow generators and IDs.
-        # run_generation below owns final generation and executable coverage.
-        cases, validation, meta = generate.generate_all(
-            requirements_path, openapi_path, cfg.module,
-        )
+        # Prose goes directly to authoring. Keep deterministic OpenAPI generation
+        # for API-only inputs; no speculative prose seeds/crawl snapshot mapping.
+        cases, validation, meta = generate.generate_all(None, openapi_path, cfg.module)
+        if requirements_path:
+            cases = []
         source_data = (yaml.safe_load(requirements_path.read_text(encoding="utf-8")) or {}
                        if requirements_path else {})
         endpoints = generate.load_endpoints(openapi_path)[0] if openapi_path else None
-        cases = deepcopy(cases)
-        # Legacy OAS seeds without x-qc-id have source_ref but no traces_to.
-        # Attach only a verified interface identity, never an invented requirement.
-        for case in cases:
-            if case.traces_to or not case.source_ref.startswith("openapi:"):
-                continue
-            operation = case.source_ref.removeprefix("openapi:").split("#", 1)[0]
-            requests = [step for step in case.steps if step.action == "http.request"]
-            matches = [endpoint for endpoint in endpoints or []
-                       if endpoint.operation_id == operation and requests
-                       and all(step.args.get("method") == endpoint.method
-                               and step.args.get("path") == endpoint.path for step in requests)]
-            if len(matches) == 1:
-                case.traces_to = [f"openapi:{operation}"]
-                log(f"  Trace interface OpenAPI: {case.id} → openapi:{operation}")
-        coverage_probe = analyze_coverage(
-            source_data.get("requirements", []),
-            [case for case in cases if cfg.generation_profile == "legacy" and analyze_executability(case).executable],
-            flows=source_data.get("flows"))
-        needs_ui_evidence = (any(c.needs_mapping for c in cases)
-                             or bool(coverage_probe.missing_obligations))
-
-        # ── Chặng 2b: đăng nhập + map văn xuôi → hành động cụ thể ──────────
-        # Cảnh báo từ lúc đọc spec (operation bị bỏ qua, spec trộn nhiều service…)
-        # phải hiện ra ngay. Nếu im lặng, người dùng chỉ thấy số testcase tụt mà
-        # không biết vì sao — và sẽ tưởng tool bỏ sót phần quan trọng.
-        for warning in meta.get("warnings", []):
-            log(f"  ⚠ {warning}")
-            notify("generate", f"⚠ {warning}"[:90])
-
+        needs_ui_evidence = bool(requirements_path and resolution_llm)
+        auth_operations = []
         state_path = out_dir / ".auth-state.json"
         token_path = out_dir / ".token"
         ui_map = None
@@ -351,7 +330,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
             # chạy trong trạng thái chưa đăng nhập, UI map chỉ có màn hình login,
             # và gần như mọi case UI rơi vào "chưa map" mà không có lỗi nào được báo.
             if cfg.auth_mode == "browser" and cfg.username and cfg.password:
-                need_login = not state_path.is_file()
+                need_login = cfg.llm_enabled or not state_path.is_file()
                 if not need_login:
                     from .execute.browser import BrowserSession
 
@@ -373,12 +352,44 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
 
                         with BrowserSession(cfg.web_url, headless=cfg.headless,
                                             timeout_ms=cfg.timeout_seconds * 1000) as session:
+                            # Explicit browser-login configuration authorizes only
+                            # the exact credential-bearing contract operation seen
+                            # during this trusted bootstrap. Never persist bodies.
+                            def auth_request(req):
+                                from urllib.parse import urlsplit
+                                from .response_capture import origin_of
+                                try:
+                                    body = req.post_data_json
+                                    if (isinstance(body, dict) and cfg.username in body.values() and cfg.password in body.values()
+                                        and any(e.method == req.method and e.path == urlsplit(req.url).path for e in endpoints or ())):
+                                        auth_operations.append({'method': req.method, 'path': urlsplit(req.url).path,
+                                            'origin': origin_of(req.url), 'fields': sorted(body)})
+                                except Exception:
+                                    pass
+                            session.page.on('request', auth_request)
                             notify("crawl", session.login(cfg.username, cfg.password))
                             session.save_state(state_path)
+                            controls = getattr(session, 'login_controls', None)
+                            if controls and cfg.fixture_store:
+                                from .agent.knowledge import AppKnowledge
+                                kb = AppKnowledge(out_dir / 'app-model.yaml', cfg.web_url.rstrip('/'), store=cfg.fixture_store)
+                                metadata = cfg.fixture_store.to_dict()['aliases']
+                                for name in sorted({a.split('.')[0] for a in metadata}):
+                                    email, password = name + '.email', name + '.password'
+                                    if (email in metadata and password in metadata and metadata[email]['available'] and metadata[password]['available']
+                                        and cfg.fixture_store.resolve(email) == cfg.username and cfg.fixture_store.resolve(password) == cfg.password):
+                                        kb.remember('authenticate:' + name, [
+                                            {'action':'ui.session','args':{'mode':'anonymous'}},
+                                            {'action':'ui.goto','args':{'url':controls['url']}},
+                                            {'action':'ui.fill','args':{'target':controls['email'],'value':email}},
+                                            {'action':'ui.fill','args':{'target':controls['password'],'value':password}},
+                                            {'action':'ui.click','args':{'target':controls['submit']}}])
+                                kb.save()
                             # Lấy token để test API dùng chính phiên đăng nhập này.
                             # Không có bước này thì mọi case cần xác thực đều 401.
                             if api_token := session.extract_token():
                                 token_path.write_text(api_token, encoding="utf-8")
+                                token_path.chmod(0o600)
                                 notify("crawl", "Lấy được access token cho test API")
                             else:
                                 notify("crawl", "Không lấy được token — case cần xác thực sẽ 401")
@@ -391,108 +402,22 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                         log(f"  ⚠ Đăng nhập không thành công: {reason}")
                         notify("crawl", f"Đăng nhập không thành công ({reason}) — crawl không cần "
                                         "đăng nhập vẫn chạy tiếp")
-            try:
-                if needs_ui_evidence:
-                    from .ui import crawl as _crawl
-
-                    doc_paths = _paths_from_docs(requirements_path)
-                    if doc_paths:
-                        notify("crawl", f"Dò thêm {len(doc_paths)} đường dẫn trích từ tài liệu")
-                    fresh = _crawl(cfg.web_url, on_progress=lambda m: notify("crawl", m),
-                                   storage_state=state_path if state_path.is_file() else None,
-                                   extra_paths=["/", *doc_paths],
-                                   anonymous_paths=["/", "/login", *doc_paths[:5]])
-
-                    # Không ghi đè bản đồ TỐT bằng bản nghèo. Crawl có thể ra ít
-                    # element vì lý do tạm thời (phiên vừa hết hạn, mạng chập), và
-                    # ghi đè khi đó làm mất bản đồ đầy đủ đã dò hôm trước — lần sau
-                    # mọi case UI lại thành "chưa map" mà không rõ vì sao.
-                    old_path = out_dir / "ui-map.yaml"
-                    kept = _keep_better_map(fresh, old_path)
-                    ui_map = fresh if kept is fresh else _load_map(old_path)
-                    if kept is not fresh:
-                        warn = (f"⚠ Crawl lần này chỉ ra {len(fresh.elements)} element, "
-                                f"ít hơn bản đồ đã có ({len(ui_map.elements)}) — giữ bản "
-                                "cũ. Kiểm tra đăng nhập nếu con số này cứ thấp.")
-                        notify("crawl", warn)
-                        log(f"  {warn}")
-                    else:
-                        fresh.save(old_path)
-                    notify("crawl", f"Dùng bản đồ {len(ui_map.elements)} element "
-                                    f"trên {len(ui_map.pages)} trang" +
-                                    ("" if kept is not fresh else " (mới dò)"))
-                    # UI map nghèo là **nguyên nhân gốc** của "case chưa map được",
-                    # và nó không tự lộ ra: người dùng chỉ thấy báo cáo đầy case thủ
-                    # công mà không biết vì sao. Nói thẳng ra ở đây.
-                    if len(ui_map.elements) < 10:
-                        warn = (f"⚠ Chỉ có {len(ui_map.elements)} element — quá ít. "
-                                "Nhiều khả năng chưa vào được bên trong app (chưa đăng "
-                                "nhập, hoặc phiên hết hạn). Phần lớn case UI sẽ ở trạng "
-                                "thái «chưa map», không phải vì tài liệu thiếu.")
-                        notify("crawl", warn)
-                        log(f"  {warn}")
-            except Exception as exc:                    # noqa: BLE001
-                log(f"  ⚠ Không crawl được: {type(exc).__name__}: {exc}")
-                notify("crawl", f"Không crawl được: {type(exc).__name__}: {str(exc)[:60]}")
-
-        if ui_map is not None:
-            from .generate.mapper import map_testcases
-
-            api_paths = _api_paths_from(meta)
-            notify("map", "Map bước văn xuôi sang hành động cụ thể…")
-            before = sum(1 for c in cases if c.needs_mapping)
-            stats = map_testcases(cases, ui_map, cfg.web_url, api_paths)
-            message = f"Map được {stats.mapped}/{before} case từ tài liệu"
-            notify("map", message)
-            log(message)
-            if not api_paths:
-                note = ("  (không có OpenAPI spec nên không map HTTP — đường dẫn "
-                        "trong tài liệu chưa chắc là đường dẫn API thật)")
-                notify("map", note.strip())
-                log(note)
-            for reason in stats.reasons[:8]:
-                log(f"    · {reason}")
-            if len(stats.reasons) > 8:
-                log(f"    · … và {len(stats.reasons) - 8} câu nữa")
-
-        # Reuse a cached map even when no fresh crawl is required or available.
-        # Only evidence from this application may ground new resolutions.
-        if ui_map is None and cfg.web_url and (out_dir / "ui-map.yaml").is_file():
-            try:
-                cached = _load_map(out_dir / "ui-map.yaml")
-                if cached.base_url.rstrip("/") == cfg.web_url.rstrip("/"):
-                    ui_map = cached
-            except Exception:
-                log("  ⚠ Không đọc được UI map đã lưu — generation không dùng bản đồ này")
-
-        seed_ids = {case.id for case in cases}
-        result.legacy_testcases_path = out_dir / "legacy-testcases.yaml"
-        generate.write_cases(cases, result.legacy_testcases_path,
-                             {**meta, "case_scope": "LEGACY_DIAGNOSTIC"})
-        log(f"Generation profile: {cfg.generation_profile}; {len(cases)} legacy seeds retained separately")
-        notify("generate", "Phân tích coverage và giải quyết testcase còn thiếu…")
+        notify("generate", "Authoring agent: quan sát → viết testcase → dry-run; assertion giữ theo tài liệu")
         generation_result = run_generation(
-            source_data.get("requirements", []), existing_cases=cases if cfg.generation_profile == "legacy" else (),
-            flows=source_data.get("flows"), ui_map=ui_map, endpoints=endpoints,
+            source_data.get("requirements", []), existing_cases=cases,
+            flows=source_data.get("flows"), endpoints=endpoints,
             base_url=cfg.web_url or _resolve_base_url(cfg, meta) or None,
             storage_state=state_path if state_path.is_file() else None,
-            resolution_llm=resolution_llm, exploration_llm=exploration_llm,
-            module=cfg.module or "COV", fixture_store=cfg.fixture_store,
+            resolution_llm=resolution_llm,
+            module=cfg.module or "GEN", fixture_store=cfg.fixture_store,
             allow_provisioning=cfg.allow_provisioning, environment=cfg.data_environment,
-            mutation_policy=cfg.exploration_mutation,
+            mutation_policy=cfg.exploration_mutation, knowledge_path=out_dir / "app-model.yaml",
+            agent_budget=cfg.agent_budget, intent_ids=cfg.intent_ids, max_intents=cfg.max_intents,
+            headless=cfg.headless, on_progress=notify, auth_operations=auth_operations, critic=cfg.agent_critic,
         )
         result.generation_result = generation_result
         generation_path = out_dir / "generation.json"
-        result.case_scopes = {case.id: ("LEGACY_DIAGNOSTIC" if cfg.generation_profile == "legacy" and case.id in seed_ids
-                                        else "BUSINESS_COVERAGE") for case in generation_result.cases}
-        (out_dir / "case-scopes.json").write_text(json.dumps({
-            "generation_profile": cfg.generation_profile,
-            "selected_cases": [{"testcase_id": case.id, "scope": result.case_scopes[case.id],
-                                "artifact": "testcases.yaml"} for case in generation_result.cases],
-            "retained_legacy": [{"testcase_id": case.id, "scope": "LEGACY_DIAGNOSTIC",
-                                 "artifact": "legacy-testcases.yaml",
-                                 "selected": cfg.generation_profile == "legacy"} for case in cases],
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        result.case_scopes = {case.id: "BUSINESS_COVERAGE" for case in generation_result.cases}
         generation_payload = generation_result.to_dict()
         generation_payload["generation_profile"] = cfg.generation_profile
         generation_payload["case_scopes"] = result.case_scopes

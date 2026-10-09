@@ -1,33 +1,29 @@
-"""Điều phối generation; trả kết quả độc lập, caller quyết định ghi/chạy."""
-from __future__ import annotations
-
+"""LLM authoring entry point; native runner remains the runtime authority."""
 from copy import deepcopy
 from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Iterable, Mapping
 
-from .coverage import CoverageReport, CoverageStatus, analyze_coverage
-from .coverage_loop import CoverageLoopPass, CoverageLoopResult, run_coverage_loop
+from .coverage import CoverageStatus, analyze_coverage
 from .executability import analyze_executability
-from .generate.from_openapi import Endpoint
-from .llm_exploration import ExplorationLLM
-from .llm_resolution import ResolutionLLM
 from .model import Requirement
-from .resolution_context import ResolutionContext
-from .test_fixtures import FixtureStore
-from .test_data_preparation import TestDataPreparationResult, prepare_test_data
 from .testcase import TestCase
-from .ui.crawl import UIMap
-from .validate import Report, validate_batch
+from .validate import validate_batch
+from .llm_provider import LLMProviderError, capture_provider_attempts
+from .agent.gate import source_routes
+from .agent.loop import AgentBudget, AuthoringResult, author_intent, manual_case, design_intents
+from .agent.tools import AgentTools, public
+from .agent.safety import SafetyPolicy
+from .agent.knowledge import AppKnowledge
 
 
 class GenerationStatus(str, Enum):
-    SUCCESS = "SUCCESS"
-    INVALID_TESTCASES = "INVALID_TESTCASES"
-    UNASSESSABLE_COVERAGE = "UNASSESSABLE_COVERAGE"
-    INCOMPLETE_COVERAGE = "INCOMPLETE_COVERAGE"
-    FAILED = "FAILED"
+    SUCCESS = 'SUCCESS'
+    NEEDS_REVIEW = 'NEEDS_REVIEW'
+    INVALID_TESTCASES = 'INVALID_TESTCASES'
+    UNASSESSABLE_COVERAGE = 'UNASSESSABLE_COVERAGE'
+    INCOMPLETE_COVERAGE = 'INCOMPLETE_COVERAGE'
+    FAILED = 'FAILED'
 
 
 @dataclass(frozen=True)
@@ -36,177 +32,162 @@ class GenerationIssue:
     code: str
     message: str
     testcase_id: str | None = None
-    pass_number: int | None = None
-    cycle: int | None = None
 
 
 @dataclass(frozen=True)
 class GenerationResult:
-    cases: tuple[TestCase, ...]
-    executable_cases: tuple[TestCase, ...]
-    unresolved_cases: tuple[TestCase, ...]
-    generated_cases: tuple[TestCase, ...]
-    coverage: CoverageReport
-    intent_coverage: CoverageReport
-    validation: Report
-    coverage_loop: CoverageLoopResult | None
-    issues: tuple[GenerationIssue, ...]
+    cases: tuple
+    executable_cases: tuple
+    unresolved_cases: tuple
+    generated_cases: tuple
+    coverage: object
+    intent_coverage: object
+    validation: object
+    issues: tuple
     status: GenerationStatus
-    test_data_preparations: tuple[TestDataPreparationResult, ...] = ()
+    agent_history: tuple = ()
+    design_audit: tuple = ()
+    test_data_preparations: tuple = ()
 
     @property
-    def success(self) -> bool:
+    def success(self):
         return self.status == GenerationStatus.SUCCESS
 
     @property
-    def history(self) -> tuple[CoverageLoopPass, ...]:
-        return self.coverage_loop.history if self.coverage_loop is not None else ()
+    def history(self):
+        return self.agent_history
 
     @property
-    def accepted_generated_cases(self) -> tuple[TestCase, ...]:
-        executable_ids = {case.id for case in self.executable_cases}
-        return tuple(case for case in self.generated_cases if case.id in executable_ids)
+    def accepted_generated_cases(self):
+        ids = {c.id for c in self.executable_cases}
+        return tuple(c for c in self.generated_cases if c.id in ids)
 
-    def to_dict(self) -> dict:
-        """Serialize audits with native serializers, including explorer redaction."""
-        payload = {field.name: _serializable(getattr(self, field.name)) for field in fields(self)}
-        return {**payload, "success": self.success}
+    @property
+    def executable_coverage_complete(self):
+        return bool(self.coverage.requirements) and all(r.status == CoverageStatus.COVERED for r in self.coverage.requirements)
+
+    def to_dict(self):
+        return {**{f.name: _serializable(getattr(self, f.name)) for f in fields(self)},
+                'success': self.success, 'executable_coverage_complete': self.executable_coverage_complete}
 
 
 def _serializable(value):
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, Path):
-        return str(value)
-    if hasattr(value, "to_dict"):
-        return _serializable(value.to_dict())
-    if is_dataclass(value):
-        return {field.name: _serializable(getattr(value, field.name)) for field in fields(value)}
-    if isinstance(value, dict):
-        return {key: _serializable(item) for key, item in value.items()}
-    if isinstance(value, (tuple, list)):
-        return [_serializable(item) for item in value]
+    if isinstance(value, Enum): return value.value
+    if isinstance(value, Path): return str(value)
+    if hasattr(value, 'to_dict'): return _serializable(value.to_dict())
+    if is_dataclass(value): return {f.name: _serializable(getattr(value, f.name)) for f in fields(value)}
+    if isinstance(value, dict): return {k: _serializable(v) for k, v in value.items()}
+    if isinstance(value, (tuple, list)): return [_serializable(v) for v in value]
     return value
 
 
-def run_generation(
-    requirements: Iterable[Requirement | dict] | dict,
-    existing_cases: Iterable[TestCase] = (), *, flows: dict | None = None,
-    ui_map: UIMap | None = None, endpoints: list[Endpoint] | None = None,
-    resolution_llm: ResolutionLLM | None = None,
-    exploration_llm: ExplorationLLM | None = None,
-    base_url: str | None = None, storage_state: Path | None = None,
-    fixture_store: FixtureStore | None = None,
-    allow_provisioning: bool = False, environment: str | None = None,
-    max_passes: int = 3, max_cycles: int = 3, module: str = "COV",
-    contexts: Mapping[str, ResolutionContext] | None = None, preparation_cache=None,
-    mutation_policy=None, mutation_budget=None,
-) -> GenerationResult:
-    """Validate inputs, delegate once to the coverage loop, classify its results.
+def run_generation(requirements, existing_cases=(), *, flows=None, endpoints=None,
+                   resolution_llm=None, exploration_llm=None, base_url=None, storage_state=None,
+                   fixture_store=None, allow_provisioning=False, environment=None,
+                   module='GEN', mutation_policy=None, mutation_budget=None,
+                   knowledge_path=None, agent_budget=None, intent_ids=None, max_intents=None,
+                   headless=True, on_progress=None, auth_operations=(), critic=False, **unused_legacy_options):
+    """Enumerate explicit source obligations, author complete cases with tools.
 
-    SUCCESS requires structural batch validity, executable accepted generated
-    cases, and complete deterministically established executable coverage.
-    Unknown/empty coverage is never success. Existing mapped cases without
-    provable intent retain the coverage analyzer's unassessable status.
-    generated_cases includes accepted and still-unresolved final candidates;
-    superseded attempts remain in history. Invalid existing batches skip model
-    work. Configuration/schema errors in requirement input retain normal errors.
+    No legacy patch/resolution/coverage loop is invoked. Existing cases are
+    detached and retained. A citation certifies source location, not semantic
+    equivalence; weak oracles run as needs_review without claiming success.
+    Provisioning is still reviewed and OFF by default. Knowledge is public hints.
     """
-    from .exploration_actions import mutation_policy as load_mutation_policy, MutationBudget
-    mutation_policy = load_mutation_policy(mutation_policy, fixture_store=fixture_store)
-    if mutation_policy and mutation_budget is None:
-        mutation_budget = MutationBudget()
-    for name, budget in (("max_passes", max_passes), ("max_cycles", max_cycles)):
-        if type(budget) is not int or budget < 1:
-            raise ValueError(f"{name} must be a positive integer")
-    if isinstance(requirements, dict):
-        if flows is None:
-            flows = requirements.get("flows")
-        requirements = requirements.get("requirements", [])
+    from .generate.from_openapi import IdAllocator
+    from .test_data_preparation import prepare_test_data
     from .preparation_cache import PreparationCache
-    preparation_cache = preparation_cache if preparation_cache is not None else PreparationCache()
-    rows, source_flows = deepcopy(tuple(requirements)), deepcopy(flows)
-    original = tuple(fixture_store.bind(c) if fixture_store else deepcopy(c)
-                     for c in existing_cases)
-    validation = validate_batch(list(original))
-    issues = []
-    preparations = []
-    if validation.ok:
-        prepared = []
-        for case in original:
-            preparation = prepare_test_data(case, fixture_store=fixture_store,
-                                            endpoints=endpoints or (), base_url=base_url, preparation_cache=preparation_cache,
-                                            allow_provisioning=allow_provisioning, environment=environment)
-            prepared.append(preparation.case)
-            if preparation.initial is not None:
-                preparations.append(preparation)
-                issues.extend(GenerationIssue('test_data_preparation', i['code'], i['message'], case.id)
-                              for i in preparation.blockers)
-        original = tuple(prepared)
-    result = None
-    failed = False
-    if validation.ok:
+    if isinstance(requirements, dict):
+        flows = flows if flows is not None else requirements.get('flows')
+        requirements = requirements.get('requirements', [])
+    rows = deepcopy([r.to_dict() if isinstance(r, Requirement) else r for r in requirements])
+    original = tuple(deepcopy(tuple(existing_cases)))
+    input_validation = validate_batch(list(original))
+    if not input_validation.ok:
+        report = analyze_coverage(rows, (), flows=deepcopy(flows))
+        return GenerationResult(original, (), original, (), report, report, input_validation,
+            (GenerationIssue('input', 'INVALID_TESTCASE', 'Input testcase batch is invalid'),),
+            GenerationStatus.INVALID_TESTCASES)
+    coverage = analyze_coverage(rows, original, flows=deepcopy(flows))
+    obligations = list({o.id: o for r in coverage.requirements for o in r.obligations if o.status != CoverageStatus.COVERED}.values())
+    if intent_ids is not None:
+        unknown = set(intent_ids) - {o.id for o in obligations}
+        if unknown:
+            raise ValueError('Unknown source obligation selection')
+        obligations = [o for o in obligations if o.id in intent_ids]
+    if max_intents is not None:
+        if type(max_intents) is not int or max_intents < 1:
+            raise ValueError('max_intents must be a positive integer')
+        obligations = obligations[:max_intents]
+    llm = (resolution_llm or exploration_llm) if base_url else None
+    budget = agent_budget if isinstance(agent_budget, AgentBudget) else AgentBudget(**(agent_budget or {}))
+    allocator = IdAllocator()
+    existing_ids = {c.id for c in original}
+    issues, authored, preparations, generated = [], [], [], []
+    cache = PreparationCache()  # run-owned verifier freshness, never persisted KB
+    knowledge = AppKnowledge(knowledge_path, base_url.rstrip('/'), store=fixture_store) if knowledge_path and base_url else None
+    intents = [{'id': o.id, 'req_id': o.source.source_id, 'given': o.condition,
+                'when': o.action, 'expected': o.expected, 'title': o.expected[:100],
+                'source_ref': o.source.file} for o in obligations]
+    design_audit = []
+    if llm and intents:
         try:
-            result = deepcopy(run_coverage_loop(
-                deepcopy(rows), deepcopy(original), flows=deepcopy(source_flows),
-                ui_map=deepcopy(ui_map), endpoints=deepcopy(endpoints),
-                resolution_llm=resolution_llm, exploration_llm=exploration_llm,
-                base_url=base_url, storage_state=storage_state,
-                max_passes=max_passes, max_cycles=max_cycles, module=module,
-                contexts=deepcopy(contexts), fixture_store=fixture_store,
-                allow_provisioning=allow_provisioning, environment=environment, preparation_cache=preparation_cache,
-                mutation_policy=mutation_policy, mutation_budget=mutation_budget))
-        except Exception:
-            failed = True
-            issues.append(GenerationIssue("coverage_loop", "GENERATION_FAILED",
-                                          "Generation failed; existing cases retained."))
-
-    if result is None:
-        inventory, generated = original, ()
-        executable = tuple(c for c in original if analyze_executability(c).executable)
-        coverage = analyze_coverage(rows, executable, flows=source_flows)
-        intent_coverage = analyze_coverage(rows, original, flows=source_flows)
-    else:
-        inventory = deepcopy(result.cases + result.unresolved_cases)
-        generated = deepcopy(result.accepted_cases + result.unresolved_cases)
-        executable = tuple(c for c in result.cases if analyze_executability(c).executable)
-        coverage, intent_coverage = result.coverage, result.intent_coverage
-        for issue in result.issues:
-            issues.append(GenerationIssue("coverage_loop", issue.code, issue.message,
-                                          pass_number=issue.pass_number))
-        for entry in result.history:
-            if entry.resolution is not None:
-                for issue in entry.resolution.issues:
-                    issues.append(GenerationIssue(issue.stage, issue.code, issue.message,
-                                                  issue.testcase_id, entry.pass_number, issue.cycle))
-        invalid_accepted = [c for c in result.accepted_cases
-                            if not analyze_executability(c).executable]
-        for case in invalid_accepted:
-            issues.append(GenerationIssue("executability", "GENERATED_CASE_NOT_EXECUTABLE",
-                                          "Accepted generated case is not executable.", case.id))
-        if invalid_accepted:
-            failed = True
-    # Validate the entire final inventory, including manual/unresolved candidates.
+            with capture_provider_attempts() as captured_design:
+                try:
+                    intents, _ = design_intents(public(intents, fixture_store), llm)
+                finally:
+                    design_audit = deepcopy(captured_design)
+        except Exception as exc:
+            issues.append(GenerationIssue('design', 'DESIGN_FAILED', getattr(exc, 'safe_message', type(exc).__name__)))
+            # Design only titles/orders source obligations. A malformed design
+            # falls back to the original intents unchanged; only a provider
+            # failure stops authoring calls.
+            if isinstance(exc, LLMProviderError):
+                llm = None
+    for intent in intents:
+        case_id = allocator.next(module)
+        while case_id in existing_ids:
+            case_id = allocator.next(module)
+        existing_ids.add(case_id)
+        initial = manual_case(intent, case_id, module, 'Explicit LLM configuration required')
+        if fixture_store:
+            initial = fixture_store.bind(initial)
+        preparation = prepare_test_data(initial, fixture_store=fixture_store, endpoints=endpoints or (),
+            base_url=base_url, preparation_cache=cache, allow_provisioning=allow_provisioning, environment=environment)
+        if preparation.initial is not None:
+            preparations.append(preparation)
+        if not preparation.available:
+            initial.generation_status = 'blocked_env'
+            initial.review_reasons = [b['code'] for b in preparation.blockers]
+            generated.append(initial)
+            issues.extend(GenerationIssue('test_data', b['code'], b['message'], case_id) for b in preparation.blockers)
+            continue
+        if llm is None or not base_url:
+            issues.append(GenerationIssue('agent', 'AUTHORING_UNAVAILABLE', 'Configure an LLM and application URL to author this source intent', case_id))
+            generated.append(initial)
+            continue
+        policy = SafetyPolicy(base_url, endpoints=endpoints or (), fixture_store=fixture_store,
+            mutation=mutation_policy, req_ids=[intent['req_id']], budget=mutation_budget, auth_operations=auth_operations,
+            source_routes=source_routes(intent))
+        tools = AgentTools(intent, case_id, module, policy, storage_state=storage_state,
+            knowledge=knowledge, headless=headless, on_progress=on_progress)
+        record = author_intent(intent, tools, llm, budget=budget, critic=critic)
+        authored.append(record)
+        generated.append(record.case)
+        issues.extend(GenerationIssue('agent', record.stop_reason, msg, case_id) for msg in record.issues)
+    if knowledge:
+        knowledge.save()
+    inventory = original + tuple(generated)
+    executable = tuple(c for c in inventory if analyze_executability(c).executable)
+    unresolved = tuple(c for c in inventory if not analyze_executability(c).executable)
+    report = analyze_coverage(rows, executable, flows=deepcopy(flows))
+    intent_report = analyze_coverage(rows, inventory, flows=deepcopy(flows))
     validation = validate_batch(list(inventory))
-    for message in validation.errors:
-        issues.append(GenerationIssue("validation", "INVALID_TESTCASE", message))
-    if not validation.ok:
-        status = GenerationStatus.INVALID_TESTCASES
-    elif failed:
-        status = GenerationStatus.FAILED
-    elif result is not None and result.executable_coverage_complete:
-        status = GenerationStatus.SUCCESS
-    elif (not coverage.requirements
-          or any(r.status == CoverageStatus.UNASSESSABLE for r in coverage.requirements)
-          or coverage.unassessable_obligations):
-        status = GenerationStatus.UNASSESSABLE_COVERAGE
-    else:
-        status = GenerationStatus.INCOMPLETE_COVERAGE
-    executable_ids = {c.id for c in executable}
-    unresolved = tuple(c for c in inventory if c.id not in executable_ids
-                       or not analyze_executability(c).executable)
-    # Separate snapshots prevent edits to the public inventory from altering audit.
-    return GenerationResult(
-        deepcopy(inventory), deepcopy(executable), deepcopy(unresolved), deepcopy(generated),
-        deepcopy(coverage), deepcopy(intent_coverage), deepcopy(validation), deepcopy(result),
-        tuple(issues), status, tuple(preparations))
+    complete = bool(report.requirements) and all(r.status == CoverageStatus.COVERED for r in report.requirements)
+    if not validation.ok: status = GenerationStatus.INVALID_TESTCASES
+    elif any(c.generation_status == 'needs_review' for c in executable): status = GenerationStatus.NEEDS_REVIEW
+    elif complete: status = GenerationStatus.SUCCESS
+    elif not report.requirements or report.unassessable_obligations or any(not r.obligations for r in report.requirements): status = GenerationStatus.UNASSESSABLE_COVERAGE
+    else: status = GenerationStatus.INCOMPLETE_COVERAGE
+    return GenerationResult(deepcopy(inventory), deepcopy(executable), deepcopy(unresolved), deepcopy(tuple(generated)),
+        report, intent_report, validation, tuple(issues), status, tuple(authored), tuple(design_audit), tuple(preparations))

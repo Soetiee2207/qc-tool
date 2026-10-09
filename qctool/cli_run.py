@@ -68,9 +68,9 @@ def preflight(args, *, require_target=True):
         env = config.load_config()
         cfg = pipeline.PipelineConfig(llm_enabled=config._flag('QCTOOL_LLM_ENABLED', False),
             username=env.username, password=env.password, bearer_token=env.bearer_token)
-    cfg.generation_profile = getattr(args, 'profile', None) or data.get('generation', {}).get('profile', 'business')
-    if cfg.generation_profile not in {'business', 'legacy'}:
-        raise PreflightError('generation.profile cần business hoặc legacy.')
+    cfg.generation_profile = getattr(args, 'profile', None) or data.get('generation', {}).get('profile', 'agent')
+    if cfg.generation_profile not in {'agent', 'business', 'legacy'}:
+        raise PreflightError('generation.profile cần agent; business/legacy là alias đã deprecated.')
     for arg, attr in [('docs','docs_dir'),('openapi','openapi'),('out','out_dir')]:
         if value := getattr(args,arg,None):
             setattr(cfg,attr,Path(value).expanduser().resolve())
@@ -201,8 +201,7 @@ def build_summary(result):
     blockers = _data_blockers(gen) if gen else []
     rows = []
     data_by_id = {b['testcase_id']:b for b in blockers}
-    reports = {item.testcase_id:item.executability for event in gen.history
-               if event.resolution for item in event.resolution.case_results} if gen else {}
+    reports = {}
     runtime = {r.case_id:r.status for r in result.run_result.cases} if result.run_result else {}
     execution_blockers = [{'testcase_id':r.case_id,'reason':r.blocked_reason or 'Thiếu điều kiện thực thi.',
                            'user_action':'Bổ sung điều kiện môi trường được báo trong report.md.'}
@@ -242,7 +241,7 @@ def build_summary(result):
             'flaky_cases':len(result.run_result.flaky_cases) if result.run_result else 0,
             'executable_coverage':{'covered':covered,'total':len(obligations),'unassessable':unknown,
                 'unassessable_sources':unknown_sources,
-                'complete':bool(gen and gen.coverage_loop and gen.coverage_loop.executable_coverage_complete)},
+                'complete':bool(gen and gen.executable_coverage_complete)},
             'unresolved_test_data':blockers,'unresolved_cases':rows,'execution_blockers':execution_blockers,
             'user_action_required':status != 'SUCCESS',
             'artifacts':{'legacy_testcases':str(result.legacy_testcases_path) if result.legacy_testcases_path else None,

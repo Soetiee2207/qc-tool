@@ -1,14 +1,6 @@
-"""Chặng 2 — Generate: requirement + spec + luồng nghiệp vụ → testcase.
+"""Deterministic OpenAPI generation and manual source-preserving standalone output.
 
-Gom ba track lại và ghi ra artifact:
-
-  - **API track** (deterministic, từ OpenAPI): EP, BVA, ma trận xác thực, mã lỗi.
-  - **Requirement track** (deterministic, từ requirements.yaml): acceptance criteria, NFR.
-  - **UI/flow track** (deterministic, từ luồng nghiệp vụ): luồng nhiều bước, điểm
-    quyết định, chuyển trạng thái, bề mặt lỗi. Đây là nguồn case UI nghiệp vụ —
-    phần mà API track không chạm tới.
-
-Track LLM chưa làm — sẽ thêm ở M07. Hiện tại mọi case đều `generated_by: engine`.
+Prose with a configured URL/model is authored by qctool.generation, not a mapper.
 """
 
 from __future__ import annotations
@@ -21,10 +13,7 @@ import yaml
 
 from ..testcase import TestCase
 from ..validate import Report, validate_batch
-from .from_flows import generate_from_flows
-from .from_functions import generate_from_functions
 from .from_openapi import IdAllocator, generate_for_endpoint
-from .from_requirements import generate_from_acceptance, generate_from_nfr
 from .loader import load_endpoints
 
 
@@ -61,50 +50,12 @@ def generate_all(
             "features": data.get("features", []),
         }
 
-        # Nhiều feature: gom requirement theo từng feature để ID testcase mang
-        # đúng module, thay vì dồn hết vào một module chung.
-        by_feature: dict[str, list[dict]] = {}
-        for req in requirements:
-            by_feature.setdefault(_feature_of(req), []).append(req)
-
-        multi = len(by_feature) > 1
-        for feature, reqs in by_feature.items():
-            module = module_override if module_override else (
-                _module_for(feature) if multi else _module_for(default_module)
-            )
-            ac = generate_from_acceptance(reqs, alloc, module)
-            cases.extend(ac.cases)
-            meta["warnings"].extend(ac.warnings)
-
-            funcs = generate_from_functions(reqs, alloc, module)
-            cases.extend(funcs)
-
-            nfr = generate_from_nfr(reqs, alloc, "NFR")
-            cases.extend(nfr.cases)
-            meta["unverifiable"].extend(
-                {"requirement_id": u.requirement_id, "title": u.title, "reason": u.reason}
-                for u in nfr.unverifiable
-            )
-
         endpoint_index = _endpoint_index(requirements)
         meta["linked_endpoints"] = len(endpoint_index)
 
         flow_sources = data.get("flows") or {}
         if flow_sources:
             meta["sources"]["flows"] = _flow_source_summary(flow_sources)
-
-    # ── Track UI/flow ───────────────────────────────────────────────────────
-    if flow_sources:
-        # `flows` là dict theo feature khi ingest cả cây; là dữ liệu một feature
-        # khi ingest một feature. Chuẩn hoá về dict-theo-feature.
-        per_feature = ({"": flow_sources} if "counts" in flow_sources
-                       else flow_sources)
-        for feature, payload in per_feature.items():
-            if not isinstance(payload, dict):
-                continue
-            module = module_override or _module_for(
-                feature or data.get("feature", "GEN"))
-            cases.extend(generate_from_flows(payload, alloc, module))
 
     if openapi_path and openapi_path.is_file():
         endpoints, warnings, info = load_endpoints(openapi_path)
@@ -118,7 +69,13 @@ def generate_all(
         meta["warnings"].extend(warnings)
         skipped: list[str] = []
         for ep in endpoints:
-            cases.extend(generate_for_endpoint(ep, alloc, skipped))
+            emitted = generate_for_endpoint(ep, alloc, skipped)
+            # A declared contract operation is an explicit source even without
+            # x-qc-id. This is not coverage of an unrelated business requirement.
+            for case in emitted:
+                if not case.traces_to:
+                    case.traces_to = ['openapi:' + ep.operation_id]
+            cases.extend(emitted)
         meta["skipped"] = skipped
         meta["endpoints"] = endpoint_list
 
@@ -127,6 +84,13 @@ def generate_all(
     # requirement nào trong SRS, và validator sẽ nhắc.
     meta["linked_cases"] = _link_api_cases(cases, endpoint_index)
 
+    if requirements or flow_sources:
+        # Standalone generate without a URL/model cannot dry-run. Preserve source
+        # as manual intents; the normal pipeline supplies agent/runtime inputs.
+        from ..generation import run_generation
+        outcome = run_generation(requirements, existing_cases=cases, flows=flow_sources,
+                                 module=module_override or data.get('feature', 'GEN'))
+        cases = list(outcome.cases)
     meta["coverage_sources"] = _coverage_universe(requirements, flow_sources)
     report = validate_batch(cases, requirements or None,
                             sources=meta["coverage_sources"] or None)
