@@ -75,6 +75,10 @@ class PipelineConfig:
     ui_retry: int = 0                   # số lần chạy lại case hỏng (tối đa 3)
     ui_evidence: str = "on-fail"        # off | on-fail | always
     ui_trace: bool = False              # lưu trace Playwright (.zip) mỗi case
+    # Trace cả case có điền mật khẩu / bắt request đăng nhập. Mặc định TẮT: file
+    # .trace.zip khi đó chứa mật khẩu, token, cookie thật ở dạng rõ. Chỉ bật cục bộ
+    # với tài khoản test; không chia sẻ/commit thư mục evidence/.
+    ui_trace_sensitive: bool = False
     ui_axe: bool = False                # bật quét accessibility
     soft_assert: bool = False           # bước kiểm tra sai không dừng case
     viewport: tuple[int, int] = (1440, 900)
@@ -162,6 +166,7 @@ class PipelineConfig:
             ui_retry=max(0, min(int(ui.get("retry", 0) or 0), 3)),
             ui_evidence=str(ui.get("evidence", "on-fail") or "on-fail"),
             ui_trace=bool(ui.get("trace", False)),
+            ui_trace_sensitive=bool(ui.get("trace_sensitive", False)),
             ui_axe=bool(ui.get("axe", False)) or "assert.axe" in _verbs_in_file(path),
             soft_assert=bool(ui.get("soft_assert", False)),
             viewport=_viewport_of(ui),
@@ -551,6 +556,10 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                     trace=cfg.ui_trace,
                     axe=cfg.ui_axe,
                 )
+                browser.trace_sensitive = cfg.ui_trace and cfg.ui_trace_sensitive
+                if browser.trace_sensitive:
+                    notify("ui", "⚠ trace_sensitive: trace chứa MẬT KHẨU/TOKEN thật — chỉ xem trên "
+                                 "máy này, xoá evidence/ sau khi xem, không chia sẻ/commit")
                 browser.start()
                 if cfg.auth_mode == "browser" and cfg.username and not state_path.is_file():
                     # Đăng nhập hỏng KHÔNG làm mất trình duyệt: case UI không cần

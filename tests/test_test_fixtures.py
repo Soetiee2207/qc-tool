@@ -77,3 +77,47 @@ def test_json_escaped_secret_cannot_leak_into_parsed_audit():
     response = trusted.guard_adapter(Model()).complete("safe")
     assert json.loads(response)["value"] == "[REDACTED]"
     assert secret not in response
+
+
+class TraceProbe:
+    """Records whether trace/evidence were live while a fixture case ran."""
+    soft_failures = []
+
+    def __init__(self, sensitive):
+        self.trace_enabled, self.evidence_dir, self.trace_sensitive = True, Path("fictional-evidence"), sensitive
+        self.seen = []
+        self.evidence = type("Evidence", (), {"to_dict": lambda self: {}})()
+
+    def start_case(self, case_id):
+        self.seen.append((self.trace_enabled, self.evidence_dir))
+
+    def end_case(self, status):
+        pass
+
+    def fill(self, args):
+        return "filled"
+
+
+def _fixture_case():
+    from qctool.testcase import Step, StepKind, TestCase
+    case = TestCase("TC_LOGIN_001", "LOGIN", "Login", "OK", traces_to=["FR-LOGIN"], source_quote="OK",
+                    steps=[Step(1, StepKind.WHEN, "ui.fill", {"target": "pwd", "value": "active_user.password"})])
+    return store().bind(case)
+
+
+@pytest.mark.parametrize("sensitive, expected", [(False, (False, None)), (True, (True, Path("fictional-evidence")))])
+def test_trace_sensitive_is_explicit_opt_in(sensitive, expected):
+    from qctool.execute.runner import run_case
+    browser = TraceProbe(sensitive)
+    run_case(_fixture_case(), HttpSession("http://fictional.test"), browser, fixture_store=store())
+    assert browser.seen == [expected]
+    # Settings are restored after the case either way.
+    assert browser.trace_enabled is True and browser.evidence_dir == Path("fictional-evidence")
+
+
+def test_trace_sensitive_config_defaults_off(tmp_path):
+    path = tmp_path / "c.yaml"
+    path.write_text("ui: {trace: true}\n")
+    assert PipelineConfig.from_file(path).ui_trace_sensitive is False
+    path.write_text("ui: {trace: true, trace_sensitive: true}\n")
+    assert PipelineConfig.from_file(path).ui_trace_sensitive is True

@@ -278,5 +278,15 @@ hoặc bắt request đăng nhập **không** có trace/ảnh — tool tắt có
 mật khẩu/token. Kết quả từng bước của các case đó vẫn có trong `results.json`.
 Trace chứa dữ liệu phiên: không chia sẻ, không commit.
 
+Muốn xem cả bước đăng nhập (gõ mật khẩu, POST login, token trong response), bật thêm:
+
+```yaml
+ui:
+  trace: true
+  trace_sensitive: true   # ⚠ file .trace.zip chứa mật khẩu/token thật
+```
+
+Chỉ dùng với tài khoản test, xem trên máy mình, xoá thư mục `evidence/` sau khi xem.
+
 Ví dụ đầy đủ: `samples/customer_e2e_test_1/` + `qc_config/qctool.customer_e2e_test_1.e2e.yaml`
 (11 AC: đăng nhập, mua hàng, đặt lịch — dừng trước bước tạo dữ liệu).

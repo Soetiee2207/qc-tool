@@ -54,7 +54,7 @@ def preflight(args, *, require_target=True):
                 raise PreflightError('Các section cấu hình phải là YAML mappings.')
         for section, keys in {'llm':['enabled'], 'provisioning':['enabled'],
                               'run':['verify_ssl'], 'out':['skip_run','headless'],
-                              'ui':['trace','axe','soft_assert']}.items():
+                              'ui':['trace','trace_sensitive','axe','soft_assert']}.items():
             if any(k in data.get(section,{}) and type(data[section][k]) is not bool for k in keys):
                 raise PreflightError('Cờ bật/tắt cấu hình phải là boolean true/false.')
         try:

@@ -26,6 +26,9 @@ ui:
   retry: 0
   evidence: always
   trace: true
+  # ⚠ Trace cả case đăng nhập: evidence/*.trace.zip chứa MẬT KHẨU/TOKEN thật.
+  # Chỉ xem cục bộ, xoá sau khi xem, không chia sẻ/commit. Tắt (false) khi không cần.
+  trace_sensitive: true
 out:
   dir: ../artifacts/customer_e2e_test_1
   skip_run: false

@@ -207,8 +207,11 @@ def _open_browser(web_url: str, args: argparse.Namespace, cases_path: Path):
             evidence_dir=evidence_dir,
             authenticated=bool(state_path.is_file()),
             storage_state=state_path if state_path.is_file() else None,
-            trace=args.trace, axe=args.axe,
+            trace=args.trace or args.trace_sensitive, axe=args.axe,
         )
+        browser.trace_sensitive = args.trace_sensitive
+        if args.trace_sensitive:
+            print("  ⚠ --trace-sensitive: trace chứa MẬT KHẨU/TOKEN thật — không chia sẻ/commit")
         browser.start()
     except Exception as exc:                            # noqa: BLE001
         print(f"  ⚠ Không mở được trình duyệt: {type(exc).__name__}: {exc}")
@@ -364,6 +367,9 @@ def _apply_ui_flags(cfg: PipelineConfig, args: argparse.Namespace) -> None:
         cfg.ui_evidence = args.ui_evidence
     if getattr(args, "ui_trace", None) is not None:
         cfg.ui_trace = bool(args.ui_trace)
+    if getattr(args, "ui_trace_sensitive", None) is not None:
+        cfg.ui_trace_sensitive = bool(args.ui_trace_sensitive)
+        cfg.ui_trace = cfg.ui_trace or cfg.ui_trace_sensitive
     if getattr(args, "ui_axe", None) is not None:
         cfg.ui_axe = bool(args.ui_axe)
     if getattr(args, "soft_assert", None) is not None:
@@ -444,6 +450,8 @@ def build_parser() -> argparse.ArgumentParser:
                        default="on-fail", help="Lưu ảnh bằng chứng (mặc định: khi hỏng)")
     p_run.add_argument("--trace", action="store_true",
                        help="Lưu trace Playwright mỗi case (xem lại từng bước)")
+    p_run.add_argument("--trace-sensitive", action="store_true",
+                       help="Trace cả case có mật khẩu (file chứa bí mật — chỉ dùng cục bộ)")
     p_run.add_argument("--axe", action="store_true", help="Bật quét accessibility")
     p_run.add_argument("--soft-assert", action="store_true",
                        help="Bước kiểm tra sai không dừng case — chạy hết để thấy mọi lỗi")
@@ -484,6 +492,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Lưu ảnh/trace/log làm bằng chứng (mặc định: khi hỏng)")
     p_all.add_argument("--ui-trace", action="store_true", default=None,
                        help="Lưu trace Playwright để xem lại từng bước")
+    p_all.add_argument("--ui-trace-sensitive", action="store_true", default=None,
+                       help="Trace cả case có mật khẩu (file chứa bí mật — chỉ dùng cục bộ)")
     p_all.add_argument("--ui-axe", action="store_true", default=None,
                        help="Quét accessibility bằng axe-core")
     p_all.add_argument("--soft-assert", action="store_true", default=None,

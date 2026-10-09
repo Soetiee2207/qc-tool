@@ -277,6 +277,8 @@ Các luật còn lại:
   `runs/<t>/results.json` (Playwright chạy từng bước ra sao); `evidence/` (ảnh, `.trace.zip`).
   Case có điền mật khẩu (fixture alias) hoặc `capture_*` **cố ý không có trace/ảnh**
   (`runner.py` tắt) — trace sẽ chứa mật khẩu/token thật. Không gỡ chặn này mặc định.
+  Opt-in tường minh: `ui.trace_sensitive: true` (cần `ui.trace: true`) hoặc `--trace-sensitive` /
+  `--ui-trace-sensitive`. Pipeline in cảnh báo; chỉ dùng cục bộ với tài khoản test.
 
 Changelog:
 - 2026-10-09 | claude | V2: bảng file agent/, lệnh chạy, nơi xem bằng chứng/trace

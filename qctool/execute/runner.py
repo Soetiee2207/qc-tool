@@ -500,7 +500,10 @@ def _run_once(case: TestCase, session: HttpSession,
             result.actual = [result.blocked_reason]
             return result
     capture_settings = {}
-    if (fixture_steps or any(s.args.get("capture_response") or s.args.get("capture_requests") for s in case.steps)) and browser is not None:
+    # Mặc định: case có mật khẩu/bắt request không có trace/ảnh (file sẽ chứa bí mật).
+    # `trace_sensitive` là opt-in tường minh của người chạy (ui.trace_sensitive).
+    if ((fixture_steps or any(s.args.get("capture_response") or s.args.get("capture_requests") for s in case.steps))
+            and browser is not None and not getattr(browser, "trace_sensitive", False)):
         for name, replacement in (("trace_enabled", False), ("evidence_dir", None)):
             if hasattr(browser, name):
                 capture_settings[name] = getattr(browser, name)
