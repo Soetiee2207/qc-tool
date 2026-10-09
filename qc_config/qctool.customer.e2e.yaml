@@ -5,28 +5,36 @@ feature: customer
 module: CUSTOMER
 generation:
   profile: agent
+  budget: # mỗi intent (AC): số lượt gọi LLM / token / giây
+    max_turns: 14
+    max_tokens: 90000
+    max_seconds: 480
+    completion_tokens: 2200
 docs_dir: ../samples/customer
 openapi: ../samples/customer/openapi.yaml
 web_url: https://salonhub-soe.vercel.app
 run:
   base_url: https://salonhub-3cg8.onrender.com
-  timeout_seconds: 30
+  timeout_seconds: 45 # Render có thể cold start
   verify_ssl: true
 auth:
-  mode: manual
+  mode: browser # đăng nhập trước bằng .env → agent có macro authenticate:active_user
 llm:
-  enabled: false
+  enabled: true # agent DeepSeek viết testcase; đặt QCTOOL_LLM_THINKING=disabled trong .env
 provisioning:
   enabled: false
   environment: production
 ui:
   retry: 0
-  evidence: on-fail
-  trace: false
+  evidence: always
+  trace: true
+  # ⚠ Trace cả case đăng nhập: evidence/*.trace.zip chứa MẬT KHẨU/TOKEN thật.
+  # Chỉ xem cục bộ, xoá sau khi xem, không chia sẻ/commit. Tắt (false) khi không cần.
+  trace_sensitive: true
 out:
   dir: ../artifacts/customer-e2e
   skip_run: false
-  headless: false
+  headless: true
 test_fixtures:
   fixtures:
     active_user:
@@ -61,66 +69,66 @@ test_fixtures:
   acquisition:
     requirements:
       AC-customer-001-1:
-      - fixture: active_user
-        aliases:
-        - active_user.email
-        - active_user.password
-        facts:
-          account_exists: true
-          password_valid: true
-          account_state: active
-        require_verified: false
-        source_ref: samples/customer/urd.md:AC-001-1
+        - fixture: active_user
+          aliases:
+            - active_user.email
+            - active_user.password
+          facts:
+            account_exists: true
+            password_valid: true
+            account_state: active
+          require_verified: false
+          source_ref: samples/customer/urd.md:AC-001-1
       AC-customer-001-3:
-      - fixture: active_user
-        aliases:
-        - active_user.email
-        - active_user.password
-        facts:
-          account_exists: true
-          password_valid: true
-          account_state: active
-        require_verified: false
-        source_ref: samples/customer/urd.md:AC-001-3
+        - fixture: active_user
+          aliases:
+            - active_user.email
+            - active_user.password
+          facts:
+            account_exists: true
+            password_valid: true
+            account_state: active
+          require_verified: false
+          source_ref: samples/customer/urd.md:AC-001-3
       AC-customer-001-4:
-      - fixture: active_user
-        aliases:
-        - active_user.email
-        - active_user.password
-        facts:
-          account_exists: true
-          password_valid: true
-          account_state: active
-        require_verified: false
-        source_ref: samples/customer/urd.md:AC-001-4
+        - fixture: active_user
+          aliases:
+            - active_user.email
+            - active_user.password
+          facts:
+            account_exists: true
+            password_valid: true
+            account_state: active
+          require_verified: false
+          source_ref: samples/customer/urd.md:AC-001-4
       AC-customer-001-5:
-      - fixture: active_user
-        aliases:
-        - active_user.email
-        - active_user.password
-        facts:
-          account_exists: true
-          password_valid: true
-          account_state: active
-        require_verified: false
-        source_ref: samples/customer/urd.md:AC-001-5
+        - fixture: active_user
+          aliases:
+            - active_user.email
+            - active_user.password
+          facts:
+            account_exists: true
+            password_valid: true
+            account_state: active
+          require_verified: false
+          source_ref: samples/customer/urd.md:AC-001-5
       AC-customer-001-6:
+        - fixture: active_user
+          aliases:
+            - active_user.email
+            - active_user.password
+          facts:
+            account_exists: true
+            password_valid: true
+            account_state: active
+          require_verified: false
+          source_ref: samples/customer/urd.md:AC-001-6
+    evidence:
       - fixture: active_user
-        aliases:
-        - active_user.email
-        - active_user.password
         facts:
           account_exists: true
           password_valid: true
           account_state: active
-        require_verified: false
-        source_ref: samples/customer/urd.md:AC-001-6
-    evidence:
-    - fixture: active_user
-      facts:
-        account_exists: true
-        password_valid: true
-        account_state: active
-        role: customer
-      assurance: DECLARED
-      source_ref: operator:confirmed-existing-customer-account
+          role: customer
+        assurance: DECLARED
+        source_ref: operator:confirmed-existing-customer-account

@@ -28,8 +28,9 @@ uv run qctool all --config qc_config/qctool.customer.e2e.yaml --llm
 ```
 
 Ưu tiên `run` cho summary và exit codes. Không chạy hai lệnh `run`/`all`
-cùng lúc; chúng dùng cùng thư mục output. `llm.enabled: false` nghĩa là phải thêm
-`--llm` để bật model tường minh. Bỏ flag thì 7 case ở dạng thủ công (Not Executed).
+cùng lúc; chúng dùng cùng thư mục output. Config bật sẵn `llm.enabled: true`; `--no-llm`
+để tắt (khi đó 7 case ở dạng thủ công, Not Executed). Nên có `QCTOOL_LLM_THINKING=disabled`
+trong `.env` — chế độ thinking làm câu trả lời bị cắt (`finish_reason: length`).
 
 ## Env/config cần chú ý
 
@@ -56,13 +57,16 @@ Provisioning luôn tắt trên website này.
 - `web_url`: frontend Vercel; `run.base_url`: backend Render, không đảo hai URL.
   Host backend là default source; nếu deployment dùng host khác cần sửa cả config
   và `servers` OpenAPI theo host đã xác nhận.
-- `auth.mode: manual`: không gọi bootstrap IdP/SSO. Các ca có account tự mô tả
-  đăng nhập form trong When. Không đổi sang `browser` chỉ vì có credentials.
+- `auth.mode: browser`: đăng nhập form trực tiếp bằng account trong `.env` trước khi sinh
+  case, để agent có macro `authenticate:active_user` dùng lại. Mỗi testcase vẫn tự đăng
+  nhập trong When và bắt đầu phiên riêng. Đổi về `manual` nếu không muốn tool tự đăng nhập.
+- `generation.budget`: 14 lượt / 90k token / 480 giây mỗi AC.
 - `provisioning.enabled: false`: không tạo account/seed/OTP.
 - `out.skip_run: false`: có thực thi; true chỉ generate/review, chưa thể có Pass.
 - `ui.retry: 0`: không che lần fail đầu bằng retry.
-- `ui.evidence: on-fail`, `ui.trace: false`: tránh bật trace rộng chứa dữ liệu phiên;
-  vẫn có audit/report và evidence phù hợp chính sách redaction của engine.
+- `ui.evidence: always`, `ui.trace: true`, `ui.trace_sensitive: true`: mọi case có trace,
+  **kể cả bước gõ mật khẩu và token** — chỉ xem cục bộ, xoá `evidence/` sau khi xem.
+  Đặt `trace_sensitive: false` để quay lại chế độ an toàn (case đăng nhập không có trace).
 - `out.dir`: `artifacts/customer-e2e`. Dùng thư mục mới khi cần giữ từng lượt chạy.
 
 Render có thể cold start. Warm-up tùy chọn trước full run, chỉ GET health:

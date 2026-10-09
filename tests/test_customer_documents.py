@@ -26,9 +26,9 @@ def test_customer_policy_uses_only_env_and_does_not_claim_role_verification():
     config = yaml.safe_load((ROOT / 'qc_config' / 'qctool.customer.e2e.yaml').read_text())
     assert config['feature'] == 'customer'
     assert config['generation']['profile'] == 'agent'
-    assert config['auth']['mode'] == 'manual'
+    assert config['auth']['mode'] == 'browser'  # agent cần macro đăng nhập
     assert config['provisioning']['enabled'] is False
-    assert config['llm']['enabled'] is False
+    assert config['llm']['enabled'] is True
     policy = config['test_fixtures']
     assert policy['fixtures']['active_user']['email'] == {'env': 'QCTOOL_USERNAME'}
     assert policy['fixtures']['active_user']['password'] == {'env': 'QCTOOL_PASSWORD'}
