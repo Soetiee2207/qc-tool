@@ -12,9 +12,17 @@ class SafetyError(ValueError):
     pass
 
 
+def _deny_key(entry):
+    """`"put  /api/x"` → `"PUT /api/x"`: method không phân biệt hoa thường, path giữ nguyên."""
+    method, _, path = str(entry).strip().partition(' ')
+    return f'{method.upper()} {path.strip()}'
+
+
 class SafetyPolicy:
     def __init__(self, base_url, *, endpoints=(), fixture_store=None, mutation=None,
-                 req_ids=(), budget=None, auth_operations=(), source_routes=()):
+                 req_ids=(), budget=None, auth_operations=(), source_routes=(),
+                 write_mode=False, write_deny=(), background_paths=('/socket.io/',), safe_controls=(),
+                 safe_paths=()):
         self.base_url = base_url.rstrip('/')
         self.origin = origin_of(base_url)
         self.endpoints = tuple(endpoints)
@@ -27,6 +35,22 @@ class SafetyPolicy:
         # even if they look high-risk (access-denial tests). Expected URLs are
         # expectations, not authority; writes/controls stay separately guarded.
         self.source_routes = frozenset(r.rstrip('/') or '/' for r in source_routes)
+        # `mode: write` (config/--write, user-confirmed): writes to the application's
+        # own origins are allowed except `write_deny` ("METHOD /path"). Foreign origins
+        # stay blocked in every mode.
+        self.write_mode = bool(write_mode)
+        self.write_deny = frozenset(_deny_key(d) for d in write_deny)
+        # Framework traffic (Socket.IO polling) is not a user action: blocked quietly in
+        # safe mode so it cannot make an unrelated click look like an unreviewed write.
+        self.background_paths = tuple(background_paths)
+        # Reviewed data-testids whose risky-looking label (Đăng ký, Đăng xuất) is safe
+        # to click; the network guard still blocks any write they would trigger.
+        self.safe_controls = frozenset(safe_controls)
+        # Trang có tên trông rủi ro (/register) nhưng chỉ đọc — đã review; mở được ở safe mode.
+        self.safe_paths = frozenset(p.rstrip('/') or '/' for p in safe_paths)
+        self.dry_run = False            # dry-run stops before the first write request
+        self.write_reached = False
+        self.blocked_background = 0
         self.filled_aliases = {}
         self.active = None
         self.blocked_requests = 0
@@ -39,7 +63,19 @@ class SafetyPolicy:
         self.origins.update(origin_of(url) for e in self.endpoints for url in (e.contract_servers or e.servers) if url.startswith(("http://", "https://")))
 
     def risky_path(self, path):
-        return high_risk(path) and (path.rstrip('/') or '/') not in self.source_routes
+        if self.write_mode:
+            return False
+        norm = path.rstrip('/') or '/'
+        return high_risk(path) and norm not in self.source_routes and norm not in self.safe_paths
+
+    def denied(self, method, path):
+        return f'{method.upper()} {path}' in self.write_deny
+
+    def background(self, path):
+        return any(path.startswith(p) for p in self.background_paths)
+
+    def control_reviewed(self, target):
+        return self.write_mode or target in self.safe_controls
 
     def url(self, value):
         if not isinstance(value, str) or '\\' in value or any(ord(c) < 32 for c in value):
@@ -74,9 +110,12 @@ class SafetyPolicy:
                 self.value(args['value'], '\n'.join((case.source_intent.get('given', ''),
                            case.source_intent.get('when', ''), case.source_quote)))
             if action == 'http.request':
-                operation = self.operations.get((str(args['method']).upper(), args['path']))
-                if operation is None or args['method'].upper() not in {'GET', 'HEAD'}:
-                    raise SafetyError('HTTP authoring requires an exact read operation; writes require reviewed policy')
+                method = str(args['method']).upper()
+                operation = self.operations.get((method, args['path']))
+                if operation is None:
+                    raise SafetyError('HTTP authoring requires an exact operation from list_api')
+                if method not in {'GET', 'HEAD'} and (not self.write_mode or self.denied(method, args['path'])):
+                    raise SafetyError('HTTP write needs `mode: write` (run --write) and must not be in write.deny')
                 base = args.get('base') or self.base_url
                 if origin_of(base) not in self.origins:
                     raise SafetyError('Foreign HTTP origin')
@@ -95,8 +134,8 @@ class SafetyPolicy:
         if action != 'ui.click':
             return
         target = args.get('target', '')
-        if high_risk(target):
-            raise SafetyError('High-risk control is not permitted')
+        if high_risk(target) and not self.control_reviewed(target):
+            raise SafetyError('High-risk control is not permitted (enable `mode: write` or exploration.safe_controls)')
         permission = mutation_permission(self.mutation, page=page, target=target,
                                         destination=args.get("expected_url"), requirement_ids=self.req_ids, base_url=self.base_url)
         # dry_run must never create the entity which runner would create again.
@@ -148,6 +187,28 @@ class SafetyPolicy:
                 raise SafetyError('Foreign network origin')
             if req.is_navigation_request() and (origin_of(req.url) != self.origin or self.risky_path(parts.path)):
                 raise SafetyError('Foreign or high-risk document navigation')
+            if req.method not in {'GET', 'HEAD', 'OPTIONS'} and self.background(parts.path):
+                self.blocked_background += 1
+                route.abort('blockedbyclient')
+                return
+            is_auth = any((req.method, parts.path, origin_of(req.url)) == (o['method'], o['path'], o['origin'])
+                          for o in self.auth_operations)
+            if req.method not in {'GET', 'HEAD', 'OPTIONS'} and self.write_mode and is_auth and self.active != 'authentication':
+                # Login (kể cả sai mật khẩu) không phải ghi dữ liệu: không dừng dry-run ở đây.
+                route.continue_()
+                return
+            if req.method not in {'GET', 'HEAD', 'OPTIONS'} and self.write_mode and not is_auth:
+                if self.denied(req.method, parts.path):
+                    raise SafetyError('Write is in write.deny')
+                if self.dry_run:
+                    # Not sent: the runner performs this write exactly once.
+                    self.write_reached = True
+                    self.blocked_background += 1
+                    route.abort('blockedbyclient')
+                    return
+                self.writes += 1
+                route.continue_()
+                return
             if req.method not in {'GET', 'HEAD', 'OPTIONS'}:
                 auth = next((o for o in self.auth_operations if (req.method, parts.path, origin_of(req.url)) == (o['method'], o['path'], o['origin'])), None)
                 if auth and self.active == 'authentication' and not self.writes:

@@ -1,3 +1,0 @@
-# Đăng nhập customer, xem profile/đơn/lịch hẹn (read-only).
-account:
-  login_for: [001-1, 001-3, 001-4, 001-5, 001-6]   # AC cần đăng nhập đúng

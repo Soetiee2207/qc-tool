@@ -890,7 +890,10 @@ class BrowserSession:
         private_before = self._capture_private
         self._capture_private = True
         requests, responses, finished = [], [], set()
-        deadline = time.monotonic() + spec.get("timeout_ms", 10000) / 1000
+        # Mặc định theo timeout bước của lượt chạy (run.timeout_seconds), không cố định 10s:
+        # backend ngủ (Render free tier) cần 30–60s để trả response đầu tiên.
+        deadline = time.monotonic() + spec.get("timeout_ms", max(10000, self.timeout_ms)) / 1000
+        settled = []
         def matches(req):
             return matches_request(req, spec)
         def on_request(req):
@@ -902,12 +905,15 @@ class BrowserSession:
         def on_finished(req):
             if req in requests:
                 finished.add(req)
+                settled.append(time.monotonic())
         listeners = [("request", on_request), ("response", on_response), ("requestfinished", on_finished)]
         for event, handler in listeners:
             page.on(event, handler)
         try:
             self.locate(args).click(timeout=max(1, int((deadline - time.monotonic()) * 1000)))
-            while time.monotonic() < deadline:
+            # Thoát sớm 1s sau khi response duy nhất hoàn tất — vẫn đủ để bắt request trùng
+            # (AMBIGUOUS) mà không bắt mọi case đăng nhập chờ hết cửa sổ 45s.
+            while time.monotonic() < deadline and not (settled and time.monotonic() - settled[0] >= 1.0):
                 page.wait_for_timeout(min(50, max(1, int((deadline - time.monotonic()) * 1000))))
             if len(requests) > 1 or len(responses) > 1:
                 raise ResponseCaptureError("AMBIGUOUS_UI_RESPONSE")
@@ -1087,6 +1093,17 @@ class BrowserSession:
             return self._record(True, f"«{name}» không có trên trang — đúng như mong đợi")
         if locator.count() == 0:
             return self._record(True, f"«{name}» không có trên trang — đúng như mong đợi")
+        target = str(args.get("target") or "").strip()
+        text = str(args.get("by_name") or "").strip()
+        if text and text != target and _looks_like_test_id(target):
+            # testid + chữ: "vùng <target> không hiển thị <chữ>". Vùng thông báo/live region
+            # thường LUÔN có trong DOM (rỗng, sr-only) — kiểm to_be_hidden trên nó là Fail giả
+            # (TC_CONTACT_005, SalonHub 2026-10-10).
+            with contextlib.suppress(Exception):
+                if locator.is_hidden():
+                    return self._record(True, f"«{target}» đang ẩn — không hiển thị «{text}»")
+            return self._check(locator, "not_to_contain_text",
+                               f"«{target}» không hiển thị «{text}»", expected=text)
         return self._check(locator, "to_be_hidden",
                            f"«{name}» không hiện trên màn hình")
 

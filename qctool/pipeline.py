@@ -75,6 +75,13 @@ class PipelineConfig:
     exploration_mutation: dict = field(default_factory=dict)
 
     agent_critic: bool = False
+    # `mode: write` (đã được người dùng xác nhận): agent được tạo/sửa/xoá dữ liệu thật trên
+    # origin của ứng dụng, trừ `write_deny`. Mặc định safe — chỉ đọc.
+    write_mode: bool = False
+    write_deny: tuple[str, ...] = ()
+    background_paths: tuple[str, ...] = ("/socket.io/",)
+    safe_controls: tuple[str, ...] = ()
+    safe_paths: tuple[str, ...] = ()
     agent_budget: dict = field(default_factory=dict)
     intent_ids: tuple[str, ...] | None = None
     max_intents: int | None = None
@@ -171,6 +178,11 @@ class PipelineConfig:
             data_environment=provisioning.get("environment"),
             exploration_mutation=exploration_mutation,
             fixture_store=fixture_store,
+            write_mode=_write_mode(data),
+            write_deny=tuple((data.get('write') or {}).get('deny') or ()),
+            background_paths=tuple((data.get('exploration') or {}).get('background_paths') or ('/socket.io/',)),
+            safe_controls=tuple((data.get('exploration') or {}).get('safe_controls') or ()),
+            safe_paths=tuple((data.get('exploration') or {}).get('safe_paths') or ()),
             ui_retry=max(0, min(int(ui.get("retry", 0) or 0), 3)),
             ui_evidence="off" if ui.get("evidence") is False else str(ui.get("evidence") or "on-fail"),  # YAML: off → False
             ui_trace=bool(ui.get("trace", False)),
@@ -179,6 +191,36 @@ class PipelineConfig:
             soft_assert=bool(ui.get("soft_assert", False)),
             viewport=_viewport_of(ui),
         )
+
+
+def _warm_up(cfg: PipelineConfig, log) -> None:
+    """Đánh thức backend ngủ (Render free tier cold start 30–60s) trước khi đo bất cứ gì.
+
+    Một GET tới gốc API; mọi mã trả về đều được — chỉ cần server đã thức. Lỗi không chặn
+    lượt chạy: case nào thật sự cần API sẽ tự báo Blocked với lý do của nó.
+    """
+    import time
+    import urllib.request
+    target = (cfg.base_url or "").rstrip("/")
+    if not target or not cfg.web_url:
+        return
+    started = time.monotonic()
+    try:
+        from qctool.execute.runner import USER_AGENT   # UA mặc định của urllib bị một số môi trường chặn
+        req = urllib.request.Request(target + "/", headers={"User-Agent": USER_AGENT})
+        urllib.request.urlopen(req, timeout=max(cfg.timeout_seconds, 10)).close()
+    except Exception as exc:   # noqa: BLE001 — HTTPError 404 vẫn nghĩa là server đã thức
+        if not hasattr(exc, "code"):
+            log(f"  ⚠ Warm-up {target} không phản hồi ({type(exc).__name__})")
+            return
+    log(f"Warm-up {target}: {time.monotonic() - started:.1f}s")
+
+
+def _write_mode(data: dict) -> bool:
+    mode = data.get("mode", "safe")
+    if mode not in {"safe", "write"}:
+        raise cfg_mod.ConfigError("mode phải là safe hoặc write.")
+    return mode == "write"
 
 
 def _viewport_of(ui: dict) -> tuple[int, int]:
@@ -281,6 +323,12 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
         result.out_dir = out_dir
         tracker = RunTracker(out_dir, redact=safe, feature=cfg.feature)
         result.tracker = tracker
+        tracker.state["mode"] = "write" if cfg.write_mode else "safe"
+        if cfg.write_mode:
+            if cfg.ui_retry:
+                cfg.ui_retry = 0          # chạy lại một case ghi = ghi thêm lần nữa
+            notify("ingest", "⚠ CHẾ ĐỘ GHI: agent và runner được tạo/sửa/xoá dữ liệu thật; ui.retry = 0; "
+                f"write.deny = {list(cfg.write_deny) or '—'}")
 
         # ── Chặng 1 ────────────────────────────────────────────────────────
         requirements_path: Path | None = None
@@ -344,6 +392,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
         ui_map = None
         if cfg.web_url and (needs_ui_evidence or not cfg.skip_run):
             notify("crawl", f"Mở trình duyệt tới {cfg.web_url}…")
+            _warm_up(cfg, log)
             # Đăng nhập chỉ khi người dùng CHỌN chế độ trình duyệt. `auth.mode:
             # manual` nghĩa là "không xác thực" — chỉ vì `.env` có sẵn tài khoản
             # mà tự đi đăng nhập là đoán ý người dùng, và nó làm hỏng cả lượt chạy
@@ -439,6 +488,8 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
             mutation_policy=cfg.exploration_mutation, knowledge_path=stage_dir(out_dir, "crawl") / "app-model.yaml",
             agent_budget=cfg.agent_budget, intent_ids=cfg.intent_ids, max_intents=cfg.max_intents,
             headless=cfg.headless, on_progress=notify, auth_operations=auth_operations, critic=cfg.agent_critic,
+            write_mode=cfg.write_mode, write_deny=cfg.write_deny, background_paths=cfg.background_paths,
+            safe_controls=cfg.safe_controls, safe_paths=cfg.safe_paths,
         )
         result.generation_result = generation_result
         generation_path = tracker.dir("generate") / "generation.json"
@@ -638,6 +689,9 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
         report.write_junit(run_result, run_dir / "junit.xml")
         report_path = tracker.dir("report") / "report.md"
         report.render_markdown(run_result, report_path)
+        if cfg.write_mode:
+            report_path.write_text("> ⚠ **Chế độ GHI** — lượt chạy này đã tạo/sửa/xoá dữ liệu thật trên môi trường "
+                                   "được test.\n\n" + report_path.read_text(encoding="utf-8"), encoding="utf-8")
         result.run_dir = run_dir
         result.report_path = report_path
         for name in ("results.json", "results.csv", "junit.xml"):

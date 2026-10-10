@@ -94,6 +94,8 @@ def preflight(args, *, require_target=True):
         cfg.skip_run = True
     if only := getattr(args,'only',None):
         cfg.intent_ids = tuple(a if a.startswith('AC-') else f'AC-{cfg.feature}-{a}' for a in only)
+    if getattr(args,'write',None) is not None:
+        cfg.write_mode = args.write
     if getattr(args,'trace_sensitive',None):
         cfg.ui_trace = cfg.ui_trace_sensitive = True
     if getattr(args,'headless',True) is False:
@@ -323,6 +325,25 @@ def print_summary(summary,out):
     print(f'Artifacts: {out}')
 
 
+def confirm_write(features, args) -> bool:
+    """Chế độ ghi luôn cần người xác nhận: --yes, hoặc gõ `yes` ở terminal."""
+    origins = sorted({o for _, cfg in features for o in (cfg.web_url, cfg.base_url) if o})
+    print('⚠ CHẾ ĐỘ GHI — sẽ TẠO/SỬA/XOÁ dữ liệu thật (POST/PUT/PATCH/DELETE)', file=sys.stderr)
+    print(f'  Feature: {", ".join(name for name, _ in features)}', file=sys.stderr)
+    print(f'  Môi trường: {", ".join(origins) or "—"}', file=sys.stderr)
+    deny = sorted({d for _, cfg in features for d in cfg.write_deny})
+    print(f'  Vẫn chặn: origin lạ{", " + ", ".join(deny) if deny else ""}', file=sys.stderr)
+    if getattr(args, 'yes', False):
+        return True
+    if not sys.stdin.isatty():
+        print('LỖI  Chế độ ghi cần xác nhận: chạy ở terminal hoặc thêm --yes.', file=sys.stderr)
+        return False
+    ok = input('Gõ yes để tiếp tục: ').strip().lower() == 'yes'
+    if not ok:
+        print('Đã huỷ — không có gì bị ghi.', file=sys.stderr)
+    return ok
+
+
 def cmd_project(args, *, validate_only=False):
     try:
         checked = preflight(args, require_target=not validate_only)
@@ -333,6 +354,9 @@ def cmd_project(args, *, validate_only=False):
         print('LỖI PREFLIGHT: cấu hình/đầu vào không hợp lệ; nội dung lỗi được giữ kín.')
         return 2
     cfg = checked.config
+    if not validate_only and cfg.write_mode and not getattr(args, 'write_confirmed', False):
+        if not confirm_write([(cfg.feature, cfg)], args):
+            return 2
     if validate_only:
         print(f'PREFLIGHT OK | Requirements: {checked.requirements} | API operations: {checked.operations} | Warnings: {checked.warnings}')
         print('Không gọi model/browser/API; không chứng minh tài khoản hay website hoạt động.')

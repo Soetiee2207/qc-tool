@@ -89,7 +89,7 @@ def audit_arguments(name, args, store):
 PROTOCOL_VERSION = 'agent-authoring-v1'
 
 
-def protocol():
+def protocol(write_mode=False):
     vocabulary = {a: {'required': s.required, 'optional': s.optional, **({'doc': s.doc} if s.doc else {}),
                       **({'operators': sorted(allowed_operators(a))} if 'operator' in (*s.required, *s.optional) else {})}
                   for a, s in sorted(ACTION_SPECS.items()) if a in UI_VERBS or a in _NON_UI_ADAPTERS}
@@ -101,7 +101,12 @@ def protocol():
         'browser_act returns resulting state; do not observe the same unchanged page again. '
         'Docs/session/bound aliases are already supplied; avoid rereading them. Ordered independent tool calls may share a round. '
         'Use EXACT alias strings as value, e.g. active_user.email, active_user.password; never {{email}}, @alias, or fixture:alias. '
-        'Never put credentials in tool arguments: use only bound fixture aliases. Never provision accounts or perform writes without reviewed policy. '
+        'Never put credentials in tool arguments: use only bound fixture aliases. '
+        + ('WRITE MODE is enabled by the operator for this run: you MAY click submit/create/update/delete controls the '
+           'source describes and use http.request with POST/PUT/PATCH/DELETE operations from list_api. Dry-run stops '
+           'BEFORE the first write (it is never sent); later steps are verified only by the runner, which writes once. '
+           'Requests to other origins and write.deny operations stay blocked. '
+           if write_mode else 'Never provision accounts or perform writes without reviewed policy. ') +
         'For each assert.*, source MUST be {"req_id":<this intent req_id>,"quote":<verbatim substring of expected>}. '
         'Do not fit expectations to current product. Weak or nonliteral oracle goes to human review. '
         'UI cases MUST start with explicit ui.session. For an explicit visible source label, use assert.visible AND assert.text with that exact documented literal, not only by_name metadata. '
@@ -168,7 +173,7 @@ def author_intent(intent, tools, llm, *, budget=None, critic=False):
     # Only bound aliases, no acquisition config, policy internals or secrets.
     bindings = aliases.get('bindings', {}).get(intent['req_id'], {})
     fixture_metadata = {a: aliases.get('aliases', {}).get(a) for a in sorted(set(bindings.values()))}
-    messages = [{'role': 'system', 'content': protocol()}, {'role': 'user', 'content': json.dumps(public({
+    messages = [{'role': 'system', 'content': protocol(tools.policy.write_mode)}, {'role': 'user', 'content': json.dumps(public({
         'application_url': tools.policy.base_url, 'intent': intent, 'session': session, 'fixture_bindings': bindings, 'fixture_aliases': fixture_metadata,
         'app_hints': tools.knowledge.hints() if tools.knowledge else {}}, store), ensure_ascii=False, sort_keys=True)}]
     result = AuthoringResult(manual_case(intent, tools.case_id, tools.module, 'Authoring incomplete'), deepcopy(intent))

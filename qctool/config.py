@@ -11,6 +11,7 @@ sẽ phải viết lại — và tệ hơn, credential sẽ nằm vĩnh viễn t
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -197,8 +198,15 @@ def _expand_account(data: dict, path: Path, repo: Path) -> dict:
     bind ngầm. Credential luôn lấy từ env, không bao giờ từ YAML.
     """
     account = data.pop("account")
-    if not isinstance(account, dict) or not isinstance(account.get("login_for"), list):
+    if not isinstance(account, dict) or not isinstance(account.get("login_for", []), list):
         raise ConfigError("account cần `login_for: [<AC>, …]`, ví dụ `login_for: [001-1, 001-3]`.")
+    test_values = account.get("test_values") or {}
+    if not isinstance(test_values, dict):
+        raise ConfigError("account.test_values cần dạng {<AC>: {<field>: \"giá trị giả\"}}.")
+    if not account.get("login_for") and not test_values:
+        # project.yaml khai role dùng chung; feature không liệt kê AC nào thì chạy
+        # anonymous: không fixture, không tự đăng nhập (auth.mode giữ mặc định manual).
+        return data
     name = account.get("name", "active_user")
     facts = {"role": account.get("role", "user"), "account_state": account.get("state", "active")}
     aliases = [f"{name}.email", f"{name}.password"]
@@ -211,20 +219,33 @@ def _expand_account(data: dict, path: Path, repo: Path) -> dict:
         urd = docs / "urd.md"
     feature = data["feature"]
     bindings, requirements = {}, {}
-    for raw in account["login_for"]:
+    def ac_id(raw):
+        short = str(raw).removeprefix("AC-").removeprefix(f"{feature}-")
+        return short, f"AC-{feature}-{short}"
+    for raw in account.get("login_for") or []:
         short = str(raw).removeprefix("AC-").removeprefix(f"{feature}-")
         ac = f"AC-{feature}-{short}"
         bindings[ac] = {"email": aliases[0], "password": aliases[1], "correct_password": aliases[1]}
         requirements[ac] = [{"fixture": name, "aliases": list(aliases), "facts": dict(proven),
                              "require_verified": False, "source_ref": f"{urd.as_posix()}:AC-{short}"}]
-    data.setdefault("auth", {}).setdefault("mode", "browser")
-    data["test_fixtures"] = {
-        "fixtures": {name: {"email": {"env": "QCTOOL_USERNAME"}, "password": {"env": "QCTOOL_PASSWORD"},
-                            "facts": facts}},
-        "bindings": bindings,
-        "acquisition": {"requirements": requirements, "evidence": [{
-            "fixture": name, "facts": {**proven, "role": facts["role"]}, "assurance": "DECLARED",
-            "source_ref": f"operator:confirmed-existing-{facts['role']}-account"}]},
-        **(data.get("test_fixtures") or {}),
-    }
+    # Giá trị GIẢ cho ô mật khẩu ở case âm tính (sai mật khẩu, mật khẩu ngắn…): ô password chỉ
+    # nhận alias, nên mỗi AC có fixture riêng `ac_<id>` mang giá trị cấu hình (không phải bí mật).
+    fake = {}
+    for raw, values in test_values.items():
+        short, ac = ac_id(raw)
+        if not isinstance(values, dict) or not values or not all(isinstance(v, str) for v in values.values()):
+            raise ConfigError(f"account.test_values.{raw} cần {{field: \"chuỗi\"}}.")
+        fx = "ac_" + re.sub(r"[^a-z0-9]+", "_", short.lower()).strip("_")
+        fake[fx] = {field: {"value": value} for field, value in values.items()}
+        bindings.setdefault(ac, {}).update({field: f"{fx}.{field}" for field in values})
+    if account.get("login_for"):
+        data.setdefault("auth", {}).setdefault("mode", "browser")
+    fixtures = {**({name: {"email": {"env": "QCTOOL_USERNAME"}, "password": {"env": "QCTOOL_PASSWORD"},
+                           "facts": facts}} if account.get("login_for") else {}), **fake}
+    evidence = [{"fixture": name, "facts": {**proven, "role": facts["role"]}, "assurance": "DECLARED",
+                 "source_ref": f"operator:confirmed-existing-{facts['role']}-account"}] if account.get("login_for") else []
+    data["test_fixtures"] = _merge({
+        "fixtures": fixtures, "bindings": bindings,
+        "acquisition": {"requirements": requirements, "evidence": evidence},
+    }, data.get("test_fixtures") or {})
     return data

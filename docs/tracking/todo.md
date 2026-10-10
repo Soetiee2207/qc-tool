@@ -7,6 +7,7 @@ owner: "@binhhm"
 created: 2026-09-18
 updated: 2026-10-10
 changelog:
+  - 2026-10-10 | claude | Trace SalonHub 43/83; thêm mode write; việc đo lại
   - 2026-10-10 | claude | projects/<project>/<feature>, artifacts theo bước, run.json
   - 2026-10-10 | claude | Dọn repo: projects/, CLI ngắn; thêm việc chạy lại LLM thật
   - 2026-10-09 | claude | V2: mapper retire, đã commit agent-redesign
@@ -166,4 +167,8 @@ Chi tiết, lỗi đã sửa và số liệu từng lượt: finding mục "Ch�
 | [x] `qctool run <project>` chạy mọi feature; `--<feature>` chỉ một feature | yêu cầu user |
 | [ ] UI web: đọc `run.json`/`events.jsonl` để hiện tiến trình từng bước + link `error.log` (chưa làm, mới có dữ liệu) | yêu cầu user |
 | [ ] Lưu lịch sử nhiều lượt chạy (hiện mỗi lượt ghi đè, chỉ giữ tri thức + phiên đăng nhập) | dọn repo |
+| [x] Trace lượt đầu SalonHub (43/83) → `docs/findings/salonhub-first-run.md`; sửa socket/observe-only/test_values/safe_controls/capture timeout | yêu cầu user |
+| [x] Chế độ ghi `mode: write` / `--write` (xác nhận, write.deny, dry-run dừng trước ghi) | yêu cầu user |
+| [ ] Đo lại `qctool run salonhub` sau các sửa — mục tiêu ≥ 70/72 AC không-ghi thành case tự động | verification |
+| [ ] Chế độ ghi: dữ liệu duy nhất (email đăng ký mới mỗi lượt) và dọn dữ liệu sau khi chạy | mode write |
 

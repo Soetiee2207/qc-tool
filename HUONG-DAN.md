@@ -8,11 +8,11 @@ Công cụ tự động hoá QC: đưa **tài liệu** + **OAS** + **link web** 
 ## Lệnh cần nhớ
 
 ```bash
-qctool init  salonhub/customer        # tạo project + feature (projects/salonhub/customer/)
+qctool init  salonhub/loyalty         # tạo feature mới (projects/salonhub/loyalty/)
 qctool check salonhub                 # kiểm tra mọi feature, không gọi model/browser/API
 qctool run   salonhub                 # chạy MỌI feature của project
-qctool run   salonhub --customer      # chỉ chạy feature customer (lặp được: --customer --order_product)
-qctool trace salonhub TC_CUSTOMER_001 # xem lại từng bước của một case
+qctool run   salonhub --auth          # chỉ chạy feature auth (lặp được: --auth --profile)
+qctool trace salonhub TC_AUTH_001     # xem lại từng bước của một case
 qctool ui                             # giao diện web
 ```
 
@@ -27,12 +27,11 @@ Chạy trong venv của repo (`uv sync` một lần, `source .venv/bin/activate`
 projects/
   salonhub/                     ← một sản phẩm / một webapp
     project.yaml                ← cấu hình CHUNG: web, api, llm, vai trò tài khoản, timeout…
-    customer/                   ← một feature
-      urd.md  srs.md  flows.md  openapi.yaml     ← tài liệu đầu vào
+    auth/                       ← một feature
+      urd.md  srs.md  openapi.yaml               ← tài liệu đầu vào
       qctool.yaml               ← cấu hình RIÊNG feature (ghi đè project.yaml)
       artifacts/                ← kết quả lượt chạy gần nhất (xem "Đọc kết quả")
-    order_product/
-      …
+    profile/  services/  …       ← 11 feature phía khách hàng
   demo/task-manager/            ← API giả để thử tool
 ```
 
@@ -68,8 +67,8 @@ vào YAML. Chỉ AC nằm trong `login_for` mới được dùng tài khoản. A
 thì báo lỗi"* thì **không** liệt kê, để tool không điền mật khẩu đúng vào case đó.
 
 Mọi khoá nâng cao (`auth`, `run`, `ui`, `generation`, `provisioning`, `exploration`,
-`test_fixtures`) đặt được ở cả hai file; feature thắng project. Ví dụ thật:
-`projects/salonhub/order_product/qctool.yaml` (cho phép tạo đơn hàng thật theo rule).
+`test_fixtures`) đặt được ở cả hai file; feature thắng project. Muốn cho agent thực hiện
+một thao tác ghi cụ thể, khai `exploration.mutation` (rule theo từng nút/API) trong `qctool.yaml` của feature.
 
 Chạy cả project thì mỗi feature chạy lần lượt, kết quả ghi vào **đúng** thư mục feature
 đó; cuối cùng in bảng tổng hợp. Mã thoát là mã xấu nhất trong các feature.
@@ -95,6 +94,7 @@ Tự bật API giả (cổng 8099, có 4 bug cài sẵn) rồi chạy `projects/
 | `--skip-run` | Chỉ sinh testcase, không chạy |
 | `--show-browser` | Hiện cửa sổ Chrome thay vì chạy ẩn |
 | `--trace-sensitive` | Trace cả case có mật khẩu (⚠ file chứa bí mật) |
+| `--write` / `--safe` / `--yes` | Bật/tắt chế độ ghi dữ liệu thật cho lượt này (xem dưới) |
 | `--docs` `--openapi` `--url` `--out` | Đè đường dẫn trong cấu hình |
 
 ---
@@ -135,7 +135,7 @@ không**: test API không thấy được những thứ này. Bộ verb UI/UX ki
 `assert.focused`, `assert.text`, `assert.value`, `assert.attr`, `assert.count`,
 `assert.checked`, `assert.axe`, `assert.screenshot`.
 
-Xem lại một case: `qctool trace salonhub TC_CUSTOMER_001`.
+Xem lại một case: `qctool trace salonhub TC_AUTH_001`.
 
 ---
 
@@ -177,6 +177,71 @@ Mỗi thư mục bước có `stage.log` — log riêng của bước đó. **B�
 Lượt chạy mới **ghi đè** lượt trước, trừ `2-crawl/app-model.yaml` và phiên đăng nhập đã lưu
 (giữ lại để agent không phải dò và đăng nhập lại từ đầu). Muốn giữ một lượt chạy thì
 chép thư mục `artifacts/` ra chỗ khác trước khi chạy lại.
+
+---
+
+## Chế độ ghi dữ liệu (`--write`)
+
+Mặc định tool chạy **safe**: chỉ đọc. Các AC tạo/sửa/xoá dữ liệu (đặt hàng, đặt lịch, thêm địa
+chỉ, đăng ký, xoá giỏ…) thành case thủ công. Muốn chạy tự động cả những AC đó:
+
+```bash
+qctool run salonhub --cart_checkout --write        # bật cho một lượt, hỏi xác nhận
+qctool run salonhub --write --yes                  # CI: bỏ qua câu hỏi
+qctool run salonhub --safe                         # ép chỉ đọc dù config đặt mode: write
+```
+
+hoặc đặt trong `project.yaml` / `<feature>/qctool.yaml`:
+
+```yaml
+mode: write              # safe (mặc định) | write
+write:
+  deny:                  # vẫn chặn kể cả khi mode: write
+    - PUT /api/auth/change-password
+```
+
+Khi chế độ ghi bật:
+- Agent được bấm nút tạo/sửa/xoá và gọi POST/PUT/PATCH/DELETE tới **chính** web/api đã khai.
+  Request tới domain khác và mục trong `write.deny` vẫn bị chặn.
+- Dry-run của agent **dừng ngay trước request ghi đầu tiên** (không gửi đi), nên runner ghi **đúng
+  một lần**. Case đó mang nhãn `needs_review` (`WRITE_NOT_DRY_RUN`) vì các bước sau chưa được thử trước.
+- `ui.retry` bị ép về 0 (chạy lại = ghi thêm lần nữa).
+- `run.json`, `report.md`, `summary/<ngày_giờ>/summary.md` ghi rõ **Chế độ GHI**.
+- Không có TTY mà thiếu `--yes` → tool từ chối chạy (mã 2).
+
+⚠ Dữ liệu tạo ra **không tự dọn**. AC cần dữ liệu duy nhất (đăng ký email mới) sẽ báo 409 ở lần chạy sau.
+
+Các tuỳ chọn liên quan trong `exploration`:
+- `safe_paths: [/register]`: trang có tên trông rủi ro nhưng chỉ đọc, mở được ở chế độ safe.
+- `safe_controls: [<data-testid>]`: control có nhãn trông rủi ro (Đăng ký, Đăng xuất) nhưng đã
+  review là chỉ điều hướng/validate. Chế độ safe vẫn chặn request ghi mà chúng gây ra.
+- `background_paths` (mặc định `["/socket.io/"]`): request nền của framework, bị chặn lặng lẽ thay
+  vì làm hỏng cú click đang thử.
+
+Ô mật khẩu chỉ nhận fixture alias. Giá trị giả cho case âm tính (sai mật khẩu, mật khẩu ngắn) khai ở
+`account.test_values: {"001-3": {password: "SaiMatKhau123"}}` → fixture `ac_001_3.password`.
+
+---
+
+## Báo cáo tổng hợp các lần chạy
+
+Mỗi lượt `qctool run <project>` (cả project hoặc `--<feature>`) ghi thêm một báo cáo tổng hợp,
+đặt tên theo ngày giờ bắt đầu chạy (GMT+7):
+
+```
+projects/salonhub/summary/
+  README.md                       ← lịch sử: mọi lượt chạy, mới nhất lên đầu
+  2026-10-10_14-30-05/
+    summary.md                    ← số liệu · theo feature · Fail · Bị chặn · TOÀN BỘ testcase
+    testcases.csv  summary.json   ← cùng dữ liệu, cho Excel / máy đọc
+    auth/  profile/  …            ← bản sao report, results, testcases.xlsx, log, evidence của lượt đó
+```
+
+Artifacts trong feature bị ghi đè mỗi lượt; `summary/<ngày_giờ>/` thì giữ nguyên, nên đây là
+chỗ xem lại các lần chạy cũ. Feature không chạy được (lỗi cấu hình) được ghi rõ là không
+chạy — kết quả cũ còn sót trong `artifacts/` của nó không bị tính vào lượt mới.
+`summary/` chứa evidence/log nên đã được gitignore — không commit, không chia sẻ công khai.
+`qctool check` không tạo báo cáo.
 
 ---
 
@@ -295,5 +360,5 @@ mình, xoá `5-execute/evidence/` sau khi xem, không chia sẻ/commit.
 | Đăng nhập hỏng nhưng vẫn muốn chạy case UI khác | Cứ chạy: case cần xác thực báo `Bị chặn`, case còn lại vẫn chạy |
 | `Cổng 8099 đang bận` khi `qctool demo` | Tắt mock server cũ đang chạy |
 
-Ví dụ đầy đủ: `projects/salonhub/customer_e2e_test_1/` (đăng nhập, mua hàng, đặt lịch; dừng
-trước bước tạo dữ liệu).
+Ví dụ đầy đủ: `projects/salonhub/` — 11 feature phía khách hàng viết từ source SalonHub; AC ghi dữ liệu
+thật được đánh dấu **⚠ GHI DỮ LIỆU THẬT** và để thủ công.

@@ -1,3 +1,0 @@
-# Login, mua hàng, đặt lịch — dừng trước bước tạo dữ liệu (read-only).
-account:
-  login_for: [001-1, 002-3, 002-4, 003-3, 003-4]

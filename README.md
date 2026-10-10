@@ -54,15 +54,17 @@ Trên SalonHub thật (role Customer, DeepSeek, Chromium):
 
 | Bộ tài liệu | Executable | Pass | Fail |
 |---|---|---|---|
-| `salonhub/customer` (7 AC) | 5/7 | 5 | 0 |
-| `salonhub/customer_e2e_test_1` (11 AC: đăng nhập, mua hàng, đặt lịch — read-only) | 9/11 | 9 | 0 |
+| customer (7 AC) | 5/7 | 5 | 0 |
+| customer_e2e_test_1 (11 AC: đăng nhập, mua hàng, đặt lịch — read-only) | 9/11 | 9 | 0 |
+
+_Số liệu lịch sử, đo trên bộ tài liệu cũ; từ 2026-10-10 thay bằng 11 feature trong `projects/salonhub/`, chưa đo lại._
 
 Trước V2: 3–4/7 với ~330k token. Case không chạy được giữ `Not Executed` kèm lý do,
 không bao giờ tính là Pass. Chi tiết, giới hạn và lỗi đã sửa:
 [docs/findings/agent-redesign.md](docs/findings/agent-redesign.md).
 
 ```bash
-qctool run salonhub --customer_e2e_test_1     # timeout/thinking của LLM đặt trong .env
+qctool run salonhub --auth     # timeout/thinking của LLM đặt trong .env
 ```
 
 **Xem bằng chứng:** `<feature>/artifacts/3-generate/generation.json` (agent gọi tool nào),
@@ -89,11 +91,11 @@ source .venv/bin/activate             # để gõ `qctool …` thay vì `uv run 
 
 ```bash
 qctool demo                            # thử ngay trên API giả — không cần hệ thống thật
-qctool init salonhub/customer          # tạo project + feature
+qctool init salonhub/loyalty           # tạo feature mới
 qctool check salonhub                  # kiểm tra mọi feature, không gọi model/browser/API
 qctool run salonhub                    # chạy MỌI feature của project
-qctool run salonhub --customer         # chỉ chạy feature customer
-qctool trace salonhub TC_CUSTOMER_001  # xem lại từng bước của một case
+qctool run salonhub --auth             # chỉ chạy feature auth
+qctool trace salonhub TC_AUTH_001      # xem lại từng bước của một case
 qctool ui                              # giao diện web (http://127.0.0.1:8080)
 qctool step …                          # từng chặng: ingest | generate | exec | crawl
 ```
@@ -104,8 +106,8 @@ feature nằm chung một thư mục:
 ```
 projects/salonhub/
   project.yaml              # chung: web, api, llm, account.role, timeout, ui
-  customer/
-    urd.md srs.md flows.md openapi.yaml
+  auth/
+    urd.md srs.md openapi.yaml
     qctool.yaml             # riêng feature: account.login_for, ghi đè
     artifacts/              # 1-ingest 2-crawl 3-generate 4-render 5-execute 6-report + run.json
 ```
@@ -178,6 +180,10 @@ Mỗi lượt chạy ghi vào `<feature>/artifacts/`, mỗi bước một thư m
 
 `artifacts/` là output sinh lại được — không sửa tay, không commit (gitignored).
 
+Mỗi lượt `qctool run <project>` còn ghi `projects/<project>/summary/<YYYY-MM-DD_HH-MM-SS>/summary.md`:
+số liệu tổng, theo feature, danh sách Fail/Bị chặn và **toàn bộ testcase**, kèm bản sao report/evidence của
+lượt đó (artifacts thì bị ghi đè). `summary/README.md` liệt kê mọi lượt chạy.
+
 ## Bốn trạng thái, đừng lẫn
 
 | Trạng thái | Nghĩa | Tuyệt đối không dùng khi |
@@ -237,7 +243,7 @@ ui:
 Xem lại một case hỏng:
 
 ```bash
-qctool trace salonhub TC_CUSTOMER_001
+qctool trace salonhub TC_AUTH_001
 ```
 
 `auth.mode: manual` nghĩa là **không tự đăng nhập**, kể cả khi `.env` có tài khoản. Chỉ
@@ -261,6 +267,7 @@ qctool trace salonhub TC_CUSTOMER_001
 | `docs/` | Brainstorm, findings, tracking |
 | `scripts/` | Sinh template testcase, validate OpenAPI |
 | `qctool/artifacts.py` | Bố cục artifacts theo bước + `run.json`/`events.jsonl` |
+| `qctool/summary.py` | Báo cáo tổng hợp mỗi lượt chạy project → `projects/<p>/summary/<ngày_giờ>/` |
 
 Nguyên tắc: **OpenAPI là nguồn ground cho API.** Endpoint/field không có trong OpenAPI hoặc
 tài liệu thì tool không được bịa — thà bỏ sót còn hơn sinh case gọi endpoint không tồn tại.

@@ -27,7 +27,7 @@ là **pilot đầu tiên**, không phải phạm vi.
 | Template OpenAPI | `templates/api/` — anh điền, tool đọc |
 | Template báo cáo | `templates/report/` |
 | Project / feature | `projects/<project>/project.yaml` (chung) + `projects/<project>/<feature>/` (tài liệu + `qctool.yaml` + `artifacts/`). Gộp bởi `config.py::expand_project`. Credential chỉ ở `.env` |
-| SalonHub thật | `projects/salonhub/{customer,customer_e2e_test_1,order_product}/` — tài liệu viết từ source thật |
+| SalonHub thật | `projects/salonhub/<11 feature phía khách hàng>/` — viết từ source `~/Projects/SalonHub` @ 160a94a. OpenAPI chỉ GET + login (test `test_customer_documents.py` khoá bất biến này) |
 | Dữ liệu hư cấu | `projects/demo/task-manager/` (chạy với mock) · `tests/fixtures/` (chỉ test dùng) — **không phải hệ thống thật** |
 | API giả để chạy thử executor | `tests/mock_server.py` — 4 bug API + 4 bug giao diện cài sẵn |
 | Trình duyệt | Playwright + Chromium (đã cài). Bí mật ở `.env` (gitignored) |
@@ -36,6 +36,7 @@ là **pilot đầu tiên**, không phải phạm vi.
 | Test | `tests/` — `test_browser.py` mở Chromium thật (marker `playwright`) |
 | Hướng dẫn người dùng | `HUONG-DAN.md` — đọc file này khi giải thích cho người mới |
 | File cấu hình mẫu | `qctool init <project>[/<feature>]` (`cli.py::PROJECT_TEMPLATE`, `FEATURE_TEMPLATE`) |
+| Báo cáo tổng hợp | `projects/<p>/summary/<YYYY-MM-DD_HH-MM-SS>/` (`qctool/summary.py`, gọi từ `cli._each_feature` sau `run`) — chép kết quả vì artifacts bị ghi đè; feature có `run.json.started_at` cũ hơn lượt chạy bị coi là không chạy. Gitignored |
 | Output sinh ra | `<feature>/artifacts/` — gitignored. Bố cục + `run.json`/`events.jsonl`: `qctool/artifacts.py` |
 
 ## Lệnh
@@ -245,6 +246,13 @@ Các luật còn lại:
 
 - **Không suy diễn.** Thiếu owner/acceptance → ghi `TBC`. Đánh dấu *done* **phải có bằng chứng**;
   thêm một việc vào to-do thì không cần.
+- **Chế độ ghi chỉ bật tường minh.** `mode: write` (config) hoặc `--write` + xác nhận (TTY/`--yes`) là
+  ngoại lệ DUY NHẤT cho phép agent tạo/sửa/xoá dữ liệu. Vẫn chặn origin lạ và `write.deny`; dry-run
+  dừng trước request ghi đầu tiên (không gửi) để runner ghi đúng một lần. Không thêm đường ghi nào
+  khác, không suy chế độ ghi từ dữ liệu/credential. API ghi trong OpenAPI production phải mang
+  `x-qc-observe-only: true` (generator tất định không sinh case gọi chúng).
+- **Request nền không phải hành động.** `exploration.background_paths` (mặc định `/socket.io/`) bị chặn
+  lặng lẽ; trước đây Socket.IO polling làm 18 intent SalonHub hỏng vì mọi click thành "unreviewed write".
 - **Không sinh case khi không có cơ sở.** Agent không viết được case qua gate + dry-run (hết
   budget, locator không duy nhất, thiếu dữ liệu) → case giữ dạng `perform.unmapped`, `manual`,
   *chưa map*; **không** được đoán selector/URL hay nới gate để lấy số.
@@ -296,6 +304,8 @@ Các luật còn lại:
   --trace-sensitive`. Pipeline in cảnh báo; chỉ dùng cục bộ với tài khoản test.
 
 Changelog:
+- 2026-10-10 | claude | mode: write/--write, observe-only, background_paths, safe_controls
+- 2026-10-10 | claude | summary/<ngày_giờ>/ tổng hợp mọi testcase mỗi lượt run project
 - 2026-10-10 | claude | projects/<project>/<feature>, artifacts theo bước, run <project> --<feature>
 - 2026-10-10 | claude | Dọn repo: core/ data/, projects/ thay qc_config/, CLI init/check/run
 - 2026-10-09 | claude | V2: bảng file agent/, lệnh chạy, nơi xem bằng chứng/trace

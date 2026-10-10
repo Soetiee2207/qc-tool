@@ -86,7 +86,9 @@ def run_generation(requirements, existing_cases=(), *, flows=None, endpoints=Non
                    fixture_store=None, allow_provisioning=False, environment=None,
                    module='GEN', mutation_policy=None, mutation_budget=None,
                    knowledge_path=None, agent_budget=None, intent_ids=None, max_intents=None,
-                   headless=True, on_progress=None, auth_operations=(), critic=False, **unused_legacy_options):
+                   headless=True, on_progress=None, auth_operations=(), critic=False,
+                   write_mode=False, write_deny=(), background_paths=('/socket.io/',), safe_controls=(),
+                   safe_paths=(), **unused_legacy_options):
     """Enumerate explicit source obligations, author complete cases with tools.
 
     No legacy patch/resolution/coverage loop is invoked. Existing cases are
@@ -170,7 +172,8 @@ def run_generation(requirements, existing_cases=(), *, flows=None, endpoints=Non
             continue
         policy = SafetyPolicy(base_url, endpoints=endpoints or (), fixture_store=fixture_store,
             mutation=mutation_policy, req_ids=[intent['req_id']], budget=mutation_budget, auth_operations=auth_operations,
-            source_routes=source_routes(intent))
+            source_routes=source_routes(intent), write_mode=write_mode, write_deny=write_deny,
+            background_paths=background_paths, safe_controls=safe_controls, safe_paths=safe_paths)
         tools = AgentTools(intent, case_id, module, policy, storage_state=storage_state,
             knowledge=knowledge, headless=headless, on_progress=on_progress)
         record = author_intent(intent, tools, llm, budget=budget, critic=critic)

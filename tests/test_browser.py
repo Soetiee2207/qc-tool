@@ -388,3 +388,41 @@ def test_ui_case_without_browser_is_blocked_not_failed(site):
     result = run_case(case, HttpSession(site, timeout=5), browser=None)
     assert result.status == STATUS_BLOCKED
     assert "Chưa mở trình duyệt" in result.actual[0]
+
+
+@skip_no_browser
+def test_not_visible_with_testid_and_text_checks_text_not_presence():
+    """Live region luôn có trong DOM (sr-only, rỗng): "không hiển thị <chữ>" phải Pass khi rỗng
+    và Fail khi chữ thật sự xuất hiện — không được Fail giả chỉ vì vùng đó tồn tại."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    pages = {
+        "/empty": b"<style>.sr-only{position:absolute;width:1px;height:1px;overflow:hidden}</style>"
+                  b"<p class=sr-only role=status data-testid=msg></p>",
+        "/shown": b"<p role=status data-testid=msg>Cam on ban da lien he!</p>",
+    }
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
+            self.wfile.write(b"<!doctype html><title>t</title>" + pages[self.path])
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    browser = BrowserSession(base, headless=True, timeout_ms=3000)
+    browser.start()
+    try:
+        statuses = []
+        for path in ("/empty", "/shown"):
+            case = _case(Step(1, StepKind.WHEN, "ui.goto", {"url": path}),
+                         Step(2, StepKind.THEN, "assert.not_visible",
+                              {"target": "msg", "by_name": "Cam on ban da lien he!"}))
+            statuses.append(run_case(case, HttpSession(base, timeout=5), browser).status)
+    finally:
+        browser.close()
+        server.shutdown()
+    assert statuses == [STATUS_PASS, STATUS_FAIL]

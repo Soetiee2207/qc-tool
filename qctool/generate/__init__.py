@@ -69,6 +69,11 @@ def generate_all(
         meta["warnings"].extend(warnings)
         skipped: list[str] = []
         for ep in endpoints:
+            if ep.observe_only:
+                # Ví dụ POST /api/orders trên production: sinh case "trả 201 khi hợp lệ"
+                # là tạo đơn thật. Chỉ agent (mode write, đã xác nhận) mới được gọi.
+                skipped.append(f"{ep.method} {ep.path}: x-qc-observe-only — không sinh case API tự động")
+                continue
             emitted = generate_for_endpoint(ep, alloc, skipped)
             # A declared contract operation is an explicit source even without
             # x-qc-id. This is not coverage of an unrelated business requirement.

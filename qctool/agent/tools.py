@@ -114,10 +114,13 @@ class AgentTools:
             tag = element.evaluate('e => e.tagName.toLowerCase()')
             name = element.inner_text() if tag not in {'input', 'textarea'} else element.get_attribute('aria-label') or ''
             from qctool.agent.exploration_actions import high_risk, DANGEROUS
-            if high_risk(name):
-                raise SafetyError('Destructive/admin/payment control is forbidden')
-            if action == 'ui.click' and DANGEROUS.search(name) and not self.policy.mutation:
-                raise SafetyError('State-changing control needs explicit reviewed mutation policy')
+            reviewed = self.policy.control_reviewed(args.get('target', ''))
+            if high_risk(name) and not reviewed:
+                raise SafetyError('Destructive/admin/payment control is forbidden '
+                                  '(enable `mode: write` or exploration.safe_controls)')
+            if action == 'ui.click' and DANGEROUS.search(name) and not self.policy.mutation and not reviewed:
+                raise SafetyError('State-changing control needs explicit reviewed mutation policy '
+                                  '(or `mode: write`)')
             if action == 'ui.fill':
                 if tag not in {'input', 'textarea'} or element.get_attribute('type') in {'file', 'hidden', 'submit', 'button'}:
                     raise SafetyError('Unsupported fill control')
@@ -174,7 +177,12 @@ class AgentTools:
         self.policy.authentication_observed = False
         saved = {}
         results = []
+        self.policy.dry_run, self.policy.write_reached = True, False
+        stopped_at = None
         for step in self.candidate.steps:
+            if step.action == 'http.request' and str(step.args.get('method', 'GET')).upper() not in {'GET', 'HEAD'}:
+                stopped_at = step.seq          # write mode: runner sends it once, dry-run never does
+                break
             try:
                 if step.action.startswith('assert.'):
                     # Only adapter/locator availability. Never invoke assertion or
@@ -187,6 +195,10 @@ class AgentTools:
                     continue
                 if step.action.startswith('ui.'):
                     response = self.act(step.action, step.args, browser=b, dry_run=True)
+                    if self.policy.write_reached:
+                        results.append({'seq': step.seq, 'ok': True, 'check': 'write reached; not sent in dry-run'})
+                        stopped_at = step.seq
+                        break
                     for capture in ('capture_response', 'capture_requests'):
                         if capture in step.args:
                             saved[step.args[capture].get('save_as', 'res')] = response
@@ -220,9 +232,14 @@ class AgentTools:
                         result['snapshot'] = self.snapshot(b)
                     except Exception:
                         pass
+                self.policy.dry_run = False
                 return result
-        self.candidate.generation_status = 'needs_review' if check.review else 'ready'
-        self.candidate.review_reasons = list(check.review)
+        self.policy.dry_run = False
+        review = list(check.review)
+        if stopped_at is not None:
+            review.append(f'WRITE_NOT_DRY_RUN: bước ≥{stopped_at} chưa thử (ghi thật chỉ chạy ở runner)')
+        self.candidate.generation_status = 'needs_review' if review else 'ready'
+        self.candidate.review_reasons = review
         self.ready = deepcopy(self.candidate)
         if self.knowledge and self.policy.authentication_observed:
             prefix = []
@@ -237,7 +254,7 @@ class AgentTools:
                     self.knowledge.remember('authenticate:' + fixture, prefix)
                     break
         return {'ok': True, 'steps': results, 'generation_status': self.ready.generation_status,
-                'review': list(check.review), 'assertion_values': 'not evaluated/not disclosed'}
+                'review': review, 'assertion_values': 'not evaluated/not disclosed'}
 
     def call(self, name, arguments):
         try:

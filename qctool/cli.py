@@ -342,7 +342,7 @@ def features_of(project: Path) -> list[Path]:
 
 
 def resolve_targets(target: str, only: list[str] | None = None) -> list[Path]:
-    """`salonhub` → mọi `<feature>/qctool.yaml`; `salonhub/customer` hoặc file YAML → một."""
+    """`salonhub` → mọi `<feature>/qctool.yaml`; `salonhub/auth` hoặc file YAML → một."""
     where = _project_dir(target)
     if where.is_file():
         found = [where]
@@ -375,6 +375,18 @@ def _each_feature(args: argparse.Namespace, *, validate_only: bool) -> int:
     if args.config:
         raise SystemExit("LỖI  Chọn <project> hoặc --config, không dùng cả hai.")
     targets = resolve_targets(args.project, args.features)
+    from qctool import summary
+    started = summary.now()
+    if not validate_only:
+        writes = [(p.parent.name, cfg) for p in targets if (cfg := _config_or_none(p))
+                  and (args.write if getattr(args, "write", None) is not None else cfg.write_mode)]
+        if writes:
+            from qctool.cli_run import confirm_write
+            for _, cfg in writes:
+                cfg.write_mode = True
+            if not confirm_write(writes, args):
+                return 2
+            args.write_confirmed = True
     codes = []
     for path in targets:
         if len(targets) > 1:
@@ -385,7 +397,28 @@ def _each_feature(args: argparse.Namespace, *, validate_only: bool) -> int:
         print("\n━━ Tổng hợp " + "━" * 48)
         for path, code in codes:
             print(f"  {path.parent.name:<28} {_EXIT.get(code, code)}   → {path.parent / 'artifacts'}")
+    # Báo cáo tổng hợp chỉ cho lượt chạy thật theo project (projects/<p>/<feature>/qctool.yaml).
+    project = targets[0].parent.parent
+    if not validate_only and all(p.name == "qctool.yaml" and p.parent.parent == project for p in targets) \
+            and (project / "project.yaml").is_file():
+        out = summary.write_project_summary(project, [(p.parent.name, code, _artifacts_of(p)) for p, code in codes], started)
+        print(f"\nBáo cáo tổng hợp: {out / 'summary.md'}")
     return max(code for _, code in codes)
+
+
+def _config_or_none(path: Path):
+    try:
+        return PipelineConfig.from_file(path)
+    except Exception:   # preflight của từng feature sẽ báo lỗi cấu hình rõ ràng
+        return None
+
+
+def _artifacts_of(path: Path) -> Path:
+    try:
+        cfg = PipelineConfig.from_file(path)
+        return cfg.out_dir or _pipeline.ARTIFACTS_ROOT / cfg.feature
+    except Exception:   # cấu hình hỏng: feature không chạy, summary tự đánh dấu
+        return path.parent / "artifacts"
 
 
 _EXIT = {0: "OK", 1: "CÓ LỖI SẢN PHẨM", 2: "LỖI CẤU HÌNH/PIPELINE", 3: "SINH CASE CHƯA ĐỦ", 4: "CÓ CASE BỊ CHẶN"}
@@ -463,7 +496,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True, metavar="<lệnh>")
 
     p = sub.add_parser("init", help="Tạo project/feature: init <project> | init <project>/<feature>")
-    p.add_argument("name", help="salonhub (tạo project.yaml) hoặc salonhub/customer (thêm feature)")
+    p.add_argument("name", help="salonhub (tạo project.yaml) hoặc salonhub/auth (thêm feature)")
     p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("check", help="Kiểm tra project/feature, không gọi model/browser/API")
@@ -474,13 +507,18 @@ def build_parser() -> argparse.ArgumentParser:
     _project_flags(p)
     p.add_argument("--show-browser", dest="headless", action="store_false", help="Hiện cửa sổ trình duyệt")
     p.add_argument("--only", nargs="+", metavar="AC", help="Chỉ sinh case cho các AC này (vd: 001-1 001-3)")
+    p.add_argument("--write", dest="write", action="store_const", const=True, default=None,
+                   help="CHẾ ĐỘ GHI: cho tạo/sửa/xoá dữ liệu thật (đè `mode` trong config; cần xác nhận)")
+    p.add_argument("--safe", dest="write", action="store_const", const=False,
+                   help="Chỉ đọc, kể cả khi config đặt `mode: write`")
+    p.add_argument("--yes", action="store_true", help="Không hỏi xác nhận chế độ ghi (CI)")
     p.add_argument("--trace-sensitive", action="store_true", default=None,
                    help="Trace cả case có mật khẩu (file chứa bí mật — chỉ dùng cục bộ)")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("trace", help="Mở trace Playwright của một testcase")
     p.add_argument("project", help="Tên project (thêm --<feature> để thu hẹp)")
-    p.add_argument("case_id", help="Mã testcase, vd TC_CUSTOMER_001")
+    p.add_argument("case_id", help="Mã testcase, vd TC_AUTH_001")
     p.add_argument("-f", "--feature", dest="features", action="append", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_trace)
 
@@ -555,7 +593,7 @@ def _step_parsers(sub) -> None:
 def _project_flags(parser):
     parser.add_argument('project', nargs='?', help='Project trong projects/ (vd salonhub), salonhub/<feature>, hoặc file YAML')
     parser.add_argument('-f', '--feature', dest='features', action='append', metavar='FEATURE',
-                        help='Chỉ chạy feature này (lặp lại được). Viết tắt: --<tên feature>, vd --customer')
+                        help='Chỉ chạy feature này (lặp lại được). Viết tắt: --<tên feature>, vd --auth')
     parser.add_argument('--config', help=argparse.SUPPRESS)
     parser.add_argument('--docs', '--docs-dir', dest='docs', help='Ghi đè thư mục URD/SRS/flows')
     parser.add_argument('--openapi', help='Ghi đè file OpenAPI')
@@ -574,7 +612,7 @@ def _project_flags(parser):
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args, unknown = parser.parse_known_args(argv)
-    # `run salonhub --customer` — tên feature dùng thẳng làm cờ. Chỉ nhận đúng
+    # `run salonhub --auth` — tên feature dùng thẳng làm cờ. Chỉ nhận đúng
     # tên thư mục feature có thật; còn lại vẫn là lỗi cờ lạ như argparse thường.
     if unknown and getattr(args, "project", None) and hasattr(args, "features"):
         names = {p.parent.name for p in resolve_targets(args.project)}

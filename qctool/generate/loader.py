@@ -156,6 +156,7 @@ def _build_endpoint(spec: dict, path: str, method: str, op: dict,
         servers=servers,
         contract_servers=servers or [s["url"] for s in spec.get("servers", [])
                                     if isinstance(s, dict) and isinstance(s.get("url"), str)],
+        observe_only=op.get("x-qc-observe-only") is True,
     )
 
 
