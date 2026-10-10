@@ -5,17 +5,17 @@ import json
 
 import pytest
 
-import qctool.test_data_preparation as preparation
-import qctool.test_data_verification as verification_module
-from qctool.test_data_acquisition import acquire_test_data, DataRequirement, DataStatus
-from qctool.test_data_preparation import prepare_test_data, PreparationStatus
-from qctool.test_data_verification import VerificationResult, VerificationStatus
-from qctool.test_fixtures import FixtureStore
+import qctool.data.preparation as preparation
+import qctool.data.verification as verification_module
+from qctool.data.acquisition import acquire_test_data, DataRequirement, DataStatus
+from qctool.data.preparation import prepare_test_data, PreparationStatus
+from qctool.data.verification import VerificationResult, VerificationStatus
+from qctool.data.fixtures import FixtureStore
 from qctool.generation import run_generation
-from qctool.executability import analyze_executability
-from qctool.testcase import Step, StepKind
-from tests.test_test_data_verification import setup, rule, BASE, verify
-from tests.test_test_data_acquisition import inputs, FACTS, need
+from qctool.core.executability import analyze_executability
+from qctool.core.testcase import Step, StepKind
+from tests.test_data_verification import setup, rule, BASE, verify
+from tests.test_data_acquisition import inputs, FACTS, need
 from tests.test_generation import executable_case
 
 

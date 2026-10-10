@@ -3,9 +3,9 @@ from copy import deepcopy
 import json
 from urllib.parse import urljoin, urlsplit
 
-from ..response_capture import origin_of
-from ..exploration_actions import mutation_policy, MutationBudget, mutation_permission, high_risk
-from ..test_fixtures import is_alias
+from qctool.data.capture import origin_of
+from qctool.agent.exploration_actions import mutation_policy, MutationBudget, mutation_permission, high_risk
+from qctool.data.fixtures import is_alias
 
 
 class SafetyError(ValueError):

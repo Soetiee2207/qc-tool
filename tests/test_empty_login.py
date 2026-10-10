@@ -7,8 +7,8 @@ import threading
 
 import pytest
 
-from qctool.executability import analyze_executability
-from qctool.testcase import Step, StepKind, TestCase, ValidationError
+from qctool.core.executability import analyze_executability
+from qctool.core.testcase import Step, StepKind, TestCase, ValidationError
 from qctool.execute.browser import BrowserSession
 from qctool.execute.runner import HttpSession, run_cases
 from qctool.ui.crawl import UIMap, PageMap, Element

@@ -11,10 +11,10 @@ from pathlib import Path
 
 import yaml
 
-from ..testcase import TestCase
-from ..validate import Report, validate_batch
-from .from_openapi import IdAllocator, generate_for_endpoint
-from .loader import load_endpoints
+from qctool.core.testcase import TestCase
+from qctool.core.validate import Report, validate_batch
+from qctool.generate.from_openapi import IdAllocator, generate_for_endpoint
+from qctool.generate.loader import load_endpoints
 
 
 def _module_for(feature: str) -> str:
@@ -87,7 +87,7 @@ def generate_all(
     if requirements or flow_sources:
         # Standalone generate without a URL/model cannot dry-run. Preserve source
         # as manual intents; the normal pipeline supplies agent/runtime inputs.
-        from ..generation import run_generation
+        from qctool.generation import run_generation
         outcome = run_generation(requirements, existing_cases=cases, flows=flow_sources,
                                  module=module_override or data.get('feature', 'GEN'))
         cases = list(outcome.cases)
@@ -114,7 +114,7 @@ def _feature_of(req: dict) -> str:
 
 
 def _flow_source_summary(flows: dict) -> dict:
-    from ..ingest.flows import counts
+    from qctool.ingest.flows import counts
 
     return {"counts": counts(flows), "features": len(flows)}
 

@@ -5,12 +5,12 @@ import json
 import time
 from typing import Protocol
 
-from ..llm_provider import capture_provider_attempts, LLMProviderError, _unique_keys, _reject_constant
-from ..executability import _NON_UI_ADAPTERS
-from ..execute.runner import UI_VERBS
-from ..testcase import ACTION_SPECS, Step, StepKind, TestCase, allowed_operators
-from .gate import case_schema
-from .tools import public
+from qctool.agent.llm_provider import capture_provider_attempts, LLMProviderError, _unique_keys, _reject_constant
+from qctool.core.executability import _NON_UI_ADAPTERS
+from qctool.execute.runner import UI_VERBS
+from qctool.core.testcase import ACTION_SPECS, Step, StepKind, TestCase, allowed_operators
+from qctool.agent.gate import case_schema
+from qctool.agent.tools import public
 
 
 class AgentLLM(Protocol):
@@ -79,7 +79,7 @@ def tool_definitions():
 
 def audit_arguments(name, args, store):
     if name not in {'browser_observe', 'browser_act', 'use_macro'}: return None
-    from ..test_fixtures import is_alias
+    from qctool.data.fixtures import is_alias
     value = deepcopy(args)
     if name == 'browser_act' and 'value' in value.get('args', {}) and not is_alias(value['args']['value']):
         value['args']['value'] = '[SOURCE_LITERAL]'

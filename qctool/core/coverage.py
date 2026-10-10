@@ -9,8 +9,8 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Iterable
 
-from .model import Requirement
-from .testcase import StepKind, TestCase
+from qctool.core.model import Requirement
+from qctool.core.testcase import StepKind, TestCase
 
 
 class CoverageStatus(str, Enum):

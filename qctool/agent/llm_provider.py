@@ -17,8 +17,8 @@ from http.client import HTTPException
 from urllib import error, request
 from urllib.parse import urlsplit
 
-from .config import ConfigError, load_dotenv
-from .execute.runner import USER_AGENT
+from qctool.config import ConfigError, load_dotenv
+from qctool.execute.runner import USER_AGENT
 
 def _reject_constant(value):
     raise ValueError("Non-finite JSON")

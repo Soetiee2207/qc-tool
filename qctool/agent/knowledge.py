@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import yaml
-from .tools import public
+from qctool.agent.tools import public
 
 
 class AppKnowledge:
@@ -30,7 +30,7 @@ class AppKnowledge:
             if set(step) != {'action', 'args'} or step['action'] not in {'ui.goto', 'ui.session', 'ui.click', 'ui.fill', 'ui.select'}:
                 raise ValueError('Macro contains an unsupported action')
             if step['action'] == 'ui.fill':
-                from ..test_fixtures import is_alias
+                from qctool.data.fixtures import is_alias
                 if not is_alias(step['args'].get('value')):
                     raise ValueError('Persistent fill macros require aliases, never resolved/literal secrets')
         self.data['macros'][name] = public(deepcopy(steps), self.store)

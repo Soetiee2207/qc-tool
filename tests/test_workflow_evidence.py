@@ -7,9 +7,9 @@ import threading
 
 import pytest
 
-from qctool.executability import analyze_executability
-from qctool.testcase import Step, StepKind, TestCase
-from qctool.test_fixtures import FixtureStore
+from qctool.core.executability import analyze_executability
+from qctool.core.testcase import Step, StepKind, TestCase
+from qctool.data.fixtures import FixtureStore
 from qctool.ui.crawl import Element, PageMap, UIMap
 from tests.fixture_samples import note
 

@@ -1,7 +1,7 @@
 """Focused tests for read-only executability diagnosis."""
 
-from qctool.executability import ExecutionGap, analyze_executability
-from qctool.testcase import Step, StepKind, TestCase
+from qctool.core.executability import ExecutionGap, analyze_executability
+from qctool.core.testcase import Step, StepKind, TestCase
 
 
 def _case(*steps: Step, **changes) -> TestCase:

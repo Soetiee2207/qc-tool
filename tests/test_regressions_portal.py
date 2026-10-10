@@ -35,7 +35,7 @@ from qctool.pipeline import (  # noqa: E402
     _resolve_base_url,
     run_pipeline,
 )
-from qctool.testcase import Step, StepKind, TestCase  # noqa: E402
+from qctool.core.testcase import Step, StepKind, TestCase  # noqa: E402
 from qctool.ui.crawl import Element, PageMap, UIMap  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent

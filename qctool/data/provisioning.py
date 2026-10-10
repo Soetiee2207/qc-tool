@@ -9,10 +9,10 @@ from enum import Enum
 import re
 from urllib.parse import urlsplit
 
-from .config import ConfigError
-from .test_fixtures import is_alias, FixtureUnavailable
-from .test_data_acquisition import DataStatus, _facts, _name, _SAFE_ID
-from .test_data_verification import (
+from qctool.config import ConfigError
+from qctool.data.fixtures import is_alias, FixtureUnavailable
+from qctool.data.acquisition import DataStatus, _facts, _name, _SAFE_ID
+from qctool.data.verification import (
     _Receipt, _stamp, _once, parse_verification_rules, MAX_TIMEOUT_SECONDS,
 )
 

@@ -8,12 +8,12 @@ import pytest
 
 from qctool.config import ConfigError
 from qctool.generate.loader import load_endpoints
-from qctool.test_data_acquisition import acquire_test_data, DataRequirement, DataStatus
-from qctool.test_data_verification import (
+from qctool.data.acquisition import acquire_test_data, DataRequirement, DataStatus
+from qctool.data.verification import (
     verify_test_data, VerificationStatus as Status, VerificationResult,
     MAX_VERIFICATION_CALLS, _once,
 )
-from tests.test_test_data_acquisition import inputs, need, FACTS
+from tests.test_data_acquisition import inputs, need, FACTS
 
 BASE = 'https://verification.example.test'
 
@@ -193,7 +193,7 @@ def test_receipt_cannot_transfer_to_another_case_or_fixture_store():
     ('009', {'account_exists': True, 'account_state': 'locked'}, {'account_exists': True}, DataStatus.MISSING_TEST_DATA),
 ])
 def test_regression_login_roles_offline_without_id_specific_rules(index, required, proof, expected_status):
-    from qctool.test_fixtures import FixtureStore
+    from qctool.data.fixtures import FixtureStore
     fixture = {'007':'active_user', '008':'invalid_user', '009':'locked_user'}[index]
     aliases = (fixture+'.email', fixture+'.password')
     requirement = DataRequirement(fixture, aliases, required)
@@ -240,7 +240,7 @@ def test_real_transport_one_send_no_retry_and_does_not_export_raw_payload(monkey
 
 
 def test_readonly_is_preferred_and_duplicate_implications_do_not_amplify_calls():
-    from qctool.test_fixtures import FixtureStore
+    from qctool.data.fixtures import FixtureStore
     login = rule()
     readonly = rule()
     readonly.update(operation_id='fixtureState', body_aliases={})
@@ -264,7 +264,7 @@ def test_readonly_is_preferred_and_duplicate_implications_do_not_amplify_calls()
 
 
 def test_partial_fact_proof_can_be_combined_from_two_exact_operations():
-    from qctool.test_fixtures import FixtureStore
+    from qctool.data.fixtures import FixtureStore
     login = rule({'account_exists': True, 'password_valid': True})
     state = rule({'account_state': 'active', 'role': 'customer'})
     state.update(operation_id='fixtureState', body_aliases={}, expected={'status': 200, 'json': {'$.role':'customer', '$.account_state':'active'}})

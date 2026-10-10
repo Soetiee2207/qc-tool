@@ -17,9 +17,9 @@ from pathlib import Path
 
 import yaml
 
-from . import __version__, config, execute, generate, ingest, render, report
-from .pipeline import PipelineConfig, run_pipeline
-from .testcase import Step, StepKind, TestCase
+from qctool import __version__, config, execute, generate, ingest, render, report
+from qctool.pipeline import PipelineConfig, run_pipeline
+from qctool.core.testcase import Step, StepKind, TestCase
 
 
 def cmd_ingest(args: argparse.Namespace) -> int:
@@ -80,7 +80,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace) -> int:
     """Primary project run, with compatible execution of existing testcase YAML."""
-    from .cli_run import cmd_project
+    from qctool.cli_run import cmd_project
     if not args.testcases:
         return cmd_project(args)
     if any(getattr(args, key, None) is not None for key in
@@ -194,7 +194,7 @@ def _open_browser(web_url: str, args: argparse.Namespace, cases_path: Path):
     Đăng nhập hỏng **không** làm mất trình duyệt: case UI không cần xác thực vẫn
     chạy bình thường, còn case cần xác thực sẽ báo `Blocked` như đúng nghĩa của nó.
     """
-    from .execute.browser import BrowserSession
+    from qctool.execute.browser import BrowserSession
 
     state_path = cases_path.parent / ".auth-state.json"
     evidence_dir = None if args.evidence == "off" else cases_path.parent / "evidence"
@@ -285,7 +285,7 @@ def _load_cases(path: Path) -> list[TestCase]:
 
 
 def cmd_crawl(args: argparse.Namespace) -> int:
-    from .ui import crawl as _crawl
+    from qctool.ui import crawl as _crawl
 
     url = args.url.rstrip("/")
     print(f"Đang dò element trên {url} …")
@@ -395,7 +395,7 @@ def _default_auth_mode(args: argparse.Namespace, env) -> str:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    from .web import serve
+    from qctool.web import serve
     serve(port=args.port, host=args.host, open_browser=not args.no_browser)
     return 0
 
@@ -534,7 +534,7 @@ def _project_flags(parser):
 
 
 def cmd_preflight(args):
-    from .cli_run import cmd_project
+    from qctool.cli_run import cmd_project
     return cmd_project(args, validate_only=True)
 
 

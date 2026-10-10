@@ -7,10 +7,10 @@ import re
 from threading import Lock
 from urllib.parse import urljoin, urlsplit
 
-from .test_fixtures import REGISTRY, is_alias
-from .testcase import ACTION_SPECS, Step
-from .ui.crawl import _norm
-from .ui.explore import _redact
+from qctool.data.fixtures import REGISTRY, is_alias
+from qctool.core.testcase import ACTION_SPECS, Step
+from qctool.ui.crawl import _norm
+from qctool.ui.explore import _redact
 
 ALLOWED_ACTIONS = frozenset({'ui.fill', 'ui.select', 'ui.click', 'ui.goto'})
 SAFE_BUTTONS = frozenset({'login', 'sign in', 'dang nhap', 'đăng nhập', 'validate', 'check', 'search', 'filter', 'preview'})
@@ -31,7 +31,7 @@ def high_risk(value):
 def mutation_policy(config=None, *, fixture_store=None):
     """Strict public, non-secret permissions; disabled unless explicitly enabled."""
     from copy import deepcopy
-    from .response_capture import validate_capture
+    from qctool.data.capture import validate_capture
     if config is None:
         return {}
     if not isinstance(config, dict) or set(config) - {'enabled', 'environment', 'allowed_environment', 'application_origin', 'rules'}:
@@ -121,7 +121,7 @@ def mutation_permission(policy, *, page, target, destination, requirement_ids, b
     from urllib.parse import urljoin
     def _normalized_target(value, base):
         return urljoin(base.rstrip("/") + "/", value) if isinstance(value, str) else None
-    from .response_capture import origin_of
+    from qctool.data.capture import origin_of
     policy = mutation_policy(policy)
     if not policy or origin_of(base_url) != policy['application_origin']:
         return None

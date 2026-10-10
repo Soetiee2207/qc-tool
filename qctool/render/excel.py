@@ -17,7 +17,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from ..testcase import TestCase
+from qctool.core.testcase import TestCase
 
 # (tên cột, bề rộng, có phải cột runtime không)
 COLUMNS = [

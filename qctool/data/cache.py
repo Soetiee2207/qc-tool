@@ -14,7 +14,7 @@ import secrets
 import time
 from enum import Enum
 
-from .config import ConfigError
+from qctool.config import ConfigError
 
 _KEY = secrets.token_bytes(32)
 _SEAL = object()
@@ -69,8 +69,8 @@ class PreparationCache:
         self._entries = {}
 
     def _remember(self, identity, result, store, endpoints):
-        from .test_data_preparation import PreparationStatus
-        from .test_data_provisioning import ProvisioningStatus
+        from qctool.data.preparation import PreparationStatus
+        from qctool.data.provisioning import ProvisioningStatus
         # Retain authenticated creation history even when subsequent verification
         # fails. It is not available proof and must not trigger another creation.
         created = result.provisioning and result.provisioning.status == ProvisioningStatus.PROVISIONED
@@ -84,9 +84,9 @@ class PreparationCache:
     @staticmethod
     def _authenticate(result, store, endpoints):
         # Authentication only: expired facts are never acquired through this path.
-        from .test_data_acquisition import DataAcquisitionResult
-        from .test_data_verification import VerificationResult
-        from .test_data_provisioning import ProvisioningResult, ProvisioningStatus
+        from qctool.data.acquisition import DataAcquisitionResult
+        from qctool.data.verification import VerificationResult
+        from qctool.data.provisioning import ProvisioningResult, ProvisioningStatus
         if not isinstance(result.initial, DataAcquisitionResult):
             raise ConfigError('Preparation history has no authentic acquisition')
         if result.verification is not None and not isinstance(result.verification, VerificationResult):
@@ -101,9 +101,9 @@ class PreparationCache:
             result.provisioning.evidence_for(result.initial.case, store, endpoints)
 
     def _reuse(self, identity, acquisition, store, endpoints, **kwargs):
-        from .test_data_verification import _Receipt, VerificationResult
-        from .test_data_provisioning import ProvisioningResult
-        from .test_data_preparation import PreparationStage, TestDataPreparationResult
+        from qctool.data.verification import _Receipt, VerificationResult
+        from qctool.data.provisioning import ProvisioningResult
+        from qctool.data.preparation import PreparationStage, TestDataPreparationResult
         entry = self._entries.get(identity)
         if entry is None:
             return None
@@ -133,7 +133,7 @@ class PreparationCache:
             receipt = _Receipt(case, store, (observation,))
             receipt.provisioning_contract = deepcopy(previous.provisioning._receipt.provisioning_contract)
             provisioning = ProvisioningResult(observation, receipt)
-        from .test_data_preparation import _prepare_test_data
+        from qctool.data.preparation import _prepare_test_data
         options = dict(kwargs, fixture_store=store, endpoints=endpoints)
         if provisioning:
             options['provisioning_receipt'] = provisioning

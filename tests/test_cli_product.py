@@ -9,7 +9,7 @@ import yaml
 from qctool.cli import main, build_parser
 from qctool.cli_run import build_summary
 import qctool.pipeline as pipeline
-from qctool.test_fixtures import FixtureStore
+from qctool.data.fixtures import FixtureStore
 from qctool.ui.crawl import UIMap, PageMap
 from tests.test_pipeline_generation import setup, route_case, sources, BASE
 

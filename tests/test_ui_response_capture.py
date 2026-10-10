@@ -10,8 +10,8 @@ import pytest
 
 from qctool.execute.browser import BrowserSession, ResponseCaptureError
 from qctool.execute.runner import HttpSession, run_case
-from qctool.executability import analyze_executability
-from qctool.testcase import Step, StepKind, TestCase, ValidationError
+from qctool.core.executability import analyze_executability
+from qctool.core.testcase import Step, StepKind, TestCase, ValidationError
 from tests.test_fixture_facts import GIVEN
 from tests.fixture_samples import BASE, HAPPY
 

@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .markdown import _cells, _strip_md
+from qctool.ingest.markdown import _cells, _strip_md
 
 # ── Mẫu nhận dạng ────────────────────────────────────────────────────────────
 RE_MERMAID_OPEN = re.compile(r"^\s*```\s*mermaid\s*$")

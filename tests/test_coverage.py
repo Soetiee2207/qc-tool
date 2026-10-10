@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from qctool.coverage import CoverageStatus as Status, analyze_coverage
+from qctool.core.coverage import CoverageStatus as Status, analyze_coverage
 from qctool.generate.from_openapi import IdAllocator
-from qctool.model import Requirement, SourceRef
-from qctool.testcase import CaseType, Step, StepKind, TestCase as Case
+from qctool.core.model import Requirement, SourceRef
+from qctool.core.testcase import CaseType, Step, StepKind, TestCase as Case
 
 
 def ac(id="AC-1", **overrides):

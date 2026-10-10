@@ -16,9 +16,9 @@ import re
 import time
 from urllib.parse import urlsplit
 
-from .config import ConfigError
-from .test_fixtures import is_alias, FixtureUnavailable
-from .test_data_acquisition import _facts, _name, _SAFE_ID
+from qctool.config import ConfigError
+from qctool.data.fixtures import is_alias, FixtureUnavailable
+from qctool.data.acquisition import _facts, _name, _SAFE_ID
 
 MAX_VERIFICATION_CALLS = 3
 MAX_RESPONSE_BYTES = 65536
@@ -157,7 +157,7 @@ def _once(method, url, body, timeout):
     Unlike executor HttpSession, this deliberately never retries a stale socket.
     Headers, cookies and raw response content never escape this transport.
     """
-    from .execute.runner import USER_AGENT
+    from qctool.execute.runner import USER_AGENT
     parts = urlsplit(url)
     cls = http.client.HTTPSConnection if parts.scheme == 'https' else http.client.HTTPConnection
     conn = cls(parts.hostname, parts.port, timeout=timeout)

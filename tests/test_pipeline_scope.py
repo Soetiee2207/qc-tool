@@ -6,7 +6,7 @@ from qctool.cli import main
 from qctool.cli_run import preflight, build_summary
 from qctool.cli import build_parser
 from qctool.execute.runner import run_cases, HttpSession
-from qctool.testcase import TestCase, Step, StepKind
+from qctool.core.testcase import TestCase, Step, StepKind
 from tests.test_pipeline_generation import setup, route_case, BASE
 import qctool.pipeline as pipeline
 

@@ -23,7 +23,7 @@ from qctool.execute import (  # noqa: E402
 )
 from qctool.report import build_markdown  # noqa: E402
 from qctool.execute.runner import RunResult  # noqa: E402
-from qctool.testcase import Step, StepKind, TestCase  # noqa: E402
+from qctool.core.testcase import Step, StepKind, TestCase  # noqa: E402
 
 
 class FakeEvidence:

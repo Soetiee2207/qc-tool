@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
-from ..execute.browser import BrowserSession
-from .crawl import (
+from qctool.execute.browser import BrowserSession
+from qctool.ui.crawl import (
     INTERACTIVE, Element, PageMap, _has_attr, _is_checked, _is_disabled,
     _slug, _test_id, _wait_for_render,
 )
@@ -41,7 +41,7 @@ class ExplorationAction:
     url: str | None = None
 
     def to_dict(self):
-        from ..test_fixtures import is_alias
+        from qctool.data.fixtures import is_alias
         result = {"action": self.action, "target": self.target, "step_seq": self.step_seq}
         if self.action == 'ui.goto':
             result.pop('target')
@@ -267,7 +267,7 @@ def explore_page(request: ExplorationRequest, *, base_url: str,
     Raw or obsolete authority wrappers cannot authorize interaction. Same-origin
     and background/write interception are shared with the agent SafetyPolicy.
     """
-    from ..agent.safety import SafetyPolicy
+    from qctool.agent.safety import SafetyPolicy
     observed = datetime.now(timezone(timedelta(hours=7))).isoformat()
     issues, flags, network = [], set(), []
     final, page_map, forms, redirect = None, None, (), None

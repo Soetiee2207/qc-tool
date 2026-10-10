@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from ..testcase import (
+from qctool.core.testcase import (
     PERF_DEFAULT_PERCENTILE,
     PERF_SAMPLES,
     CaseType,

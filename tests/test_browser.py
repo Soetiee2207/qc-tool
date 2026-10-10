@@ -38,7 +38,7 @@ from qctool.execute.runner import (  # noqa: E402
     run_case,
 )
 from qctool.execute import UI_VERBS  # noqa: E402
-from qctool.testcase import Step, StepKind, TestCase  # noqa: E402
+from qctool.core.testcase import Step, StepKind, TestCase  # noqa: E402
 from tests.mock_server import create_server  # noqa: E402
 
 pytestmark = pytest.mark.playwright

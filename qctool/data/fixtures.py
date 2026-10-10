@@ -5,7 +5,7 @@ import json
 import re
 from urllib.parse import quote
 
-from .config import ConfigError
+from qctool.config import ConfigError
 
 _ALIAS = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
 REGISTRY = "_fixture_refs"
@@ -77,7 +77,7 @@ class FixtureStore:
                 for key, alias in mapping.items()
             ):
                 raise ConfigError("Fixture bindings must map source IDs to test-data keys and aliases")
-        from .test_data_acquisition import validate_acquisition_config
+        from qctool.data.acquisition import validate_acquisition_config
         self.acquisition_config = validate_acquisition_config(acquisition or {})
         if self.redact(self.acquisition_config) != self.acquisition_config:
             raise ConfigError('Acquisition metadata must not contain fixture secrets')

@@ -7,11 +7,11 @@ from pathlib import Path
 import pytest
 
 from qctool.config import ConfigError
-from qctool.executability import analyze_executability
+from qctool.core.executability import analyze_executability
 from qctool.generate.loader import load_endpoints
-from qctool.test_data_acquisition import DATA_REQUIREMENTS, DataRequirement, DataStatus, acquire_test_data
-from qctool.test_fixtures import FixtureStore, load_fixture_store
-from qctool.testcase import TestCase, Step, StepKind
+from qctool.data.acquisition import DATA_REQUIREMENTS, DataRequirement, DataStatus, acquire_test_data
+from qctool.data.fixtures import FixtureStore, load_fixture_store
+from qctool.core.testcase import TestCase, Step, StepKind
 
 FACTS={'account_exists':True,'role':'customer','account_state':'active','password_valid':True}
 GIVENS=[

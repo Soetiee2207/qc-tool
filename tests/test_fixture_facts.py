@@ -6,9 +6,9 @@ import json
 import pytest
 
 from qctool.config import ConfigError
-from qctool.executability import analyze_executability
-from qctool.test_fixtures import FACT_REGISTRY, FixtureStore, load_fixture_store
-from qctool.testcase import Step, StepKind
+from qctool.core.executability import analyze_executability
+from qctool.data.fixtures import FACT_REGISTRY, FixtureStore, load_fixture_store
+from qctool.core.testcase import Step, StepKind
 from tests.fixture_samples import BASE, ACTION, HAPPY
 
 GIVEN = ('Phiên anonymous ở /login; tài khoản customer đang hoạt động '

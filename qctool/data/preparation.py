@@ -7,16 +7,16 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 
-from .config import ConfigError
-from .test_data_acquisition import (
+from qctool.config import ConfigError
+from qctool.data.acquisition import (
     DataAcquisitionResult, DataStatus, acquire_test_data, has_test_data_requirements,
 )
-from .test_data_verification import (
+from qctool.data.verification import (
     VerificationResult, VerificationStatus, parse_verification_rules,
     validate_verification_rule, verify_test_data,
 )
-from .testcase import TestCase
-from .test_data_provisioning import ProvisioningResult, ProvisioningStatus, provision_test_data
+from qctool.core.testcase import TestCase
+from qctool.data.provisioning import ProvisioningResult, ProvisioningStatus, provision_test_data
 
 
 class PreparationStatus(str, Enum):
@@ -304,7 +304,7 @@ def _prepare_test_data(case, *, fixture_store=None, endpoints=(), base_url=None,
 
 def prepare_test_data(case, *, preparation_cache=None, **kwargs):
     """Prepare once or reuse exact authenticated data proof within a run."""
-    from .preparation_cache import PreparationCache, preparation_identity
+    from qctool.data.cache import PreparationCache, preparation_identity
     if preparation_cache is None:
         return _prepare_test_data(case, **kwargs)
     if not isinstance(preparation_cache, PreparationCache):

@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from qctool.generate import IdAllocator, generate_all  # noqa: E402
 from qctool.generate.loader import SpecError, load_endpoints, resolve_ref  # noqa: E402
 from qctool.generate.from_openapi import generate_for_endpoint  # noqa: E402
-from qctool.testcase import (  # noqa: E402
+from qctool.core.testcase import (  # noqa: E402
     ACTION_VERBS,
     CaseType,
     Priority,
@@ -24,7 +24,7 @@ from qctool.testcase import (  # noqa: E402
     TestCase,
     ValidationError,
 )
-from qctool.validate import validate_batch  # noqa: E402
+from qctool.core.validate import validate_batch  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SAMPLE_SPEC = Path(__file__).resolve().parent.parent / "samples" / "openapi" / "task-manager-sample.yaml"
@@ -415,7 +415,7 @@ def test_422_case_with_body_still_sends_bad_body():
 
 def test_describe_has_no_internal_vocabulary():
     """Cột Test Steps không được lộ `perform.unmapped:` — người QC đọc cột đó."""
-    from qctool.testcase import Step, StepKind
+    from qctool.core.testcase import Step, StepKind
 
     step = Step(1, StepKind.WHEN, "perform.unmapped",
                 {"description": "Bấm Sign in", "expectation": "Redirect IdP"})
@@ -439,7 +439,7 @@ def test_slug_keeps_words_separated():
 
 def test_unmapped_text_gets_no_internal_vocabulary():
     """Cột Test Steps không lộ `perform.unmapped:` — người QC đọc cột đó."""
-    from qctool.testcase import Step
+    from qctool.core.testcase import Step
 
     for action, args, expect in (
         ("perform.unmapped", {"description": "Bấm Sign in", "expectation": "Redirect"},

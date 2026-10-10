@@ -6,14 +6,14 @@ import json
 import pytest
 
 from qctool.config import ConfigError
-from qctool.test_fixtures import FixtureStore
-from qctool.test_data_acquisition import acquire_test_data, DataStatus
-from qctool.test_data_preparation import prepare_test_data, PreparationStatus
-from qctool.test_data_provisioning import (
+from qctool.data.fixtures import FixtureStore
+from qctool.data.acquisition import acquire_test_data, DataStatus
+from qctool.data.preparation import prepare_test_data, PreparationStatus
+from qctool.data.provisioning import (
     provision_test_data, ProvisioningStatus, ProvisioningResult, ProvisioningObservation,
 )
-from tests.test_test_data_verification import setup as verification_setup, rule as verification_rule, BASE
-from tests.test_test_data_acquisition import FACTS
+from tests.test_data_verification import setup as verification_setup, rule as verification_rule, BASE
+from tests.test_data_acquisition import FACTS
 from tests.test_generation import executable_case
 
 
@@ -271,7 +271,7 @@ def test_timeout_is_bounded_and_never_provisions_with_unbounded_setting():
 
 
 def test_conflicting_required_facts_do_not_mutate():
-    from qctool.test_data_acquisition import DataRequirement
+    from qctool.data.acquisition import DataRequirement
     case,store,login,create,_=setup()
     store.acquisition_config['provisioning'].append({'fixture':'active_user','operation_id':'createCustomer',
                                                    'provides':{'account_state':'locked'},'external_interaction':False})

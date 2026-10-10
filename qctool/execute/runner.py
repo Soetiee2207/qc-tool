@@ -22,9 +22,9 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from ..testcase import TestCase
-from ..test_fixtures import FixtureStore, FixtureUnavailable, REGISTRY, is_alias
-from .browser import NeedsEnvironment, NeedsLogin
+from qctool.core.testcase import TestCase
+from qctool.data.fixtures import FixtureStore, FixtureUnavailable, REGISTRY, is_alias
+from qctool.execute.browser import NeedsEnvironment, NeedsLogin
 
 # User-Agent tự khai tên tool. KHÔNG để mặc định của thư viện chuẩn.
 #
@@ -527,7 +527,7 @@ def _run_once(case: TestCase, session: HttpSession,
             try:
                 if step.action in UI_VERBS:
                     if step.action == "ui.click" and "capture_response" in step.args:
-                        from .browser import ResponseCaptureError
+                        from qctool.execute.browser import ResponseCaptureError
                         if browser is None:
                             raise ResponseCaptureError("UI_RESPONSE_CAPTURE_FAILED")
                         capture = step.args["capture_response"]
@@ -537,7 +537,7 @@ def _run_once(case: TestCase, session: HttpSession,
                         ok, detail = True, f"Captured {capture['method']} {capture['path']} → HTTP {response['status']} (trigger step {step.seq})"
                     elif step.action == "ui.click" and "capture_requests" in step.args:
                         if browser is None:
-                            from .browser import ResponseCaptureError
+                            from qctool.execute.browser import ResponseCaptureError
                             raise ResponseCaptureError("UI_REQUEST_OBSERVATION_FAILED")
                         capture = step.args["capture_requests"]
                         key = capture.get("save_as", "res")

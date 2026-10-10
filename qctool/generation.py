@@ -4,17 +4,17 @@ from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
 
-from .coverage import CoverageStatus, analyze_coverage
-from .executability import analyze_executability
-from .model import Requirement
-from .testcase import TestCase
-from .validate import validate_batch
-from .llm_provider import LLMProviderError, capture_provider_attempts
-from .agent.gate import source_routes
-from .agent.loop import AgentBudget, AuthoringResult, author_intent, manual_case, design_intents
-from .agent.tools import AgentTools, public
-from .agent.safety import SafetyPolicy
-from .agent.knowledge import AppKnowledge
+from qctool.core.coverage import CoverageStatus, analyze_coverage
+from qctool.core.executability import analyze_executability
+from qctool.core.model import Requirement
+from qctool.core.testcase import TestCase
+from qctool.core.validate import validate_batch
+from qctool.agent.llm_provider import LLMProviderError, capture_provider_attempts
+from qctool.agent.gate import source_routes
+from qctool.agent.loop import AgentBudget, AuthoringResult, author_intent, manual_case, design_intents
+from qctool.agent.tools import AgentTools, public
+from qctool.agent.safety import SafetyPolicy
+from qctool.agent.knowledge import AppKnowledge
 
 
 class GenerationStatus(str, Enum):
@@ -94,9 +94,9 @@ def run_generation(requirements, existing_cases=(), *, flows=None, endpoints=Non
     equivalence; weak oracles run as needs_review without claiming success.
     Provisioning is still reviewed and OFF by default. Knowledge is public hints.
     """
-    from .generate.from_openapi import IdAllocator
-    from .test_data_preparation import prepare_test_data
-    from .preparation_cache import PreparationCache
+    from qctool.generate.from_openapi import IdAllocator
+    from qctool.data.preparation import prepare_test_data
+    from qctool.data.cache import PreparationCache
     if isinstance(requirements, dict):
         flows = flows if flows is not None else requirements.get('flows')
         requirements = requirements.get('requirements', [])

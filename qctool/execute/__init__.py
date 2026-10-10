@@ -1,6 +1,6 @@
 """Chặng 3 — Execute."""
 
-from .runner import (
+from qctool.execute.runner import (
     STATUS_BLOCKED,
     STATUS_FAIL,
     STATUS_NOT_EXECUTED,

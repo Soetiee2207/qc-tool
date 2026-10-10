@@ -11,8 +11,8 @@ from pathlib import Path
 
 import yaml
 
-from ..testcase import Priority
-from .from_openapi import Endpoint
+from qctool.core.testcase import Priority
+from qctool.generate.from_openapi import Endpoint
 
 METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
 _SKIP_KEYS = {"parameters", "summary", "description", "$ref"}

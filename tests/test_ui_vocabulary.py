@@ -20,7 +20,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from qctool.execute.runner import UI_ASSERT_VERBS, UI_VERBS  # noqa: E402
-from qctool.testcase import (  # noqa: E402
+from qctool.core.testcase import (  # noqa: E402
     ACTION_SPECS,
     Step,
     StepKind,
@@ -28,7 +28,7 @@ from qctool.testcase import (  # noqa: E402
     ValidationError,
 )
 from qctool.ui.crawl import Element, PageMap, UIMap  # noqa: E402
-from qctool.validate import validate_batch  # noqa: E402
+from qctool.core.validate import validate_batch  # noqa: E402
 
 
 @pytest.fixture

@@ -17,7 +17,7 @@ import hashlib
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-from .testcase import TestCase, ValidationError
+from qctool.core.testcase import TestCase, ValidationError
 
 
 @dataclass

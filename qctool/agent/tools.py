@@ -4,11 +4,11 @@ import json
 import re
 from urllib.parse import urlsplit, urlunsplit
 
-from ..execute.browser import BrowserSession
-from ..execute.runner import _run_ui_step, _run_step, HttpSession
-from ..test_fixtures import is_alias
-from .gate import draft_case, check_case
-from .safety import SafetyError
+from qctool.execute.browser import BrowserSession
+from qctool.execute.runner import _run_ui_step, _run_step, HttpSession
+from qctool.data.fixtures import is_alias
+from qctool.agent.gate import draft_case, check_case
+from qctool.agent.safety import SafetyError
 
 
 def public(value, store=None):
@@ -35,7 +35,7 @@ def locator(page, args):
     # Exact uniqueness on LIVE DOM; never .first() or name fallback from a testid.
     result = page.get_by_test_id(args['target'])
     if result.count() == 0:
-        from ..execute.browser import _looks_like_test_id
+        from qctool.execute.browser import _looks_like_test_id
         if args.get('role') and (args.get('by_name', args['target']) == args['target'] or not _looks_like_test_id(args['target'])):
             # ASCII accessible names (e.g. Email) are not automatically test IDs.
             result = page.get_by_role(args['role'], name=args.get('by_name', args['target']), exact=True)
@@ -113,7 +113,7 @@ class AgentTools:
                 raise SafetyError('Control is not currently visible/enabled')
             tag = element.evaluate('e => e.tagName.toLowerCase()')
             name = element.inner_text() if tag not in {'input', 'textarea'} else element.get_attribute('aria-label') or ''
-            from ..exploration_actions import high_risk, DANGEROUS
+            from qctool.agent.exploration_actions import high_risk, DANGEROUS
             if high_risk(name):
                 raise SafetyError('Destructive/admin/payment control is forbidden')
             if action == 'ui.click' and DANGEROUS.search(name) and not self.policy.mutation:

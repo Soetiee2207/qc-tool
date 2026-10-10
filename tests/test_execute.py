@@ -24,7 +24,7 @@ from qctool.execute import (  # noqa: E402
 )
 from qctool.generate import IdAllocator, generate_all  # noqa: E402
 from qctool.report import build_markdown, write_csv, write_json, write_junit  # noqa: E402
-from qctool.testcase import Step, StepKind, TestCase  # noqa: E402
+from qctool.core.testcase import Step, StepKind, TestCase  # noqa: E402
 from tests.mock_server import create_server  # noqa: E402
 
 SAMPLE_SPEC = Path(__file__).resolve().parent.parent / "samples" / "openapi" / "task-manager-sample.yaml"

@@ -19,8 +19,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .. import config as cfg_mod
-from ..pipeline import PipelineConfig, run_pipeline
+from qctool import config as cfg_mod
+from qctool.pipeline import PipelineConfig, run_pipeline
 
 MAX_BODY = 2 * 1024 * 1024
 

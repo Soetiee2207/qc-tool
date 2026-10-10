@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
-from ..response_capture import origin_of, validate_capture, matches_request
+from qctool.data.capture import origin_of, validate_capture, matches_request
 
 DEFAULT_VIEWPORT = {"width": 1440, "height": 900}
 
@@ -816,7 +816,7 @@ class BrowserSession:
         SPA phải chạy JS và gọi API lấy phiên rồi mới render menu. Chờ mạng lắng
         xuống trước, nếu không sẽ lúc được lúc không tuỳ tốc độ mạng.
         """
-        from ..ui.crawl import INTERACTIVE
+        from qctool.ui.crawl import INTERACTIVE
 
         with contextlib.suppress(Exception):
             self.page.wait_for_load_state("networkidle", timeout=min(max_wait_ms, 7000))

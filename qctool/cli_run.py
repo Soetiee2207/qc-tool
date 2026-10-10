@@ -14,10 +14,10 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from . import config, ingest, pipeline
-from .coverage import CoverageStatus
-from .executability import analyze_executability
-from .generate.loader import load_endpoints
+from qctool import config, ingest, pipeline
+from qctool.core.coverage import CoverageStatus
+from qctool.core.executability import analyze_executability
+from qctool.generate.loader import load_endpoints
 
 
 class PreflightError(ValueError):

@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from ..execute.runner import (
+from qctool.execute.runner import (
     STATUS_BLOCKED,
     STATUS_FAIL,
     STATUS_NOT_EXECUTED,

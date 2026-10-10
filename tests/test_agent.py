@@ -10,7 +10,7 @@ from qctool.agent.safety import SafetyPolicy, SafetyError
 from qctool.agent.tools import AgentTools
 from qctool.agent.loop import author_intent, AgentBudget
 from qctool.agent.knowledge import AppKnowledge
-from qctool.testcase import ACTION_SPECS
+from qctool.core.testcase import ACTION_SPECS
 from qctool.generation import run_generation
 
 INTENT = {'id':'AC-1:then','req_id':'AC-1','given':'anonymous','when':'Open /a','expected':'URL /a','title':'Open A'}
@@ -133,7 +133,7 @@ def test_no_llm_stays_manual_and_immutable():
 
 
 def test_knowledge_no_auth_or_raw_secrets(tmp_path):
-    from qctool.test_fixtures import FixtureStore
+    from qctool.data.fixtures import FixtureStore
     store=FixtureStore({'user':{'password':{'env':'PW'}}},environ={'PW':'SECRET_PASSWORD'})
     kb=AppKnowledge(tmp_path/'app-model.yaml','http://app.test',store=store)
     kb.observe({'url':'http://app.test/a','aria':'SECRET_PASSWORD','stable_locators':[]})
@@ -167,7 +167,7 @@ def test_stable_prefix_and_step_order():
 
 
 def test_fixture_alias_requires_current_source_binding():
-    from qctool.test_fixtures import FixtureStore
+    from qctool.data.fixtures import FixtureStore
     store=FixtureStore({'user':{'password':{'env':'PW'}}},bindings={'OTHER':{'password':'user.password'}},environ={'PW':'SECRET'})
     policy=SafetyPolicy('http://app.test',fixture_store=store,req_ids=['AC-1'])
     with pytest.raises(SafetyError):policy.value('user.password','source')
@@ -242,14 +242,14 @@ def test_invented_stable_id_cannot_fall_back_to_an_unrelated_name():
 
 
 def test_empty_expected_value_is_a_valid_oracle_not_missing():
-    from qctool.testcase import Step, StepKind, ValidationError
+    from qctool.core.testcase import Step, StepKind, ValidationError
     Step(1, StepKind.THEN, 'assert.value', {'target': 'email', 'expected': ''}).validate()
     with pytest.raises(ValidationError):
         Step(1, StepKind.THEN, 'assert.value', {'target': '', 'expected': 'x'}).validate()
 
 
 def test_capture_error_explains_shape():
-    from qctool.testcase import Step, StepKind, ValidationError
+    from qctool.core.testcase import Step, StepKind, ValidationError
     with pytest.raises(ValidationError) as err:
         Step(1, StepKind.WHEN, 'ui.click', {'target': 'b', 'capture_response': {'method': 'POST', 'path': '/x'}}).validate()
     assert 'method/path/origin' in str(err.value) and 'origin' in str(err.value)
@@ -262,8 +262,8 @@ def test_protocol_documents_capture_contract():
 
 
 def test_empty_expected_value_is_executable():
-    from qctool.executability import analyze_executability
-    from qctool.testcase import Step, StepKind, TestCase
+    from qctool.core.executability import analyze_executability
+    from qctool.core.testcase import Step, StepKind, TestCase
     c = TestCase('TC_E_001', 'E', 'Empty', 'Email trống', traces_to=['AC-1'], source_quote='Email trống',
                  steps=[Step(1, StepKind.THEN, 'assert.value', {'target': 'email', 'expected': ''})])
     assert not [g for g in analyze_executability(c).gaps if g.code == 'MISSING_ARGUMENT']
@@ -314,7 +314,7 @@ def test_url_oracle_must_be_a_path_regex_not_prose():
 
 
 def test_operator_contract_matches_browser():
-    from qctool.testcase import Step, StepKind, ValidationError, allowed_operators
+    from qctool.core.testcase import Step, StepKind, ValidationError, allowed_operators
     # browser.text/value run contains/eq/matches via expect(); validator must agree.
     for action in ('assert.text', 'assert.value'):
         assert allowed_operators(action) == {'eq', 'contains', 'matches'}

@@ -5,8 +5,8 @@ import json
 import re
 from urllib.parse import urlsplit
 
-from ..executability import analyze_executability
-from ..testcase import ACTION_SPECS, Step, StepKind, TestCase
+from qctool.core.executability import analyze_executability
+from qctool.core.testcase import ACTION_SPECS, Step, StepKind, TestCase
 
 
 def source_routes(intent):

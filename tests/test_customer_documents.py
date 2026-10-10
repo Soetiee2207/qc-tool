@@ -3,10 +3,10 @@ from pathlib import Path
 
 import yaml
 
-from qctool.coverage import analyze_coverage
+from qctool.core.coverage import analyze_coverage
 from qctool.generate.loader import load_endpoints
 from qctool.ingest import ingest_feature
-from qctool.test_fixtures import FixtureStore
+from qctool.data.fixtures import FixtureStore
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / 'samples/customer'

@@ -3,11 +3,11 @@ import json
 from unittest.mock import MagicMock,Mock
 from urllib.error import URLError
 import pytest
-from qctool.llm_provider import OpenAICompatibleLLM,LLMProviderError,capture_provider_attempts
+from qctool.agent.llm_provider import OpenAICompatibleLLM,LLMProviderError,capture_provider_attempts
 
 
 def http(monkeypatch,payload):
-    import qctool.llm_provider as p
+    import qctool.agent.llm_provider as p
     response=MagicMock();response.status=200;response.__enter__.return_value=response
     response.read.return_value=json.dumps(payload).encode()
     opener=Mock();opener.open.return_value=response
@@ -31,7 +31,7 @@ def test_tool_envelope_without_content_and_usage(monkeypatch):
 
 def test_chat_retries_transient_timeout_exactly_once(monkeypatch):
     # One slow reply must not discard a whole authoring session; never more than one retry.
-    import qctool.llm_provider as p
+    import qctool.agent.llm_provider as p
     opener=Mock();opener.open.side_effect=URLError(TimeoutError('SECRET'))
     monkeypatch.setattr(p.request,'build_opener',lambda *_:opener)
     with capture_provider_attempts() as records, pytest.raises(LLMProviderError):

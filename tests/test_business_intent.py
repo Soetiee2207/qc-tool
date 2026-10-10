@@ -5,8 +5,8 @@ import json
 import pytest
 import yaml
 
-from qctool.coverage import analyze_coverage
-from qctool.executability import analyze_executability
+from qctool.core.coverage import analyze_coverage
+from qctool.core.executability import analyze_executability
 from qctool.generate.from_openapi import IdAllocator
 from qctool.pipeline import PipelineConfig, run_pipeline
 from qctool.ui.crawl import Element, PageMap, UIMap

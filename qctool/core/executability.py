@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .execute.runner import UI_VERBS
-from .test_fixtures import fixture_gaps
-from .testcase import ACTION_SPECS, TestCase, ValidationError
+from qctool.execute.runner import UI_VERBS
+from qctool.data.fixtures import fixture_gaps
+from qctool.core.testcase import ACTION_SPECS, TestCase, ValidationError
 
 
 @dataclass(frozen=True)
@@ -122,7 +122,7 @@ def analyze_executability(case: TestCase, *, context=None) -> ExecutabilityRepor
             saved_responses.add(args.get("save_as", "res"))
         if action == "ui.click" and "capture_requests" in args and len(gaps) == before:
             try:
-                from .response_capture import validate_capture
+                from qctool.data.capture import validate_capture
                 validate_capture(args["capture_requests"])
             except (ValueError, TypeError):
                 gaps.append(ExecutionGap("INVALID_ARGUMENTS", "Invalid request observation selector", step.seq))
@@ -132,7 +132,7 @@ def analyze_executability(case: TestCase, *, context=None) -> ExecutabilityRepor
                 captured_responses.discard(key)
                 request_observations.add(key)
         if action == "ui.click" and "capture_response" in args and len(gaps) == before:
-            from .response_capture import validate_capture
+            from qctool.data.capture import validate_capture
             try:
                 validate_capture(args["capture_response"])
             except (ValueError, TypeError):

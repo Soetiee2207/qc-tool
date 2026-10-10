@@ -8,10 +8,10 @@ import yaml
 import qctool.pipeline as pipeline
 import qctool.generation as generation
 import qctool.ui as ui
-from qctool.executability import analyze_executability
-from qctool.testcase import Step, StepKind, TestCase
+from qctool.core.executability import analyze_executability
+from qctool.core.testcase import Step, StepKind, TestCase
 from qctool.ui.crawl import PageMap, UIMap
-from qctool.validate import validate_batch
+from qctool.core.validate import validate_batch
 
 BASE = "https://app.test"
 

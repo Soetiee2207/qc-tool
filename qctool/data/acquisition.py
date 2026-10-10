@@ -9,9 +9,9 @@ from enum import Enum
 import json
 import re
 
-from .config import ConfigError
-from .test_fixtures import FixtureStore, PUBLIC_FACT_VALUES, is_alias
-from .testcase import TestCase
+from qctool.config import ConfigError
+from qctool.data.fixtures import FixtureStore, PUBLIC_FACT_VALUES, is_alias
+from qctool.core.testcase import TestCase
 
 DATA_REQUIREMENTS = '_data_requirements'
 MAX_DATA_REQUIREMENTS = 8
@@ -111,10 +111,10 @@ def validate_acquisition_config(config):
     if not isinstance(config, dict) or set(config) - {'requirements', 'evidence', 'provisioning', 'verification', 'provisioning_rules'}:
         raise ConfigError('Acquisition config allows requirements, evidence, provisioning and verification only')
     if 'verification' in config:
-        from .test_data_verification import parse_verification_rules
+        from qctool.data.verification import parse_verification_rules
         parse_verification_rules(config['verification'])
     if 'provisioning_rules' in config:
-        from .test_data_provisioning import parse_provisioning_rules
+        from qctool.data.provisioning import parse_provisioning_rules
         parse_provisioning_rules(config['provisioning_rules'])
     if not isinstance(config.get('requirements', {}), dict) or any(not isinstance(config.get(k, []), list) for k in ('evidence','provisioning')):
         raise ConfigError('Acquisition requires a requirement mapping and evidence/provisioning lists')
@@ -271,13 +271,13 @@ def acquire_test_data(case, *, fixture_store: FixtureStore | None = None,
     verification_audit = {}
     provisioning_audit = {}
     if verification is not None:
-        from .test_data_verification import VerificationResult
+        from qctool.data.verification import VerificationResult
         if not isinstance(verification, VerificationResult) or fixture_store is None:
             raise ConfigError('Acquisition requires a runtime verification receipt')
         live_evidence = verification.evidence_for(bound, fixture_store)
         verification_audit = verification.to_dict()
     if provisioning is not None:
-        from .test_data_provisioning import ProvisioningResult
+        from qctool.data.provisioning import ProvisioningResult
         if not isinstance(provisioning, ProvisioningResult) or fixture_store is None:
             raise ConfigError('Acquisition requires a runtime provisioning receipt')
         live_evidence += provisioning.evidence_for(bound, fixture_store, endpoints)

@@ -5,9 +5,9 @@ from dataclasses import replace
 import pytest
 
 import qctool.generation as generation
-from qctool.coverage import CoverageStatus
-from qctool.executability import analyze_executability
-from qctool.testcase import Step, StepKind, TestCase
+from qctool.core.coverage import CoverageStatus
+from qctool.core.executability import analyze_executability
+from qctool.core.testcase import Step, StepKind, TestCase
 from tests.fixture_samples import flows
 
 

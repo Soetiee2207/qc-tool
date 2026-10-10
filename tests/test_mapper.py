@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from qctool.testcase import CaseType, Priority, Step, StepKind, Technique, TestCase  # noqa: E402
+from qctool.core.testcase import CaseType, Priority, Step, StepKind, Technique, TestCase  # noqa: E402
 from qctool.ui.crawl import Element, PageMap, UIMap  # noqa: E402
 
 

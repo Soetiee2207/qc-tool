@@ -349,7 +349,7 @@ class Step:
         for capture_key in ("capture_response", "capture_requests"):
             if capture_key not in self.args:
                 continue
-            from .response_capture import validate_capture
+            from qctool.data.capture import validate_capture
             try:
                 validate_capture(self.args[capture_key])
             except (ValueError, TypeError) as exc:

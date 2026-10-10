@@ -18,14 +18,15 @@ from typing import Callable
 
 import yaml
 
-from . import config as cfg_mod
-from . import execute, generate, ingest, render, report, validate
-from .generation import GenerationResult, GenerationStatus, run_generation
-from .coverage import analyze_coverage
-from .executability import analyze_executability
-from .agent.loop import AgentLLM
-from .llm_provider import load_llm_provider
-from .test_fixtures import FixtureStore, load_fixture_store
+from qctool import config as cfg_mod
+from qctool import execute, generate, ingest, render, report
+from qctool.core import validate
+from qctool.generation import GenerationResult, GenerationStatus, run_generation
+from qctool.core.coverage import analyze_coverage
+from qctool.core.executability import analyze_executability
+from qctool.agent.loop import AgentLLM
+from qctool.agent.llm_provider import load_llm_provider
+from qctool.data.fixtures import FixtureStore, load_fixture_store
 
 ProgressFn = Callable[[str, str], None]      # (bước, mô tả)
 
@@ -130,7 +131,7 @@ class PipelineConfig:
             else:
                 mode = "manual"
 
-        from .exploration_actions import mutation_policy
+        from qctool.agent.exploration_actions import mutation_policy
         fixture_store = load_fixture_store(data.get("test_fixtures"))
         try:
             exploration_mutation = mutation_policy((data.get('exploration') or {}).get('mutation'), fixture_store=fixture_store)
@@ -337,7 +338,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
             if cfg.auth_mode == "browser" and cfg.username and cfg.password:
                 need_login = cfg.llm_enabled or not state_path.is_file()
                 if not need_login:
-                    from .execute.browser import BrowserSession
+                    from qctool.execute.browser import BrowserSession
 
                     with BrowserSession(cfg.web_url, headless=cfg.headless,
                                         timeout_ms=cfg.timeout_seconds * 1000,
@@ -353,7 +354,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                 if need_login:
                     try:
                         notify("crawl", "Đăng nhập bằng tài khoản đã cấu hình…")
-                        from .execute.browser import BrowserSession
+                        from qctool.execute.browser import BrowserSession
 
                         with BrowserSession(cfg.web_url, headless=cfg.headless,
                                             timeout_ms=cfg.timeout_seconds * 1000) as session:
@@ -362,7 +363,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                             # during this trusted bootstrap. Never persist bodies.
                             def auth_request(req):
                                 from urllib.parse import urlsplit
-                                from .response_capture import origin_of
+                                from qctool.data.capture import origin_of
                                 try:
                                     body = req.post_data_json
                                     if (isinstance(body, dict) and cfg.username in body.values() and cfg.password in body.values()
@@ -376,7 +377,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                             session.save_state(state_path)
                             controls = getattr(session, 'login_controls', None)
                             if controls and cfg.fixture_store:
-                                from .agent.knowledge import AppKnowledge
+                                from qctool.agent.knowledge import AppKnowledge
                                 kb = AppKnowledge(out_dir / 'app-model.yaml', cfg.web_url.rstrip('/'), store=cfg.fixture_store)
                                 metadata = cfg.fixture_store.to_dict()['aliases']
                                 for name in sorted({a.split('.')[0] for a in metadata}):
@@ -402,7 +403,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                         # Đăng nhập hỏng KHÔNG được chặn phần còn lại: crawl ẩn danh
                         # vẫn dựng được UI map, và case cần xác thực sẽ báo `Blocked`
                         # kèm lý do — đúng nghĩa "thiếu điều kiện", không phải lỗi sản phẩm.
-                        from .execute.browser import LoginError
+                        from qctool.execute.browser import LoginError
                         reason = str(exc) if isinstance(exc, LoginError) else type(exc).__name__
                         log(f"  ⚠ Đăng nhập không thành công: {reason}")
                         notify("crawl", f"Đăng nhập không thành công ({reason}) — crawl không cần "
@@ -543,7 +544,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
         if needs_browser and cfg.web_url:
             notify("run", "Mở trình duyệt…")
             try:
-                from .execute.browser import BrowserSession
+                from qctool.execute.browser import BrowserSession
 
                 browser = BrowserSession(
                     cfg.web_url, headless=cfg.headless,
@@ -569,7 +570,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                         notify("run", browser.login(cfg.username, cfg.password))
                     except Exception as exc:            # noqa: BLE001
                         browser.authenticated = False
-                        from .execute.browser import LoginError
+                        from qctool.execute.browser import LoginError
                         reason = str(exc) if isinstance(exc, LoginError) else type(exc).__name__
                         log(f"  ⚠ Đăng nhập không thành công: {reason}")
                         notify("run", f"Đăng nhập không thành công ({reason}) — vẫn chạy tiếp; "
@@ -667,7 +668,7 @@ def _keep_better_map(fresh, old_path: Path):
     Crawl có thể ra ít element vì lý do tạm thời — ghi đè khi đó làm mất dữ liệu
     dò được hôm trước, và lần sau mọi case UI lại thành "chưa map".
     """
-    from .ui.crawl import UIMap
+    from qctool.ui.crawl import UIMap
 
     if not old_path.is_file():
         return fresh
@@ -681,7 +682,7 @@ def _keep_better_map(fresh, old_path: Path):
 
 
 def _load_map(path: Path):
-    from .ui.crawl import UIMap
+    from qctool.ui.crawl import UIMap
 
     return UIMap.load(path)
 

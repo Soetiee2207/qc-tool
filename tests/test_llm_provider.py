@@ -9,7 +9,7 @@ from urllib.error import HTTPError, URLError
 import pytest
 
 import qctool.config as config
-import qctool.llm_provider as provider
+import qctool.agent.llm_provider as provider
 import qctool.pipeline as pipeline
 from qctool.cli import main
 from qctool.pipeline import PipelineConfig, PipelineResult

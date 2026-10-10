@@ -6,11 +6,11 @@ import json
 import pytest
 
 from qctool.config import ConfigError
-from qctool.preparation_cache import PreparationCache, preparation_identity
-from qctool.test_data_acquisition import acquire_test_data
-from qctool.test_data_preparation import prepare_test_data
-from qctool.test_data_verification import VerificationResult
-from tests.test_test_data_provisioning import setup, created, verified
+from qctool.data.cache import PreparationCache, preparation_identity
+from qctool.data.acquisition import acquire_test_data
+from qctool.data.preparation import prepare_test_data
+from qctool.data.verification import VerificationResult
+from tests.test_data_provisioning import setup, created, verified
 
 
 @pytest.mark.parametrize('seconds',[0,-1,True,float('inf'),float('nan'),'300'])

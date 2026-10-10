@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from qctool.test_fixtures import FixtureStore, FixtureUnavailable, REGISTRY
-from qctool.executability import analyze_executability
+from qctool.data.fixtures import FixtureStore, FixtureUnavailable, REGISTRY
+from qctool.core.executability import analyze_executability
 from qctool.execute.runner import run_cases, HttpSession
 from qctool.pipeline import PipelineConfig
 from qctool.generation import run_generation
@@ -99,7 +99,7 @@ class TraceProbe:
 
 
 def _fixture_case():
-    from qctool.testcase import Step, StepKind, TestCase
+    from qctool.core.testcase import Step, StepKind, TestCase
     case = TestCase("TC_LOGIN_001", "LOGIN", "Login", "OK", traces_to=["FR-LOGIN"], source_quote="OK",
                     steps=[Step(1, StepKind.WHEN, "ui.fill", {"target": "pwd", "value": "active_user.password"})])
     return store().bind(case)
