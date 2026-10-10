@@ -1,9 +1,9 @@
-"""Web UI — `qctool serve`. Bấm là chạy.
+"""Web UI — `qctool ui`. Bấm là chạy.
 
 Chỉ dùng thư viện chuẩn (`http.server`) để không thêm phụ thuộc: tool này phải
 cài được ở nơi khác mà không phải kéo theo cả một web framework.
 
-Chạy:  uv run qctool serve --port 8080
+Chạy:  qctool ui --port 8080
 """
 
 from __future__ import annotations

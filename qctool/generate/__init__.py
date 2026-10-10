@@ -222,7 +222,7 @@ def write_cases(cases: list[TestCase], out_path: Path, meta: dict) -> None:
 
     header = (
         "# Sinh tự động bởi qc-tool — KHÔNG sửa tay.\n"
-        "# Sửa nguồn (tài liệu / OpenAPI) rồi chạy lại: uv run qctool generate ...\n"
+        "# Sửa nguồn (tài liệu / OpenAPI) rồi chạy lại: qctool step generate ...\n"
         "#\n"
         "# Case có `needs_mapping: true` là case sinh từ acceptance criterion bằng văn xuôi —\n"
         "# phải map sang hành động cụ thể trước khi chạy tự động được.\n"

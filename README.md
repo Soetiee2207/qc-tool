@@ -8,7 +8,8 @@ cái đó bị bỏ qua và tool nói rõ hệ quả.
 
 ```bash
 uv sync && uv run playwright install chromium
-uv run qctool serve            # giao diện web — bấm là chạy
+uv run qctool demo             # thử ngay trên API giả
+uv run qctool run customer     # chạy project projects/customer/
 ```
 
 ## Bốn chặng
@@ -40,12 +41,11 @@ action/locator, không cho model đọc actual assertion để sửa expected th
 Runner mới quyết định Pass/Fail. Weak oracle là `needs_review`, không generation success.
 
 ```bash
-uv run qctool validate --config qc_config/qctool.agent.example.yaml --llm
-uv run qctool run --config qc_config/qctool.agent.example.yaml --llm
+qctool init shop && qctool check shop
+qctool run shop --only 001-1      # thử một AC trước để giới hạn chi phí
 ```
 
-Điền docs/OpenAPI/URL và provider env trước; bắt đầu với `generation.max_intents: 1`
-hoặc `2`. Xem [hướng dẫn](HUONG-DAN.md) và [kết quả kiểm chứng giới hạn](docs/findings/agent-redesign.md).
+Điền docs/OpenAPI/URL trong `projects/shop/qctool.yaml` và `QCTOOL_LLM_*` trong `.env` trước. Xem [hướng dẫn](HUONG-DAN.md) và [kết quả kiểm chứng giới hạn](docs/findings/agent-redesign.md).
 Không còn patch engine/legacy execution flag. API-only generation vẫn deterministic.
 
 ### V2 — kết quả kiểm chứng (2026-10-09)
@@ -62,8 +62,7 @@ không bao giờ tính là Pass. Chi tiết, giới hạn và lỗi đã sửa:
 [docs/findings/agent-redesign.md](docs/findings/agent-redesign.md).
 
 ```bash
-QCTOOL_LLM_TIMEOUT_SECONDS=90 QCTOOL_LLM_THINKING=disabled \
-  uv run qctool run --config qc_config/qctool.customer_e2e_test_1.e2e.yaml --llm
+qctool run customer_e2e_test_1     # timeout/thinking của LLM đặt trong .env
 ```
 
 **Xem bằng chứng:** `artifacts/<feature>/generation.json` (agent gọi tool nào),
@@ -77,82 +76,75 @@ policy; DeepSeek đôi khi timeout; kết quả từng case dao động giữa c
 
 ## Cài đặt
 
-Cần **Python ≥ 3.12** và [uv](https://docs.astral.sh/uv/). Playwright + Chromium chỉ cần
-khi chạy test UI/UX.
+Cần **Python ≥ 3.12** và [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync
-uv run playwright install chromium    # chỉ cần cho test UI/UX
-cp .env.example .env                  # rồi điền tài khoản, token (không commit .env)
+uv run playwright install chromium    # cho test UI/UX
+cp .env.example .env                  # rồi điền tài khoản + LLM key (không commit .env)
+source .venv/bin/activate             # để gõ `qctool …` thay vì `uv run qctool …`
 ```
 
 ## Dùng
 
-### Quick-start: một lệnh cho toàn bộ QC
-
 ```bash
-uv run qctool validate --docs ./docs --openapi ./openapi.yaml
-uv run qctool run --docs ./docs --openapi ./openapi.yaml \
-  --url https://app.example.com --out artifacts/run
+qctool demo                   # thử ngay trên API giả — không cần hệ thống thật
+qctool init shop              # tạo projects/shop/qctool.yaml rồi sửa docs/web/api
+qctool check shop             # kiểm tra cấu hình + tài liệu, không gọi model/browser/API
+qctool run shop               # sinh testcase → chạy → báo cáo
+qctool trace shop TC_SHOP_001 # xem lại từng bước của một case
+qctool ui                     # giao diện web (http://127.0.0.1:8080)
+qctool step …                 # từng chặng: ingest | generate | exec | crawl
 ```
 
-Thay URL/paths mẫu bằng inputs của bạn. `docs` chứa `urd.md`, `srs.md`;
-luồng bổ sung nằm trong `srs/*flow*.md` theo định dạng tool hỗ trợ. OpenAPI là tùy chọn nếu workflow không có
-API contract. Không cần tạo testcase YAML trước.
+Một project = một thư mục `projects/<tên>/` với `qctool.yaml` vài dòng:
 
-Hoặc copy [qc_config/qctool.run.example.yaml](qc_config/qctool.run.example.yaml) thành `qctool.yaml`,
-điền inputs và chạy:
-
-```bash
-uv run qctool run --config qctool.yaml
+```yaml
+docs: ../../samples/customer
+openapi: ../../samples/customer/openapi.yaml
+web: https://salonhub-soe.vercel.app
+api: https://salonhub-3cg8.onrender.com
+llm: true
+account:                         # tài khoản lấy từ .env; chỉ các AC này được dùng
+  role: customer
+  login_for: [001-1, 001-3]
 ```
 
-CLI dùng chung `run_pipeline()` cho ingest, crawl (đăng nhập + `app-model.yaml`),
-generation bằng agent, Chromium/API execution và report. Terminal hiển thị tiến trình
-`[ingest]`, `[crawl]`, `[generate]`, `[agent]`, `[run]`, `[report]`; tiến trình được redact
-và ghi vào `pipeline.log`. `summary.json` chứa số liệu, `generation.json` giữ lịch sử
-agent (tool đã gọi, lỗi gate/dry-run, token). Case manual/unresolved vẫn nằm trong
-testcase YAML/XLSX và report, không bao giờ thành Pass.
+Mọi khoá khác có mặc định (feature/module = tên thư mục, kết quả vào `artifacts/<tên>/`,
+budget agent 14 lượt/90k token/480s mỗi AC). Bảng mặc định, cờ `run`
+(`--only`, `--no-llm`, `--skip-run`, `--show-browser`, `--trace-sensitive`) và xử lý sự cố:
+[HUONG-DAN.md](HUONG-DAN.md).
+
+Lệnh `run` dùng chung `run_pipeline()` với web UI: ingest, crawl (đăng nhập +
+`app-model.yaml`), generation bằng agent, Chromium/API execution và report. Terminal hiển
+thị tiến trình `[ingest]`, `[crawl]`, `[generate]`, `[agent]`, `[run]`, `[report]`; tiến
+trình được redact và ghi vào `pipeline.log`. `summary.json` chứa số liệu, `generation.json`
+giữ lịch sử agent. Case manual/unresolved vẫn nằm trong testcase YAML/XLSX và report,
+không bao giờ thành Pass.
 
 **Profile duy nhất: `agent`.** Mỗi acceptance criterion là một intent; agent viết một
-testcase cho nó trong một hội thoại có feedback. `generation.profile: business`/`legacy`
-trong config cũ chỉ là alias của `agent` — không còn nhánh legacy, không còn
-`legacy-testcases.yaml`. Giới hạn chi phí: `generation.max_intents`, `intent_ids`,
-`budget` (turns/tokens/giây mỗi intent).
+testcase cho nó trong một hội thoại có feedback. Giới hạn chi phí: `--only`,
+`generation.max_intents`, `generation.budget`.
 
-Preparation AVAILABLE được dùng lại trong cùng run chỉ khi toàn bộ data/trust
-identity khớp: fixture, aliases, facts, assurance, credentials/config, reviewed rules,
-policy, contract, backend và environment. Cache runtime tối đa 128 entries, độ tươi
-300 giây, không đọc proof từ JSON hoặc chia sẻ mặc định giữa runs. Audit ghi
-`preparation_mode: EXECUTED/REUSED`, `preparation_identity`, `reused_from_testcase`
-và `executed_calls`; receipt cũ chỉ là lịch sử proof, không phải call mới.
+**LLM chỉ bật tường minh** (`llm: true` hoặc `--llm`). Có API key không tự bật model.
+Key/model/base URL chỉ ở `.env` (`QCTOOL_LLM_*`).
 
-**LLM mặc định OFF.** Có API key không tự bật model. Bật qua `llm.enabled: true`
-hoặc `--llm`, sau khi cấu hình `QCTOOL_LLM_BASE_URL`, `QCTOOL_LLM_MODEL`,
-`QCTOOL_LLM_API_KEY` và tùy chọn `QCTOOL_LLM_TIMEOUT_SECONDS`. Không ghi key vào
-YAML; dùng env/secrets. `--no-llm` ghi đè cấu hình bật.
+**`auth.mode: manual`** là mặc định khi không có `account`; credential trong env không
+tự đăng nhập.
 
-**Provisioning mặc định OFF.** `provisioning.enabled: true` hoặc
-`--allow-provisioning --test-environment test` chỉ bật gate; engine vẫn đòi exact
-operation, reviewed rule, allowed test environment/origin và verification phù hợp.
-Không có rule hợp lệ thì không tạo dữ liệu. Fixtures đi qua `test_fixtures`, giá trị
-qua env; credentials/facts khai báo không tự chứng minh trạng thái backend.
+**Provisioning mặc định OFF.** `provisioning.enabled: true` chỉ bật gate; engine vẫn đòi
+exact operation, reviewed rule, allowed test environment/origin và verification phù hợp.
+Credentials/facts khai báo không tự chứng minh trạng thái backend.
 
-`auth.mode: manual` là mặc định của primary CLI; có credentials trong env không
-tự đăng nhập. Muốn bootstrap login phải chọn mode trong config rõ ràng.
+Preparation AVAILABLE được dùng lại trong cùng run chỉ khi toàn bộ data/trust identity
+khớp (fixture, aliases, facts, assurance, credentials/config, rules, policy, contract,
+backend, environment). Cache runtime tối đa 128 entries, độ tươi 300 giây, không chia sẻ
+giữa runs.
 
-`validate` chỉ kiểm tra config, docs có thể ingest, OpenAPI đọc được bằng loader
-hiện có và provider configuration nếu bật LLM. Không gọi model/browser/API,
-không ghi artifacts, không chứng minh coverage/account/website hoạt động và không
-phải validator đầy đủ mọi tính năng chuẩn OpenAPI.
+`check` chỉ kiểm tra config, docs ingest được, OpenAPI đọc được và provider configuration
+nếu bật LLM. Không gọi model/browser/API, không ghi artifacts.
 
-Artifacts: `requirements.yaml`, `app-model.yaml`, `testcases.yaml`,
-`testcases.xlsx`, `generation.json`, `summary.json`, `pipeline.log`; execution
-reports `results.json`, `results.csv`, `junit.xml`, `report.md` dưới `runs/<timestamp>/`.
-Evidence/trace giữ policy và secret protection hiện có. Xem `summary.json.artifacts`
-để lấy đường dẫn chính xác. `--out` chọn thư mục mới cho mỗi run nếu cần giữ lịch sử.
-
-#### Exit codes của primary `run`
+#### Exit codes của `run`
 
 | Code | Ý nghĩa |
 | --- | --- |
@@ -162,80 +154,11 @@ Evidence/trace giữ policy và secret protection hiện có. Xem `summary.json.
 | 3 | Generation/coverage incomplete hoặc unassessable, không có execution Fail |
 | 4 | Generation hoàn tất nhưng execution bị Blocked/chưa chạy/skip |
 
-`generation_success` và `pipeline_ok` là hai trường riêng. Coverage không thay
-cho runtime Pass; testcase chưa chạy không có Pass. Flaky Pass vẫn có cờ/count
-riêng trong summary và reports. Blocker resolution không thay đổi status runner:
-manual testcase có thể là `Not Executed` với reason `MISSING_FIXTURE`.
+`generation_success` và `pipeline_ok` là hai trường riêng. Coverage không thay cho runtime
+Pass; testcase chưa chạy không có Pass. Flaky Pass vẫn có cờ/count riêng.
 
-Tương thích: `qctool run testcases.yaml --base-url URL --web-url URL` vẫn chạy YAML
-đã có; `qctool all` vẫn dùng hành vi/exit codes cũ. Không trộn testcase positional
-với `--docs/--config/--openapi/--url` của primary mode.
-
-### 1. Cả pipeline bằng một lệnh
-
-```bash
-uv run qctool all --config qctool.yaml
-```
-
-`qc_config/qctool.example.yaml` là mẫu đầy đủ, chú thích từng khoá. Không cần file cấu hình thì
-truyền thẳng tham số:
-
-```bash
-uv run qctool all --openapi ./openapi.yaml --feature login-sso --module AUTH \
-                  --base-url https://dev.example.com --token "$TOKEN"
-```
-
-Bốn thứ cần đưa, đưa được cái nào hay cái đó:
-
-| Đầu vào | Flag | Có thì được gì |
-|---|---|---|
-| Tài liệu (`urd.md`, `srs.md`) | `--docs-dir` | Case từ acceptance criteria + NFR |
-| OpenAPI spec | `--openapi` | Case kỹ thuật: biên, mã lỗi, ma trận xác thực |
-| Link webapp | `--web-url` | Mở Chromium thật: dò element, chạy case UI, chụp bằng chứng |
-| Tài khoản / token | `--username` `--password` `--token` | Case cần xác thực chạy được |
-
-### 2. Giao diện web
-
-```bash
-uv run qctool serve            # http://127.0.0.1:8080
-```
-
-Bí mật nhập trên giao diện **không được lưu lại**. CLI, web UI và CI dùng chung một hàm
-`qctool/pipeline.py::run_pipeline()` — không có logic nào chỉ tồn tại trong giao diện.
-
-### 3. Từng chặng, khi cần kiểm soát chi tiết
-
-```bash
-uv run qctool ingest   <thư-mục-tài-liệu> --feature login-sso
-uv run qctool generate --requirements artifacts/login-sso/requirements.yaml \
-                       --openapi ./openapi.yaml \
-                       --xlsx artifacts/login-sso/testcases.xlsx
-uv run qctool run      artifacts/login-sso/testcases.yaml \
-                       --base-url https://dev.example.com --token "$TOKEN" \
-                       --xlsx artifacts/login-sso/testcases.xlsx
-uv run qctool crawl    https://dev.example.com --out artifacts/login-sso/ui-map.yaml
-```
-
-### 4. Thử toàn bộ, không cần hệ thống thật
-
-API giả trong `tests/mock_server.py` có **4 bug API + 4 bug giao diện cài sẵn**, nên một
-lượt chạy thấy đủ cả Đạt lẫn Lỗi:
-
-```bash
-uv run python -m tests.mock_server --port 8099 &
-uv run qctool all --openapi samples/openapi/task-manager-sample.yaml \
-                  --feature sample --module SAMPLE \
-                  --base-url http://127.0.0.1:8099/api/v1 --token fake
-```
-
-Kết quả mong đợi: `54 test · 29 đạt · 15 lỗi · 10 bị chặn`. Hoặc gọn hơn bằng script:
-
-```bash
-./qc.sh --config qc_config/qc-demo.yaml
-```
-
-`./qc.sh` là lớp bọc quanh CLI cho người dùng cuối (`--docs --oas --link --acc`), có sẵn
-ba cách đưa mật khẩu (gõ thẳng / lấy từ `.env` / hỏi tại chỗ). Chi tiết: `HUONG-DAN.md`.
+`qctool demo` chạy trên `tests/mock_server.py` (4 bug API + 4 bug giao diện cài sẵn).
+Kết quả mong đợi: `54 test · 29 đạt · 15 lỗi · 10 bị chặn`.
 
 ## Kết quả
 
@@ -322,17 +245,21 @@ uv run playwright show-trace artifacts/<feature>/evidence/TC_AUTH_001.trace.zip
 
 | Đường dẫn | Là gì |
 |---|---|
-| `qctool/` | Mã nguồn — `ingest/` `generate/` `execute/` `ui/` `report/` `render/` `web/` `pipeline.py` |
-| `templates/testcase/` | Template 14 cột — tool ghi ra, sinh từ script |
-| `templates/api/` | Template OpenAPI — người điền, tool đọc vào để ground |
-| `templates/report/` | Template báo cáo |
-| `samples/` | Dữ liệu **hư cấu** để dev/test — không phải hệ thống thật |
-| `tests/mock_server.py` | API + trang HTML giả, có bug cài sẵn |
+| `qctool/cli.py`, `cli_run.py` | Lệnh `qctool …` |
+| `qctool/config.py` | `.env` + mở rộng `qctool.yaml` dạng gọn (mặc định, `account`) |
+| `qctool/pipeline.py` | `run_pipeline()` — đường đi chung của CLI, web UI, CI |
+| `qctool/core/` | Testcase IR (`testcase.py`, ACTION_SPECS), model, validate, coverage, executability |
+| `qctool/ingest/` `generate/` `execute/` `render/` `report/` | Bốn chặng |
+| `qctool/agent/` | Authoring agent: loop, tools, gate, safety, LLM provider |
+| `qctool/data/` | Test data: fixtures, acquisition, verification, provisioning, capture |
+| `qctool/ui/` `web/` | Crawl webapp · giao diện web |
+| `projects/` | Mỗi dự án test một thư mục `qctool.yaml` |
+| `templates/` | Template testcase 14 cột (sinh từ script) · OpenAPI · báo cáo |
+| `samples/` | Tài liệu/OpenAPI đầu vào để dev/test |
+| `tests/` | Test; `mock_server.py` = API + trang HTML giả có bug cài sẵn |
 | `docs/` | Brainstorm, findings, tracking |
-| `scripts/` | Sinh template, validate OpenAPI |
+| `scripts/` | Sinh template testcase, validate OpenAPI |
 | `artifacts/` | Output mỗi lần chạy — gitignored |
-| `docs/tracking/milestones.md` | Trạng thái M01–M07 |
-| `HUONG-DAN.md` | Hướng dẫn cho người dùng cuối |
 
 Nguyên tắc: **OpenAPI là nguồn ground cho API.** Endpoint/field không có trong OpenAPI hoặc
 tài liệu thì tool không được bịa — thà bỏ sót còn hơn sinh case gọi endpoint không tồn tại.

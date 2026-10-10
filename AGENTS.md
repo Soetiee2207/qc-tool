@@ -20,56 +20,58 @@ là **pilot đầu tiên**, không phải phạm vi.
 | Milestone registry | `docs/tracking/milestones.md` |
 | Việc còn lại / chờ quyết định | `docs/tracking/todo.md` |
 | Phát hiện về hệ thống được test | `docs/findings/` |
-| Mã nguồn | `qctool/` — `ingest/` `generate/` `execute/` `ui/` `report/` `render/` `web/` `agent/` `pipeline.py` |
-| Authoring agent (V2) | `qctool/agent/` — `loop.py` (hội thoại tool-calling), `tools.py` (browser/dry-run), `gate.py` (schema/citation/thứ tự), `safety.py` (origin/write/alias), `knowledge.py` (`app-model.yaml`) |
+| Mã nguồn | `qctool/` — `core/` (IR, ACTION_SPECS, validate, coverage) `ingest/` `generate/` `execute/` `ui/` `report/` `render/` `web/` `agent/` `data/` (test data) `pipeline.py` `config.py` |
+| Authoring agent (V2) | `qctool/agent/` — `loop.py` (hội thoại tool-calling), `tools.py` (browser/dry-run), `gate.py` (schema/citation/thứ tự), `safety.py` (origin/write/alias), `knowledge.py` (`app-model.yaml`), `llm_provider.py`, `exploration_actions.py` (mutation policy) |
 | Kết quả kiểm chứng V2 | `docs/findings/agent-redesign.md` |
 | Template testcase (14 cột) | `templates/testcase/` — sinh từ script, **không sửa tay `.xlsx`** |
 | Template OpenAPI | `templates/api/` — anh điền, tool đọc |
 | Template báo cáo | `templates/report/` |
 | Dữ liệu hư cấu để dev/test | `samples/` — **không phải hệ thống thật**, trừ các fixture lấy từ source SalonHub thật: `samples/customer/`, `samples/customer_e2e_test_1/`, `samples/order_product/` |
-| Config chạy E2E SalonHub | `qc_config/qctool.customer.e2e.yaml`, `qc_config/qctool.customer_e2e_test_1.e2e.yaml` — credential chỉ ở `.env` |
+| Project (config một lượt chạy) | `projects/<tên>/qctool.yaml` — dạng gọn, mở rộng bởi `config.py::expand_project`. Credential chỉ ở `.env` |
 | API giả để chạy thử executor | `tests/mock_server.py` — 4 bug API + 4 bug giao diện cài sẵn |
 | Trình duyệt | Playwright + Chromium (đã cài). Bí mật ở `.env` (gitignored) |
 | Tầng điều khiển trình duyệt | `qctool/execute/browser.py` — context riêng mỗi case, assert auto-wait, bằng chứng |
 | Bản đồ element của webapp | `qctool/ui/crawl.py` → `<out.dir>/ui-map.yaml` (có `test_id`) |
 | Test | `tests/` — `test_browser.py` mở Chromium thật (marker `playwright`) |
 | Hướng dẫn người dùng | `HUONG-DAN.md` — đọc file này khi giải thích cho người mới |
-| File cấu hình mẫu | `qc_config/qctool.example.yaml` |
+| File cấu hình mẫu | `qctool init <tên>` sinh ra (`cli.py::PROJECT_TEMPLATE`) |
 | Output sinh ra | `artifacts/` — gitignored |
 
 ## Lệnh
 
 ```bash
-# ── Cách dùng chính ─────────────────────────────────────────────────────────
-uv run qctool serve                       # giao diện web — bấm là chạy
-uv run qctool all --config qctool.yaml    # cả pipeline từ file cấu hình
+# ── Cách dùng chính (venv đã activate, hoặc thêm `uv run` phía trước) ─────────
+qctool demo                     # tự bật tests/mock_server.py + chạy projects/demo
+qctool init <tên>               # tạo projects/<tên>/qctool.yaml
+qctool check <tên>              # preflight: config/docs/OpenAPI, không gọi model/browser/API
+qctool run <tên>                # cả pipeline; --only 001-1 · --no-llm · --skip-run · --show-browser
+qctool trace <tên> <MÃ>         # playwright show-trace cho evidence/<MÃ>*.trace.zip
+qctool ui                       # giao diện web
 
-# ── Từng bước (khi cần kiểm soát chi tiết) ──────────────────────────────────
-uv run qctool ingest   <feature-dir> --feature <tên>
-uv run qctool generate --requirements artifacts/<f>/requirements.yaml \
-                       --openapi <spec.yaml> --xlsx artifacts/<f>/testcases.xlsx
+# ── Từng chặng (khi cần kiểm soát chi tiết) ─────────────────────────────────
+qctool step ingest   <feature-dir> --feature <tên>
+qctool step generate --requirements artifacts/<f>/requirements.yaml \
+                     --openapi <spec.yaml> --xlsx artifacts/<f>/testcases.xlsx
 # ↑ không gọi LLM: OpenAPI → case API; prose → case thủ công (perform.unmapped).
-#   Case UI tự động từ prose chỉ có qua `run --config … --llm` (agent).
-uv run qctool run      artifacts/<f>/testcases.yaml \
-                       --base-url <url> --xlsx artifacts/<f>/testcases.xlsx
-
-# ── V2: agent viết testcase từ tài liệu (cần DeepSeek trong .env) ──────────
-uv run qctool validate --config qc_config/qctool.customer_e2e_test_1.e2e.yaml
-QCTOOL_LLM_TIMEOUT_SECONDS=90 QCTOOL_LLM_THINKING=disabled \
-  uv run qctool run --config qc_config/qctool.customer_e2e_test_1.e2e.yaml --llm
-uv run playwright show-trace artifacts/<f>/evidence/<MÃ>.trace.zip   # xem lại từng bước
-
-# ── Thử toàn bộ, không cần hệ thống thật ────────────────────────────────────
-uv run python -m tests.mock_server --port 8099 &
-uv run qctool all --openapi samples/openapi/task-manager-sample.yaml \
-                  --feature sample --module SAMPLE \
-                  --base-url http://127.0.0.1:8099/api/v1 --token fake
+#   Case UI tự động từ prose chỉ có qua `qctool run` với LLM bật (agent).
+qctool step exec     artifacts/<f>/testcases.yaml \
+                     --base-url <url> --xlsx artifacts/<f>/testcases.xlsx
+qctool step crawl    <url>
 
 # ── Test & tiện ích ─────────────────────────────────────────────────────────
 uv run python -m pytest tests/ -q
 uv run scripts/validate_openapi.py <file.yaml>
 uv run scripts/build_testcase_template.py
 ```
+
+`<tên>` = thư mục trong `projects/`, hoặc đường dẫn thư mục/file YAML. LLM timeout/thinking
+đặt trong `.env` (`QCTOOL_LLM_TIMEOUT_SECONDS`, `QCTOOL_LLM_THINKING`), không cần prefix.
+
+**Config dạng gọn** (`config.py::expand_project`): `docs`/`web`/`api`/`llm: true` là alias
+của `docs_dir`/`web_url`/`run.base_url`/`llm.enabled`; feature/module mặc định theo tên thư
+mục; `generation.budget` mặc định `AGENT_BUDGET`. `account: {role, login_for: [AC…]}` sinh
+`test_fixtures` (bindings + acquisition DECLARED) **chỉ** cho các AC liệt kê — không bind
+wildcard, vì AC "sai mật khẩu" không được nhận mật khẩu đúng. Dạng đầy đủ luôn thắng.
 
 Hướng dẫn cho người dùng cuối: `HUONG-DAN.md`.
 
@@ -116,10 +118,10 @@ Prose dùng authoring agent tool-calling (`generated_by: llm`); OpenAPI giữ ge
 - **Không sửa tay file trong `artifacts/`.** Đó là output sinh lại được. Sửa
   `templates/` hoặc `samples/` rồi chạy lại.
 - **`samples/` là hư cấu.** Không bao giờ trỏ tool vào URL trong đó.
-- Thêm `action` verb mới → phải thêm vào `ACTION_SPECS` trong `qctool/testcase.py`,
+- Thêm `action` verb mới → phải thêm vào `ACTION_SPECS` trong `qctool/core/testcase.py`,
   kèm `required`/`optional`. Verb không có trong đó sẽ bị validator chặn.
 - **Thêm verb UI mới phải sửa ba chỗ, không phải hai:**
-  1. `ACTION_SPECS` (`qctool/testcase.py`) — kèm nhánh trong `describe()` **và**
+  1. `ACTION_SPECS` (`qctool/core/testcase.py`) — kèm nhánh trong `describe()` **và**
      `expects()`, vì cột Test Steps / Expected Result là chỗ người QC đọc.
   2. `UI_VERBS` (`qctool/execute/runner.py`) — danh sách "cần trình duyệt", dùng
      chung cho runner và pipeline.
@@ -277,10 +279,11 @@ Các luật còn lại:
   `runs/<t>/results.json` (Playwright chạy từng bước ra sao); `evidence/` (ảnh, `.trace.zip`).
   Case có điền mật khẩu (fixture alias) hoặc `capture_*` **cố ý không có trace/ảnh**
   (`runner.py` tắt) — trace sẽ chứa mật khẩu/token thật. Không gỡ chặn này mặc định.
-  Opt-in tường minh: `ui.trace_sensitive: true` (cần `ui.trace: true`) hoặc `--trace-sensitive` /
-  `--ui-trace-sensitive`. Pipeline in cảnh báo; chỉ dùng cục bộ với tài khoản test.
+  Opt-in tường minh: `ui.trace_sensitive: true` (cần `ui.trace: true`) hoặc `qctool run <tên>
+  --trace-sensitive`. Pipeline in cảnh báo; chỉ dùng cục bộ với tài khoản test.
 
 Changelog:
+- 2026-10-10 | claude | Dọn repo: core/ data/, projects/ thay qc_config/, CLI init/check/run
 - 2026-10-09 | claude | V2: bảng file agent/, lệnh chạy, nơi xem bằng chứng/trace
 - 2026-10-09 | claude | Gate: route nguồn phải thực hiện, assert sau action, URL regex
 - 2026-10-09 | codex | Agent authoring, citation, dry-run và review tier

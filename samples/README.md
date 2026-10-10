@@ -36,48 +36,11 @@ Cố ý bao đủ nhiều hình dạng để generator bị thử thách:
 
 Có đủ hình dạng thì generator viết xong sẽ chạy được trên spec thật mà không phải sửa nhiều.
 
-## Đánh giá generation (V2)
+## Bộ tài liệu SalonHub (lấy từ source thật)
 
-Resolution loop, coverage loop và hai benchmark replay cũ (`evaluation/resolution-*.yaml`,
-`evaluation/generation-benchmark.yaml`) thuộc engine đã retire ở V2 — các file trong
-`samples/evaluation/` chỉ còn là lịch sử, không còn code nào đọc chúng.
-
-Đánh giá một lượt chạy agent (chỉ đọc artifact, không gọi model/browser):
-
-```bash
-uv run python scripts/run_agent_benchmark.py artifacts/<feature>
-uv run python -m pytest tests/test_generation_benchmark.py -q
-```
-
-Số đo ngữ nghĩa không có nhãn QC thì là `unknown`, không bao giờ tính là đúng.
-
-## Acceptance thật — generation qua pipeline
-
-`acceptance/generation/` chứa URD/SRS, luồng nghiệp vụ và OpenAPI hư cấu cho
-mock server trong repo. Chạy từ thư mục gốc:
-
-```bash
-uv run python scripts/run_generation_acceptance.py --out artifacts/generation-acceptance
-uv run python -m pytest tests/test_pipeline_acceptance.py -q
-```
-
-Lệnh tự mở mock HTTP trên loopback/cổng trống, chạy Chromium thật và đóng server
-sau khi kiểm tra. Không cần provider/model hoặc tài khoản. Cần Chromium đã cài
-(`uv run playwright install chromium` nếu thiếu). Không trỏ vào hệ thống thật.
-
-Luồng có hai obligation: mở `/ui/du-an` đúng URL, rồi cấp tài khoản bằng quản trị
-viên. Thay model thật bằng bản ghi `RouteReplay` (không phải live LLM): case route
-đi qua gate + dry-run của agent rồi chạy Chromium thật; cấp tài khoản giữ manual.
-`PipelineResult.ok=true` nghĩa là pipeline hoàn tất; `generation_success=false`
-vì executable coverage chưa hoàn tất và nguồn FR chưa assess được.
-
-Output gồm `requirements.yaml`, `app-model.yaml`, `generation.json`, `testcases.yaml`,
-`testcases.xlsx`, `evidence/*.trace.zip`, `runs/*/results.json`, `results.csv`,
-`junit.xml`, `report.md` và `acceptance-checks.json`. Script đối chiếu ID/status
-giữa IR, XLSX, JSON, CSV và JUnit; kiểm tra mọi Pass có đủ step thật đã chạy.
-YAML/`generation.json` là dữ liệu trước execution, không tự mang status Pass;
-XLSX/results là dữ liệu runtime. Mã thoát `0` chỉ khi các acceptance check đạt,
-không có nghĩa là mọi obligation đã tự động hoá.
+`customer/`, `customer_e2e_test_1/`, `order_product/` là URD/SRS/OpenAPI viết từ source
+SalonHub thật. Đây là ngoại lệ của quy tắc "hư cấu" ở trên. Project chạy chúng nằm ở
+`projects/<cùng tên>/qctool.yaml`.
 
 ## Khi nào xoá
 

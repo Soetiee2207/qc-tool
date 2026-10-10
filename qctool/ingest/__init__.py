@@ -283,7 +283,7 @@ def write_yaml(data: dict, out_path: Path) -> None:
     )
     header = (
         "# Sinh tự động bởi qc-tool — KHÔNG sửa tay.\n"
-        "# Sửa tài liệu nguồn rồi chạy lại: uv run qctool ingest <feature-dir>\n"
+        "# Sửa tài liệu nguồn rồi chạy lại: qctool step ingest <feature-dir>\n"
         f"# generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} (GMT+7)\n"
         "#\n"
         "# `content_hash` chỉ tính trên nội dung ngữ nghĩa của requirement — sửa chỗ khác\n"

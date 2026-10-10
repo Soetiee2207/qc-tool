@@ -5,8 +5,9 @@ lang: vi
 status: living
 owner: "@binhhm"
 created: 2026-09-18
-updated: 2026-10-09
+updated: 2026-10-10
 changelog:
+  - 2026-10-10 | claude | Dọn repo: projects/, CLI ngắn; thêm việc chạy lại LLM thật
   - 2026-10-09 | claude | V2: mapper retire, đã commit agent-redesign
   - 2026-10-09 | claude | Customer 7 intent: 5/7 Pass, 0 Fail; thêm việc tiếp theo
   - 2026-10-09 | codex | Agent redesign: gate/citation/dry-run, live acceptance chưa chốt
@@ -148,4 +149,15 @@ Chi tiết, lỗi đã sửa và số liệu từng lượt: finding mục "Ch�
 | [ ] | QC gắn nhãn sheet Review cho case `needs_review` → đo tỉ lệ chấp nhận | plan Phase 3 |
 | [ ] | Chạy agent trên `order_product` (cần mutation policy đã review) và `smoke` | plan Phase 4 |
 | [x] | Commit nhánh `agent-redesign` — `5e19097 QC-TOOL V2` | — |
+
+## Dọn repo — 2026-10-10
+
+| Việc | Nguồn |
+|---|---|
+| [x] Xoá `materials/`, `over_view.md`, `qc.sh`, script benchmark/diagnose, module chết, `samples/{acceptance,evaluation}` | yêu cầu user |
+| [x] `qctool/core/`, `qctool/data/`; `llm_provider`/`exploration_actions` vào `agent/` | yêu cầu user |
+| [x] `projects/<tên>/qctool.yaml` dạng gọn + `account:` thay `qc_config/`; sửa bug `evidence: off` bị đọc thành on-fail | yêu cầu user |
+| [x] CLI `init/check/run/trace/ui/demo/step`; `--only <AC>` | yêu cầu user |
+| [ ] Chạy lại `qctool run customer_e2e_test_1` với DeepSeek thật để xác nhận kết quả tương đương 9/11 — chưa chạy sau khi dọn | verification |
+| [ ] `samples/smoke/` còn có cặp `SRS.md`/`srs.md` + `URD.md`/`urd.md` trùng tên khác hoa — chỉ test dùng, xem gộp | dọn repo |
 
