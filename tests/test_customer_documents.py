@@ -9,7 +9,7 @@ from qctool.ingest import ingest_feature
 from qctool.data.fixtures import FixtureStore
 
 ROOT = Path(__file__).resolve().parents[1]
-DOCS = ROOT / 'samples/customer'
+DOCS = ROOT / 'projects/salonhub/customer'
 
 
 def test_customer_contract_excludes_mutations_and_registration():
@@ -24,12 +24,15 @@ def test_customer_contract_excludes_mutations_and_registration():
 
 def test_customer_policy_uses_only_env_and_does_not_claim_role_verification():
     from qctool.config import expand_project
-    path = ROOT / 'projects' / 'customer' / 'qctool.yaml'
+    path = ROOT / 'projects' / 'salonhub' / 'customer' / 'qctool.yaml'
     config = expand_project(yaml.safe_load(path.read_text()), path, ROOT)
     assert config['feature'] == 'customer'
     assert config['auth']['mode'] == 'browser'  # agent cần macro đăng nhập
     assert not (config.get('provisioning') or {}).get('enabled', False)
-    assert config['llm']['enabled'] is True
+    assert config['llm']['enabled'] is True                         # từ project.yaml
+    assert config['web_url'] == 'https://salonhub-soe.vercel.app'     # từ project.yaml
+    assert config['docs_dir'] == '.' and config['out']['dir'] == 'artifacts'
+    assert config['test_fixtures']['fixtures']['active_user']['facts']['role'] == 'customer'
     policy = config['test_fixtures']
     assert policy['fixtures']['active_user']['email'] == {'env': 'QCTOOL_USERNAME'}
     assert policy['fixtures']['active_user']['password'] == {'env': 'QCTOOL_PASSWORD'}

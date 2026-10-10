@@ -1,12 +1,8 @@
 # SalonHub — đặt hàng COD. ⚠ Cho phép tạo ĐƠN THẬT trên production theo rule bên dưới.
-docs: ../../samples/order_product
-openapi: ../../samples/order_product/openapi.yaml
-web: https://salonhub-soe.vercel.app
-api: https://salonhub-3cg8.onrender.com
-llm: true
 account:
-  role: customer
   login_for: [001-1]
+run:
+  timeout_seconds: 30
 provisioning:
   enabled: true   # không tự cấp quyền tạo đơn, vẫn qua exploration bên dưới
   environment: production

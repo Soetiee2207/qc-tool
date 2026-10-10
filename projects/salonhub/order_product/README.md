@@ -34,7 +34,7 @@ minh những preconditions đó. Đơn có tổng tiền dương, không voucher
 Preflight offline, không gọi website/LLM/Chromium:
 
 ```bash
-qctool check order_product
+qctool check salonhub --order_product
 ```
 
 Kiểm tra offline hiện nhận hai requirement records (US và AC), **một obligation**
@@ -45,7 +45,7 @@ lỗi OpenAPI hoặc bằng chứng testcase đã chạy.
 Chạy pipeline đầy đủ, bật provider thật tường minh:
 
 ```bash
-qctool run order_product
+qctool run salonhub --order_product
 ```
 
 Chỉ chạy một trong hai lệnh full. `generation.profile: business` là alias của `agent` (V2).
@@ -96,10 +96,10 @@ thao tác chuyển tiền online. Không chạy lặp lại trên giỏ cá nhâ
 Trong `artifacts/order-product-e2e/`:
 
 - `requirements.yaml`, `ui-map.yaml`: input đã ingest và UI evidence.
-- `generation.json`: logical case, resolutions, LLM/plan/validator issues.
-- `testcases.yaml`, `testcases.xlsx`: cases do engine serialize/render.
+- `artifacts/3-generate/generation.json`: logical case, resolutions, LLM/plan/validator issues.
+- `artifacts/3-generate/testcases.yaml`, `artifacts/4-render/testcases.xlsx`: cases do engine serialize/render.
 - `summary.json`, `pipeline.log`: summary và diagnostics của product `run`.
-- `runs/<timestamp>/results.json`, `results.csv`, `junit.xml`, `report.md`:
+- `artifacts/5-execute/results.json`, `results.csv`, `junit.xml`, `artifacts/6-report/report.md`:
   kết quả execution thực tế. Manual/unresolved không được coi là Pass.
 
 Trace và screenshots đang tắt; evidence phục vụ model là dữ liệu có cấu trúc.

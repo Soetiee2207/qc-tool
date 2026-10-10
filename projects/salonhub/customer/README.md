@@ -10,8 +10,8 @@ module `CUSTOMER`. Không có testcase YAML viết tay; tool ingest AC và tự 
 Từ root qc-tool:
 
 ```bash
-qctool check customer
-qctool run customer
+qctool check salonhub --customer
+qctool run salonhub --customer
 ```
 
 `check` chỉ preflight offline, không browser/model/API. `run` chạy toàn bộ
@@ -80,9 +80,9 @@ Trong `artifacts/customer-e2e/`:
 
 - `requirements.yaml`: expected source và traceability (1 US + 7 AC = 8 records).
 - `ui-map.yaml`: controls/pages thực sự crawl được.
-- `generation.json`: coverage, gaps, preparation và resolution audit.
-- `testcases.yaml`, `testcases.xlsx`: IR và tài liệu testcase; không sửa tay.
-- `runs/<run>/`: `results.json`, `results.csv`, `junit.xml`, `report.md`, evidence
+- `artifacts/3-generate/generation.json`: coverage, gaps, preparation và resolution audit.
+- `artifacts/3-generate/testcases.yaml`, `artifacts/4-render/testcases.xlsx`: IR và tài liệu testcase; không sửa tay.
+- `artifacts/5-execute/`: `results.json`, `results.csv`, `junit.xml`, evidence; `artifacts/6-report/report.md`
   khi runner tạo được. Kiểm tra summary/log chỉ đường dẫn chính xác của lượt chạy.
 - `summary.json`, `pipeline.log`: summary và tiến trình nếu pipeline tạo thành công.
 

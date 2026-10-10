@@ -1,0 +1,7 @@
+# Demo trên API giả — `qctool demo` tự bật tests/mock_server.py (4 bug cài sẵn) rồi chạy project này.
+api: http://127.0.0.1:8099/api/v1
+auth:
+  mode: token
+  token: demo-token
+run:
+  timeout_seconds: 10

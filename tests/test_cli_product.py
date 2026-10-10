@@ -52,28 +52,37 @@ def test_successful_full_run_summary_agrees_with_every_artifact(monkeypatch,tmp_
     path,out=inputs(monkeypatch,tmp_path)
     assert main(['run','--config',str(path)])==0
     summary=json.loads((out/'summary.json').read_text())
-    generation=json.loads((out/'generation.json').read_text())
-    result=json.loads(Path(summary['artifacts']['report']).with_name('results.json').read_text())
+    generation=json.loads((out/'3-generate/generation.json').read_text())
+    result=json.loads((out/'5-execute/results.json').read_text())
     assert summary['generation_success']==generation['success'] is True
     assert summary['counts']['Pass']==len([r for r in result['results'] if r['status']=='Pass'])==1
     assert summary['executable_testcases']==len(generation['executable_cases'])==1
-    assert summary['generated_testcases']==len(yaml.safe_load((out/'testcases.yaml').read_text())['testcases'])
+    assert summary['generated_testcases']==len(yaml.safe_load((out/'3-generate/testcases.yaml').read_text())['testcases'])
     assert summary['executable_coverage']['covered']==summary['executable_coverage']['total']==1
     import csv
     import xml.etree.ElementTree as ET
     from openpyxl import load_workbook
-    run_dir=Path(summary['artifacts']['report']).parent
+    run_dir=out/'5-execute'
     csv_rows=list(csv.DictReader((run_dir/'results.csv').open(encoding='utf-8-sig')))
     assert [r['Kết quả'] for r in csv_rows]==['Pass']
     junit=ET.parse(run_dir/'junit.xml').getroot()
     assert junit.attrib['tests']=='1' and junit.attrib['failures']=='0'
-    workbook=load_workbook(out/'testcases.xlsx')
+    workbook=load_workbook(out/'4-render/testcases.xlsx')
     assert any('Pass' in row for row in workbook.active.iter_rows(values_only=True))
     workbook.close()
-    for key in ['testcases.yaml','testcases.xlsx','generation.json','summary.json','pipeline.log']:
-        assert (out/key).is_file()
-    for key in ['results.json','results.csv','junit.xml','report.md']:
-        assert Path(summary['artifacts']['report']).with_name(key).is_file()
+    for key in ['1-ingest/requirements.yaml','3-generate/testcases.yaml','4-render/testcases.xlsx',
+                '3-generate/generation.json','summary.json','pipeline.log','run.json','events.jsonl',
+                '5-execute/results.json','5-execute/results.csv','5-execute/junit.xml','6-report/report.md']:
+        assert (out/key).is_file(), key
+    run=json.loads((out/'run.json').read_text())
+    assert run['status']=='done' and run['error'] is None
+    assert {k:v['status'] for k,v in run['stages'].items()}=={'ingest':'done','crawl':'done',
+        'generate':'done','render':'done','execute':'done','report':'done'}
+    assert '6-report/report.md' in run['stages']['report']['outputs']
+    for stage in ['1-ingest','3-generate','4-render','5-execute','6-report']:
+        assert (out/stage/'stage.log').read_text().strip(), stage
+    events=[json.loads(l) for l in (out/'events.jsonl').read_text().splitlines()]
+    assert [e['stage'] for e in events][0]=='ingest' and all({'t','stage','level','message'}<=set(e) for e in events)
     text=capsys.readouterr().out
     assert 'QC: SUCCESS' in text and 'Pass: 1' in text
     assert '[generate]' in text and '[ingest]' in text and '[run]' in text and 'Generation:' in text
@@ -236,15 +245,37 @@ def test_existing_testcase_yaml_runs_via_step_exec(monkeypatch,tmp_path):
     assert cli.main(['step','exec','old.yaml','--base-url',BASE])==0 and seen==['old.yaml']
 
 
-def test_project_name_resolves_under_projects_and_rejects_unknown(monkeypatch,tmp_path):
+def test_init_creates_project_and_features_and_targets_resolve(monkeypatch,tmp_path):
     import qctool.cli as cli
     monkeypatch.chdir(tmp_path)
-    assert cli.main(['init','shop'])==0 and (tmp_path/'projects/shop/qctool.yaml').is_file()
+    assert cli.main(['init','shop'])==0 and (tmp_path/'projects/shop/project.yaml').is_file()
     assert cli.main(['init','shop'])==2
-    assert cli.resolve_project('shop')==Path('projects/shop/qctool.yaml')
-    assert cli.resolve_project('projects/shop')==Path('projects/shop/qctool.yaml')
-    with pytest.raises(SystemExit, match='shop'):
-        cli.resolve_project('nope')
+    assert cli.main(['init','shop/login'])==0 and cli.main(['init','shop/cart'])==0
+    assert cli.main(['init','shop/cart'])==2
+    feats=lambda *a: [p.parent.name for p in cli.resolve_targets(*a)]
+    assert feats('shop')==['cart','login']
+    assert feats('shop',['login'])==['login']==feats('projects/shop/login')==feats('shop/login')
+    with pytest.raises(SystemExit, match='nope'):
+        cli.resolve_targets('nope')
+    with pytest.raises(SystemExit, match='không có feature'):
+        cli.resolve_targets('shop',['nope'])
+    with pytest.raises(SystemExit, match='--cart'):
+        cli.resolve_project('shop')
+
+
+def test_run_project_runs_every_feature_or_only_flagged_one(monkeypatch,tmp_path,capsys):
+    import qctool.cli as cli
+    import qctool.cli_run as cli_run
+    monkeypatch.chdir(tmp_path)
+    cli.main(['init','shop/login']); cli.main(['init','shop/cart'])
+    seen=[]
+    monkeypatch.setattr(cli_run,'cmd_project',lambda args,validate_only=False:seen.append(Path(args.config).parent.name) or (1 if 'cart' in args.config else 0))
+    assert cli.main(['run','shop'])==1 and seen==['cart','login']
+    assert 'Tổng hợp' in capsys.readouterr().out
+    seen.clear(); assert cli.main(['run','shop','--login'])==0 and seen==['login']
+    seen.clear(); assert cli.main(['check','shop','-f','cart'])==1 and seen==['cart']
+    with pytest.raises(SystemExit):
+        cli.main(['run','shop','--nope'])
 
 
 def test_missing_locked_fixture_shows_exact_need_without_verifying_or_provisioning(monkeypatch,tmp_path,capsys):

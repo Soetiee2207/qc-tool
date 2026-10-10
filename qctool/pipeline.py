@@ -27,8 +27,15 @@ from qctool.core.executability import analyze_executability
 from qctool.agent.loop import AgentLLM
 from qctool.agent.llm_provider import load_llm_provider
 from qctool.data.fixtures import FixtureStore, load_fixture_store
+from qctool.artifacts import RunTracker, stage_dir
 
 ProgressFn = Callable[[str, str], None]      # (bước, mô tả)
+
+
+# Output khi lượt chạy không gắn project (config tự do, API trực tiếp). Project thì
+# luôn ghi vào <feature>/artifacts/ — xem config.expand_project.
+ARTIFACTS_ROOT = Path("artifacts")
+WEB_ROOT = Path("projects") / "web"      # lượt chạy từ web UI: <WEB_ROOT>/<feature>/artifacts
 
 
 def _noop(stage: str, message: str) -> None:
@@ -211,6 +218,7 @@ class PipelineResult:
     xlsx_path: Path | None = None
     run_dir: Path | None = None
     report_path: Path | None = None
+    tracker: object | None = field(default=None, repr=False)   # artifacts.RunTracker
     counts: dict = field(default_factory=dict)
     total_cases: int = 0
     generated_report: object | None = None      # validate.Report
@@ -251,11 +259,17 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
     def safe(message: str) -> str:
         return cfg.fixture_store.redact(message) if cfg.fixture_store else message
 
+    tracker: RunTracker | None = None
+
     def notify(stage: str, message: str) -> None:
         progress(stage, safe(message))
+        if tracker:
+            tracker.event(stage, message, "error" if stage == "error" else "info")
 
     def log(message: str) -> None:
         result.log.append(safe(message))
+        if tracker:
+            tracker.event(tracker.current or "", message, "detail")
 
     try:
         if cfg.llm_enabled and (resolution_llm is None or exploration_llm is None):
@@ -263,9 +277,10 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
             resolution_llm = resolution_llm if resolution_llm is not None else adapter
             exploration_llm = exploration_llm if exploration_llm is not None else adapter
             log("LLM authoring bật tường minh; tool safety/schema/citation được kiểm tra trước khi chạy")
-        out_dir = cfg.out_dir or Path("artifacts") / cfg.feature
+        out_dir = cfg.out_dir or ARTIFACTS_ROOT / cfg.feature
         result.out_dir = out_dir
-        out_dir.mkdir(parents=True, exist_ok=True)
+        tracker = RunTracker(out_dir, redact=safe, feature=cfg.feature)
+        result.tracker = tracker
 
         # ── Chặng 1 ────────────────────────────────────────────────────────
         requirements_path: Path | None = None
@@ -274,8 +289,9 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
             if not cfg.docs_dir.is_dir():
                 raise FileNotFoundError(f"Không tìm thấy thư mục tài liệu: {cfg.docs_dir}")
             data = ingest.ingest_feature(cfg.docs_dir, cfg.feature)
-            requirements_path = out_dir / "requirements.yaml"
+            requirements_path = tracker.dir("ingest") / "requirements.yaml"
             ingest.write_yaml(data, requirements_path)
+            tracker.output("ingest", requirements_path)
             counts = data["counts"]
             message = (f"Đọc được {counts.get('total', 0)} requirement "
                        f"({counts.get('user_story', 0)} US, "
@@ -288,6 +304,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                 log(f"  ⚠ {warning}")
         else:
             notify("ingest", "Không có tài liệu — bỏ qua chặng ingest")
+            tracker.skip("ingest", "Không có tài liệu")
 
         result.requirements_path = requirements_path
 
@@ -322,8 +339,8 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
         endpoints = generate.load_endpoints(openapi_path)[0] if openapi_path else None
         needs_ui_evidence = bool(requirements_path and resolution_llm)
         auth_operations = []
-        state_path = out_dir / ".auth-state.json"
-        token_path = out_dir / ".token"
+        state_path = stage_dir(out_dir, "crawl") / ".auth-state.json"
+        token_path = stage_dir(out_dir, "crawl") / ".token"
         ui_map = None
         if cfg.web_url and (needs_ui_evidence or not cfg.skip_run):
             notify("crawl", f"Mở trình duyệt tới {cfg.web_url}…")
@@ -378,7 +395,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                             controls = getattr(session, 'login_controls', None)
                             if controls and cfg.fixture_store:
                                 from qctool.agent.knowledge import AppKnowledge
-                                kb = AppKnowledge(out_dir / 'app-model.yaml', cfg.web_url.rstrip('/'), store=cfg.fixture_store)
+                                kb = AppKnowledge(stage_dir(out_dir, 'crawl') / 'app-model.yaml', cfg.web_url.rstrip('/'), store=cfg.fixture_store)
                                 metadata = cfg.fixture_store.to_dict()['aliases']
                                 for name in sorted({a.split('.')[0] for a in metadata}):
                                     email, password = name + '.email', name + '.password'
@@ -408,6 +425,8 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                         log(f"  ⚠ Đăng nhập không thành công: {reason}")
                         notify("crawl", f"Đăng nhập không thành công ({reason}) — crawl không cần "
                                         "đăng nhập vẫn chạy tiếp")
+        if not cfg.web_url or not (needs_ui_evidence or not cfg.skip_run):
+            tracker.skip("crawl", "Không có web_url hoặc không cần trình duyệt")
         notify("generate", "Authoring agent: quan sát → viết testcase → dry-run; assertion giữ theo tài liệu")
         generation_result = run_generation(
             source_data.get("requirements", []), existing_cases=cases,
@@ -417,12 +436,12 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
             resolution_llm=resolution_llm,
             module=cfg.module or "GEN", fixture_store=cfg.fixture_store,
             allow_provisioning=cfg.allow_provisioning, environment=cfg.data_environment,
-            mutation_policy=cfg.exploration_mutation, knowledge_path=out_dir / "app-model.yaml",
+            mutation_policy=cfg.exploration_mutation, knowledge_path=stage_dir(out_dir, "crawl") / "app-model.yaml",
             agent_budget=cfg.agent_budget, intent_ids=cfg.intent_ids, max_intents=cfg.max_intents,
             headless=cfg.headless, on_progress=notify, auth_operations=auth_operations, critic=cfg.agent_critic,
         )
         result.generation_result = generation_result
-        generation_path = out_dir / "generation.json"
+        generation_path = tracker.dir("generate") / "generation.json"
         result.case_scopes = {case.id: "BUSINESS_COVERAGE" for case in generation_result.cases}
         generation_payload = generation_result.to_dict()
         generation_payload["generation_profile"] = cfg.generation_profile
@@ -432,6 +451,9 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
         generation_path.write_text(json.dumps(generation_payload,
                                              ensure_ascii=False, indent=2), encoding="utf-8")
         result.generation_path = generation_path
+        tracker.output("generate", generation_path)
+        if (stage_dir(out_dir, "crawl") / "app-model.yaml").is_file():
+            tracker.output("crawl", stage_dir(out_dir, "crawl") / "app-model.yaml")
         summary = (f"Generation: {result.generation_status} · "
                    f"{len(generation_result.executable_cases)} executable · "
                    f"{len(generation_result.unresolved_cases)} unresolved")
@@ -455,13 +477,11 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
         result.total_cases = len(cases)
         result.generated_report = validation
 
-        testcases_path = out_dir / "testcases.yaml"
+        testcases_path = tracker.dir("generate") / "testcases.yaml"
         generate.write_cases(cases, testcases_path, {**meta, "generation_profile": cfg.generation_profile, "case_scopes": result.case_scopes})
         result.testcases_path = testcases_path
+        tracker.output("generate", testcases_path)
 
-        xlsx_path = out_dir / "testcases.xlsx"
-        render.render(cases, xlsx_path, created_by=cfg.created_by)
-        result.xlsx_path = xlsx_path
 
         message = f"Sinh được {len(cases)} testcase"
         manual = sum(1 for c in cases if c.execution == "manual")
@@ -484,22 +504,28 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                     shown = ", ".join(missing)
                 log(f"  chưa có test · {kind}: {shown}")
 
+        notify("render", "Xuất testcase ra Excel 14 cột…")
+        xlsx_path = tracker.dir("render") / "testcases.xlsx"
+        render.render(cases, xlsx_path, created_by=cfg.created_by)
+        result.xlsx_path = xlsx_path
+        tracker.output("render", xlsx_path)
+
         # ── Chặng 3 + 4 ────────────────────────────────────────────────────
         if (not validation.ok or generation_result.status in {
                 GenerationStatus.INVALID_TESTCASES, GenerationStatus.FAILED}):
             result.error = f"Generation {result.generation_status}: xem generation.json"
             log(f"LỖI: {result.error}")
             notify("error", result.error)
+            tracker.fail(result.error, "Xem 3-generate/generation.json → issues, agent_history")
             return result
-        if cfg.skip_run:
-            notify("run", "Bỏ qua chạy test (skip_run = true)")
-            log("Bỏ qua chạy test theo cấu hình")
-            result.ok = True
-            return result
-
-        if not cfg.base_url and not cfg.web_url:
-            notify("run", "Không có `base_url` / `web_url` — chỉ sinh testcase, không chạy")
-            log("Không có địa chỉ môi trường nên không chạy test")
+        if cfg.skip_run or (not cfg.base_url and not cfg.web_url):
+            reason = ("Bỏ qua chạy test (skip_run = true)" if cfg.skip_run
+                      else "Không có `base_url` / `web_url` — chỉ sinh testcase, không chạy")
+            notify("run", reason)
+            log(reason)
+            for stage in ("execute", "report"):
+                tracker.skip(stage, reason)
+            tracker.finish()
             result.ok = True
             return result
 
@@ -550,7 +576,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                     cfg.web_url, headless=cfg.headless,
                     timeout_ms=cfg.timeout_seconds * 1000,
                     evidence_dir=(None if cfg.ui_evidence == "off"
-                                  else out_dir / "evidence"),
+                                  else tracker.dir("execute") / "evidence"),
                     authenticated=bool(token or cfg.username),
                     storage_state=state_path if state_path.is_file() else None,
                     viewport={"width": cfg.viewport[0], "height": cfg.viewport[1]},
@@ -606,13 +632,19 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
 
         # ── Chặng 4 ────────────────────────────────────────────────────────
         notify("report", "Xuất báo cáo…")
-        run_dir = out_dir / "runs" / run_result.started_at.replace("-", "").replace(":", "").replace(" ", "-")
+        run_dir = tracker.dir("execute")
         report.write_json(run_result, run_dir / "results.json")
         report.write_csv(run_result, run_dir / "results.csv")
         report.write_junit(run_result, run_dir / "junit.xml")
-        report.render_markdown(run_result, run_dir / "report.md")
+        report_path = tracker.dir("report") / "report.md"
+        report.render_markdown(run_result, report_path)
         result.run_dir = run_dir
-        result.report_path = run_dir / "report.md"
+        result.report_path = report_path
+        for name in ("results.json", "results.csv", "junit.xml"):
+            tracker.output("execute", run_dir / name)
+        if (run_dir / "evidence").is_dir():
+            tracker.output("execute", run_dir / "evidence")
+        tracker.output("report", report_path)
 
         # Ghi kết quả ngược vào chính file testcase — bản ghi hai pha
         filled = render.fill_results(xlsx_path, run_result, executed_by=cfg.created_by)
@@ -650,6 +682,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
             rate += " · " + " · ".join(parts)
         notify("done", rate)
         log(rate)
+        tracker.finish()
         result.ok = True
         return result
 
@@ -658,6 +691,8 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
         result.log.append(f"LỖI: {result.error}")
         result.log.append(safe(traceback.format_exc()))
         notify("error", result.error)
+        if tracker:
+            tracker.fail(result.error, safe(traceback.format_exc()))
         return result
 
 

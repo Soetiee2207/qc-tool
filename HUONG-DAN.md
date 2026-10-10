@@ -5,45 +5,59 @@ Công cụ tự động hoá QC: đưa **tài liệu** + **OAS** + **link web** 
 
 ---
 
-## Năm lệnh cần nhớ
+## Lệnh cần nhớ
 
 ```bash
-qctool init  <tên>            # tạo projects/<tên>/qctool.yaml
-qctool check <tên>            # kiểm tra cấu hình + tài liệu, không gọi model/browser/API
-qctool run   <tên>            # sinh testcase → chạy → báo cáo
-qctool trace <tên> <MÃ_TEST>  # xem lại từng bước của một case
-qctool ui                     # giao diện web — bấm là chạy
+qctool init  salonhub/customer        # tạo project + feature (projects/salonhub/customer/)
+qctool check salonhub                 # kiểm tra mọi feature, không gọi model/browser/API
+qctool run   salonhub                 # chạy MỌI feature của project
+qctool run   salonhub --customer      # chỉ chạy feature customer (lặp được: --customer --order_product)
+qctool trace salonhub TC_CUSTOMER_001 # xem lại từng bước của một case
+qctool ui                             # giao diện web
 ```
 
-Chạy trong venv của repo (`uv sync` một lần), hoặc thêm `uv run` phía trước mỗi lệnh.
-`<tên>` là thư mục trong `projects/`; cũng nhận đường dẫn thư mục hoặc file YAML.
+Chạy trong venv của repo (`uv sync` một lần, `source .venv/bin/activate`), hoặc thêm
+`uv run` phía trước mỗi lệnh.
 
 ---
 
-## Một project = một thư mục
+## Project = một sản phẩm · feature = một phần của nó
 
-```bash
-qctool init shop     # → projects/shop/qctool.yaml
+```
+projects/
+  salonhub/                     ← một sản phẩm / một webapp
+    project.yaml                ← cấu hình CHUNG: web, api, llm, vai trò tài khoản, timeout…
+    customer/                   ← một feature
+      urd.md  srs.md  flows.md  openapi.yaml     ← tài liệu đầu vào
+      qctool.yaml               ← cấu hình RIÊNG feature (ghi đè project.yaml)
+      artifacts/                ← kết quả lượt chạy gần nhất (xem "Đọc kết quả")
+    order_product/
+      …
+  demo/task-manager/            ← API giả để thử tool
 ```
 
-File cấu hình chỉ cần vài dòng. Đường dẫn tính từ thư mục project:
+`project.yaml` (dùng chung):
 
 ```yaml
-docs: ../../samples/shop            # thư mục urd.md + srs.md
-openapi: ../../samples/shop/openapi.yaml
-web: https://shop.example.com       # link webapp
-api: https://api.shop.example.com   # địa chỉ API (bỏ thì dùng `web`)
-llm: true                           # agent viết case UI từ tài liệu
+web: https://salonhub-soe.vercel.app
+api: https://salonhub-3cg8.onrender.com   # bỏ thì dùng `web`
+llm: true                                 # agent viết case UI từ tài liệu
+account:
+  role: customer                          # tài khoản lấy từ .env
+```
 
-account:                            # bỏ nếu webapp không cần đăng nhập
-  role: customer
-  login_for: [001-1, 001-3]         # AC cần đăng nhập ĐÚNG tài khoản
+`<feature>/qctool.yaml` (riêng feature, thường chỉ vài dòng):
+
+```yaml
+account:
+  login_for: [001-1, 001-3]               # AC cần đăng nhập ĐÚNG tài khoản
 ```
 
 | Khoá | Mặc định khi bỏ trống |
 |---|---|
-| `feature` / `module` | Tên thư mục project (`shop` / `SHOP`) |
-| Thư mục kết quả | `artifacts/<feature>/` |
+| Tài liệu / OpenAPI | `urd.md`/`srs.md` và `openapi.yaml` nằm cạnh `qctool.yaml` |
+| `feature` / `module` | Tên thư mục feature (`customer` / `CUSTOMER`) |
+| Thư mục kết quả | `<feature>/artifacts/` |
 | `auth.mode` | `browser` nếu có `account`, ngược lại `manual` |
 | `generation.budget` | 14 lượt · 90k token · 480 giây mỗi AC |
 | `run.timeout_seconds` | 30 |
@@ -53,9 +67,12 @@ account:                            # bỏ nếu webapp không cần đăng nh�
 vào YAML. Chỉ AC nằm trong `login_for` mới được dùng tài khoản. AC kiểu *"sai mật khẩu
 thì báo lỗi"* thì **không** liệt kê, để tool không điền mật khẩu đúng vào case đó.
 
-Các khoá nâng cao vẫn dùng được và luôn thắng giá trị mặc định: `auth`, `run`, `ui`,
-`generation`, `provisioning`, `exploration`, `test_fixtures`. Xem ví dụ thật trong
-`projects/order_product/qctool.yaml` (cho phép tạo đơn hàng thật theo rule).
+Mọi khoá nâng cao (`auth`, `run`, `ui`, `generation`, `provisioning`, `exploration`,
+`test_fixtures`) đặt được ở cả hai file; feature thắng project. Ví dụ thật:
+`projects/salonhub/order_product/qctool.yaml` (cho phép tạo đơn hàng thật theo rule).
+
+Chạy cả project thì mỗi feature chạy lần lượt, kết quả ghi vào **đúng** thư mục feature
+đó; cuối cùng in bảng tổng hợp. Mã thoát là mã xấu nhất trong các feature.
 
 ---
 
@@ -65,7 +82,7 @@ Các khoá nâng cao vẫn dùng được và luôn thắng giá trị mặc đ�
 qctool demo
 ```
 
-Tự bật API giả (cổng 8099, có 4 bug cài sẵn) rồi chạy `projects/demo`, nên sẽ thấy cả Đạt lẫn Lỗi.
+Tự bật API giả (cổng 8099, có 4 bug cài sẵn) rồi chạy `projects/demo` (feature `task-manager`), nên sẽ thấy cả Đạt lẫn Lỗi.
 
 ---
 
@@ -86,9 +103,10 @@ Tự bật API giả (cổng 8099, có 4 bug cài sẵn) rồi chạy `projects/
 
 ```bash
 qctool step ingest   <thư-mục-docs> --feature <tên>
-qctool step generate --requirements artifacts/<f>/requirements.yaml \
-                     --openapi <spec.yaml> --xlsx artifacts/<f>/testcases.xlsx
-qctool step exec     artifacts/<f>/testcases.yaml --base-url <url> --xlsx artifacts/<f>/testcases.xlsx
+qctool step generate --requirements <a>/1-ingest/requirements.yaml \
+                     --openapi <spec.yaml> --xlsx <a>/4-render/testcases.xlsx
+qctool step exec     <a>/3-generate/testcases.yaml --base-url <url> --xlsx <a>/4-render/testcases.xlsx
+# <a> = projects/<project>/<feature>/artifacts
 qctool step crawl    <url>     # dò element → ui-map.yaml
 ```
 
@@ -117,24 +135,48 @@ không**: test API không thấy được những thứ này. Bộ verb UI/UX ki
 `assert.focused`, `assert.text`, `assert.value`, `assert.attr`, `assert.count`,
 `assert.checked`, `assert.axe`, `assert.screenshot`.
 
-Xem lại một case: `qctool trace shop TC_SHOP_001`.
+Xem lại một case: `qctool trace salonhub TC_CUSTOMER_001`.
 
 ---
 
 ## Đọc kết quả
 
-Sau mỗi lần chạy, trong `artifacts/<feature>/`:
+Mỗi lượt chạy ghi vào `projects/<project>/<feature>/artifacts/`, chia theo bước. Bước nào
+sinh ra gì thì nằm trong thư mục của bước đó:
 
-| File | Đọc để biết |
+```
+artifacts/
+  run.json          ← ĐỌC ĐẦU TIÊN: bước nào xong/đang chạy/bị bỏ qua/LỖI, file nào sinh ra
+  events.jsonl      ← dòng thời gian: mỗi dòng {t, stage, level, message}
+  pipeline.log      ← log đầy đủ (đã che mật khẩu/token)
+  summary.json      ← số liệu + đường dẫn file chính
+  1-ingest/    requirements.yaml               (requirement đọc được từ tài liệu)
+  2-crawl/     app-model.yaml                  (trang/element agent đã thấy, macro đăng nhập)
+  3-generate/  generation.json  testcases.yaml (agent gọi tool nào, lỗi gate/dry-run, token)
+  4-render/    testcases.xlsx                  (14 cột, đã điền kết quả sau khi chạy)
+  5-execute/   results.json  results.csv  junit.xml  evidence/   (từng bước, ảnh, trace)
+  6-report/    report.md                       (báo cáo cho người đọc)
+```
+
+Mỗi thư mục bước có `stage.log` — log riêng của bước đó. **Bước bị lỗi có thêm `error.log`**
+(thông báo + traceback), và `run.json` trỏ thẳng tới nó:
+
+```json
+"status": "failed",
+"error": {"stage": "generate", "message": "…", "log": "3-generate/error.log"}
+```
+
+| Muốn biết | Mở |
 |---|---|
-| `runs/<giờ>/report.md` | **Đọc cái này**: tóm tắt, chi tiết theo module, danh sách lỗi, chưa chạy được, bằng chứng |
-| `testcases.xlsx` | File testcase 14 cột, **đã điền kết quả vào sẵn** |
-| `runs/<giờ>/junit.xml` | Đưa vào CI |
-| `runs/<giờ>/results.csv` | Mở Excel, tự làm pivot |
-| `evidence/` | Ảnh chụp + trace của test UI, đặt tên theo mã test |
-| `generation.json` | Agent đã gọi tool nào, sửa lỗi gì, tốn bao nhiêu token |
-| `app-model.yaml` | Trang agent đã thấy + macro đăng nhập (không chứa mật khẩu) |
-| `summary.json`, `pipeline.log` | Tóm tắt máy đọc được + log đầy đủ của lượt chạy |
+| Tool đang ở bước nào / dừng ở đâu | `run.json` → `current_stage`, `stages.<bước>.status` |
+| Vì sao hỏng | `run.json` → `error.log` → `<bước>/stage.log` |
+| Kết quả cho người đọc | `6-report/report.md` |
+| Một case UI chạy ra sao | `5-execute/results.json`, `5-execute/evidence/<MÃ>-*.png`, `qctool trace` |
+| Agent đã làm gì | `3-generate/generation.json` → `agent_history` |
+
+Lượt chạy mới **ghi đè** lượt trước, trừ `2-crawl/app-model.yaml` và phiên đăng nhập đã lưu
+(giữ lại để agent không phải dò và đăng nhập lại từ đầu). Muốn giữ một lượt chạy thì
+chép thư mục `artifacts/` ra chỗ khác trước khi chạy lại.
 
 ---
 
@@ -211,16 +253,16 @@ Coverage vẫn hiển thị toàn bộ nguồn: chạy một phần không có n
 
 | Muốn xem | Mở |
 |---|---|
-| Agent gọi tool nào, lỗi gì, tốn bao nhiêu token | `generation.json` → `agent_history[i].history`, `provider_attempts` |
-| Các bước của testcase | `testcases.yaml` hoặc `testcases.xlsx` |
-| Playwright chạy từng bước ra sao | `runs/<thời gian>/results.json`, `report.md` |
+| Agent gọi tool nào, lỗi gì, tốn bao nhiêu token | `3-generate/generation.json` → `agent_history[i].history`, `provider_attempts` |
+| Các bước của testcase | `3-generate/testcases.yaml` hoặc `4-render/testcases.xlsx` |
+| Playwright chạy từng bước ra sao | `5-execute/results.json`, `6-report/report.md` |
 | Xem lại trực quan (DOM, mạng, console) | `qctool trace <tên> <MÃ>` |
 
 Case có điền mật khẩu hoặc bắt request đăng nhập **không** có trace/ảnh. Tool tắt có chủ ý
 để file không chứa mật khẩu/token; kết quả từng bước vẫn có trong `results.json`. Muốn
 xem cả bước đăng nhập: `qctool run <tên> --trace-sensitive` (hoặc `ui.trace_sensitive: true`).
 ⚠ Khi đó `.trace.zip` chứa mật khẩu/token thật: chỉ dùng tài khoản test, xem trên máy
-mình, xoá `evidence/` sau khi xem, không chia sẻ/commit.
+mình, xoá `5-execute/evidence/` sau khi xem, không chia sẻ/commit.
 
 ---
 
@@ -241,7 +283,7 @@ mình, xoá `evidence/` sau khi xem, không chia sẻ/commit.
 
 | Hiện tượng | Xử lý |
 |---|---|
-| Nhiều `Lỗi` với `401` | Phiên hết hạn: xoá `artifacts/<feature>/.auth-state.json` rồi chạy lại |
+| Nhiều `Lỗi` với `401` | Phiên hết hạn: xoá `<feature>/artifacts/2-crawl/.auth-state.json` rồi chạy lại |
 | Nhiều `Lỗi` với `404` | Sai `api`: thử thêm/bớt `/api/v1` |
 | Crawl ra 0 element | Mạng chậm: thử lại; nếu vẫn vậy kiểm tra đăng nhập |
 | Nhiều `Bị chặn` | Thiếu OAS: đây là lý do phổ biến nhất |
@@ -253,5 +295,5 @@ mình, xoá `evidence/` sau khi xem, không chia sẻ/commit.
 | Đăng nhập hỏng nhưng vẫn muốn chạy case UI khác | Cứ chạy: case cần xác thực báo `Bị chặn`, case còn lại vẫn chạy |
 | `Cổng 8099 đang bận` khi `qctool demo` | Tắt mock server cũ đang chạy |
 
-Ví dụ đầy đủ: `projects/customer_e2e_test_1/` + `samples/customer_e2e_test_1/` (đăng nhập,
-mua hàng, đặt lịch; dừng trước bước tạo dữ liệu).
+Ví dụ đầy đủ: `projects/salonhub/customer_e2e_test_1/` (đăng nhập, mua hàng, đặt lịch; dừng
+trước bước tạo dữ liệu).

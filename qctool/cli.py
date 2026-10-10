@@ -20,6 +20,7 @@ from pathlib import Path
 import yaml
 
 from qctool import __version__, config, execute, generate, ingest, render, report
+from qctool import pipeline as _pipeline
 from qctool.pipeline import PipelineConfig, run_pipeline
 from qctool.core.testcase import Step, StepKind, TestCase
 
@@ -33,7 +34,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     feature = args.feature or feature_dir.name
     data = ingest.ingest_feature(feature_dir, feature)
 
-    out = Path(args.out) if args.out else Path("artifacts") / feature / "requirements.yaml"
+    out = Path(args.out) if args.out else _pipeline.ARTIFACTS_ROOT / feature / "requirements.yaml"
     ingest.write_yaml(data, out)
 
     print(ingest.summary(data))
@@ -63,7 +64,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
         # stem (`requirements`) — nếu không mọi feature đều ghi vào một chỗ.
         source = req_path or api_path
         stem = source.parent.name if source.stem in {"requirements", "openapi"} else source.stem
-        out = Path("artifacts") / stem / "testcases.yaml"
+        out = _pipeline.ARTIFACTS_ROOT / stem / "testcases.yaml"
     generate.write_cases(cases, out, meta)
 
     print(report.text())
@@ -282,7 +283,7 @@ def cmd_crawl(args: argparse.Namespace) -> int:
     ui_map = _crawl(url, extra_paths=args.paths or ["/"],
                     wait_ms=args.wait * 1000,
                     on_progress=lambda m: print(f"  {m}"))
-    out = Path(args.out) if args.out else Path("artifacts") / "ui-map.yaml"
+    out = Path(args.out) if args.out else _pipeline.ARTIFACTS_ROOT / "ui-map.yaml"
     ui_map.save(out)
     print()
     print(f"  {len(ui_map.pages)} trang · {len(ui_map.elements)} element")
@@ -306,71 +307,132 @@ def cmd_serve(args: argparse.Namespace) -> int:
 PROJECTS = Path("projects")
 
 PROJECT_TEMPLATE = """\
-# Project QC — đường dẫn tính từ thư mục này. Tài khoản/khoá API chỉ ở .env.
-docs: ../../samples/{name}          # thư mục urd.md + srs.md (bỏ nếu chỉ có OpenAPI)
-# openapi: ../../samples/{name}/openapi.yaml
+# {name} — cấu hình chung cho mọi feature; feature ghi đè trong <feature>/qctool.yaml.
+# Tài khoản/khoá API chỉ ở .env, không ghi vào đây.
 web: https://app.example.com         # link webapp (bỏ nếu chỉ test API)
 api: https://api.example.com         # địa chỉ API (mặc định = web)
 llm: true                            # agent viết case UI từ tài liệu (cần QCTOOL_LLM_* trong .env)
-
-# Bỏ comment nếu cần đăng nhập. Chỉ các AC liệt kê mới được dùng tài khoản
-# QCTOOL_USERNAME/QCTOOL_PASSWORD — AC kiểu "sai mật khẩu" thì không liệt kê.
 # account:
-#   role: customer
-#   login_for: [001-1, 001-3]
-
+#   role: customer                   # đăng nhập bằng QCTOOL_USERNAME/QCTOOL_PASSWORD
 # Tuỳ chọn khác (đều có mặc định): run.timeout_seconds, ui.evidence (off|on-fail|always),
 # ui.trace, ui.retry, ui.axe, generation.budget, auth.mode (browser|token|manual).
 """
 
+FEATURE_TEMPLATE = """\
+# Feature {name}. Đặt tài liệu cạnh file này: urd.md, srs.md, (srs/*flow*.md), openapi.yaml.
+# Kết quả mỗi lượt chạy nằm trong ./artifacts/ — chia theo bước 1-ingest … 6-report.
+# Chỉ AC liệt kê ở đây được dùng tài khoản; AC kiểu "sai mật khẩu" thì KHÔNG liệt kê.
+# account:
+#   login_for: [001-1, 001-3]
+"""
 
-def resolve_project(target: str) -> Path:
-    """`customer` → projects/customer/qctool.yaml; thư mục → <dir>/qctool.yaml; file giữ nguyên."""
+
+def _project_dir(target: str) -> Path:
     path = Path(target).expanduser()
-    for candidate in (path, path / "qctool.yaml", PROJECTS / target / "qctool.yaml"):
-        if candidate.is_file():
+    for candidate in (path, PROJECTS / target):
+        if candidate.is_file() or (candidate / "qctool.yaml").is_file() or features_of(candidate):
             return candidate
-    known = sorted(p.parent.name for p in PROJECTS.glob("*/qctool.yaml"))
-    hint = f" Có sẵn: {', '.join(known)}." if known else " Tạo mới: qctool init <tên>."
+    known = sorted(p.name for p in PROJECTS.iterdir() if p.is_dir()) if PROJECTS.is_dir() else []
+    hint = f" Có sẵn: {', '.join(known)}." if known else " Tạo mới: qctool init <project>/<feature>."
     raise SystemExit(f"LỖI  Không tìm thấy project '{target}'.{hint}")
 
 
-def _with_project(args: argparse.Namespace) -> argparse.Namespace:
-    if getattr(args, "project", None):
-        if args.config:
-            raise SystemExit("LỖI  Chọn <tên project> hoặc --config, không dùng cả hai.")
-        args.config = str(resolve_project(args.project))
-    return args
+def features_of(project: Path) -> list[Path]:
+    return sorted(p for p in project.glob("*/qctool.yaml")) if project.is_dir() else []
+
+
+def resolve_targets(target: str, only: list[str] | None = None) -> list[Path]:
+    """`salonhub` → mọi `<feature>/qctool.yaml`; `salonhub/customer` hoặc file YAML → một."""
+    where = _project_dir(target)
+    if where.is_file():
+        found = [where]
+    elif (where / "qctool.yaml").is_file():
+        found = [where / "qctool.yaml"]
+    else:
+        found = features_of(where)
+    if only:
+        names = {p.parent.name for p in found}
+        if missing := [f for f in only if f not in names]:
+            raise SystemExit(f"LỖI  '{target}' không có feature {', '.join(missing)}. "
+                             f"Có: {', '.join(sorted(names))}.")
+        found = [p for p in found if p.parent.name in only]
+    return found
+
+
+def resolve_project(target: str) -> Path:
+    """Một file cấu hình duy nhất — báo lỗi nếu project có nhiều feature."""
+    found = resolve_targets(target)
+    if len(found) != 1:
+        raise SystemExit(f"LỖI  '{target}' có {len(found)} feature — chọn một: "
+                         + ", ".join(f"--{p.parent.name}" for p in found))
+    return found[0]
+
+
+def _each_feature(args: argparse.Namespace, *, validate_only: bool) -> int:
+    from qctool.cli_run import cmd_project
+    if not getattr(args, "project", None):
+        return cmd_project(args, validate_only=validate_only)
+    if args.config:
+        raise SystemExit("LỖI  Chọn <project> hoặc --config, không dùng cả hai.")
+    targets = resolve_targets(args.project, args.features)
+    codes = []
+    for path in targets:
+        if len(targets) > 1:
+            print(f"\n━━ {path.parent.parent.name}/{path.parent.name} " + "━" * 40)
+        args.config = str(path)
+        codes.append((path, cmd_project(args, validate_only=validate_only)))
+    if len(targets) > 1:
+        print("\n━━ Tổng hợp " + "━" * 48)
+        for path, code in codes:
+            print(f"  {path.parent.name:<28} {_EXIT.get(code, code)}   → {path.parent / 'artifacts'}")
+    return max(code for _, code in codes)
+
+
+_EXIT = {0: "OK", 1: "CÓ LỖI SẢN PHẨM", 2: "LỖI CẤU HÌNH/PIPELINE", 3: "SINH CASE CHƯA ĐỦ", 4: "CÓ CASE BỊ CHẶN"}
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    from qctool.cli_run import cmd_project
-    return cmd_project(_with_project(args))
+    return _each_feature(args, validate_only=False)
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    from qctool.cli_run import cmd_project
-    return cmd_project(_with_project(args), validate_only=True)
+    return _each_feature(args, validate_only=True)
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    path = PROJECTS / args.name / "qctool.yaml"
-    if path.exists():
-        print(f"LỖI  {path} đã có — sửa trực tiếp file đó.", file=sys.stderr)
+    project, _, feature = args.name.partition("/")
+    root = PROJECTS / project
+    created = []
+    if not (root / "project.yaml").exists():
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "project.yaml").write_text(PROJECT_TEMPLATE.format(name=project), encoding="utf-8")
+        created.append(root / "project.yaml")
+    if feature:
+        path = root / feature / "qctool.yaml"
+        if path.exists():
+            print(f"LỖI  {path} đã có — sửa trực tiếp file đó.", file=sys.stderr)
+            return 2
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(FEATURE_TEMPLATE.format(name=feature), encoding="utf-8")
+        created.append(path)
+    if not created:
+        print(f"LỖI  {root / 'project.yaml'} đã có. Thêm feature: qctool init {project}/<feature>", file=sys.stderr)
         return 2
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(PROJECT_TEMPLATE.format(name=args.name), encoding="utf-8")
-    print(f"Đã tạo {path}\n  1. Sửa docs/web/api trong file\n  2. qctool check {args.name}\n  3. qctool run {args.name}")
+    for path in created:
+        print(f"Đã tạo {path}")
+    print(f"Tiếp theo: đặt tài liệu vào {root}/<feature>/ → qctool check {project} → qctool run {project}")
     return 0
 
 
 def cmd_trace(args: argparse.Namespace) -> int:
     import subprocess
-    cfg = PipelineConfig.from_file(resolve_project(args.project))
-    evidence = (cfg.out_dir or Path("artifacts") / cfg.feature) / "evidence"
-    traces = sorted(evidence.glob(f"{args.case_id}*.trace.zip"))
+    traces = []
+    for path in resolve_targets(args.project, args.features):
+        cfg = PipelineConfig.from_file(path)
+        evidence = (cfg.out_dir or _pipeline.ARTIFACTS_ROOT / cfg.feature) / "5-execute" / "evidence"
+        traces += sorted(evidence.glob(f"{args.case_id}*.trace.zip"))
     if not traces:
-        print(f"LỖI  Không có trace cho {args.case_id} trong {evidence}. "
+        print(f"LỖI  Không có trace cho {args.case_id} trong <feature>/artifacts/5-execute/evidence/. "
               "Bật `ui.trace: true` rồi chạy lại; case có mật khẩu cố ý không có trace.", file=sys.stderr)
         return 2
     return subprocess.call([sys.executable, "-m", "playwright", "show-trace", str(traces[-1])])
@@ -387,7 +449,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     print("API giả chạy ở http://127.0.0.1:8099/api/v1 (4 bug cài sẵn — sẽ thấy cả Đạt lẫn Lỗi)")
     try:
-        args.project, args.config = "demo", None
+        args.project, args.config, args.features = "demo", None, None
         return cmd_run(args)
     finally:
         server.shutdown()
@@ -400,15 +462,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"qc-tool {__version__}")
     sub = parser.add_subparsers(dest="command", required=True, metavar="<lệnh>")
 
-    p = sub.add_parser("init", help="Tạo project mới: projects/<tên>/qctool.yaml")
-    p.add_argument("name", help="Tên project (cũng là tên feature)")
+    p = sub.add_parser("init", help="Tạo project/feature: init <project> | init <project>/<feature>")
+    p.add_argument("name", help="salonhub (tạo project.yaml) hoặc salonhub/customer (thêm feature)")
     p.set_defaults(func=cmd_init)
 
-    p = sub.add_parser("check", help="Kiểm tra project, không gọi model/browser/API")
+    p = sub.add_parser("check", help="Kiểm tra project/feature, không gọi model/browser/API")
     _project_flags(p)
     p.set_defaults(func=cmd_check)
 
-    p = sub.add_parser("run", help="Chạy project: tài liệu → testcase → chạy → báo cáo")
+    p = sub.add_parser("run", help="Chạy mọi feature của project, hoặc chỉ --<feature>")
     _project_flags(p)
     p.add_argument("--show-browser", dest="headless", action="store_false", help="Hiện cửa sổ trình duyệt")
     p.add_argument("--only", nargs="+", metavar="AC", help="Chỉ sinh case cho các AC này (vd: 001-1 001-3)")
@@ -417,8 +479,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("trace", help="Mở trace Playwright của một testcase")
-    p.add_argument("project", help="Tên project")
+    p.add_argument("project", help="Tên project (thêm --<feature> để thu hẹp)")
     p.add_argument("case_id", help="Mã testcase, vd TC_CUSTOMER_001")
+    p.add_argument("-f", "--feature", dest="features", action="append", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_trace)
 
     p = sub.add_parser("ui", help="Mở giao diện web")
@@ -429,7 +492,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("demo", help="Chạy thử trên API giả (projects/demo)")
     p.add_argument("--show-browser", dest="headless", action="store_false", help=argparse.SUPPRESS)
-    p.set_defaults(func=cmd_demo, config=None, llm=None)
+    p.set_defaults(func=cmd_demo, config=None, llm=None, features=None)
 
     _step_parsers(sub.add_parser("step", help="Chạy từng chặng (nâng cao)")
                   .add_subparsers(dest="step", required=True, metavar="<chặng>"))
@@ -490,14 +553,15 @@ def _step_parsers(sub) -> None:
 
 
 def _project_flags(parser):
-    parser.add_argument('project', nargs='?', help='Tên project trong projects/, thư mục, hoặc file YAML')
+    parser.add_argument('project', nargs='?', help='Project trong projects/ (vd salonhub), salonhub/<feature>, hoặc file YAML')
+    parser.add_argument('-f', '--feature', dest='features', action='append', metavar='FEATURE',
+                        help='Chỉ chạy feature này (lặp lại được). Viết tắt: --<tên feature>, vd --customer')
     parser.add_argument('--config', help=argparse.SUPPRESS)
     parser.add_argument('--docs', '--docs-dir', dest='docs', help='Ghi đè thư mục URD/SRS/flows')
     parser.add_argument('--openapi', help='Ghi đè file OpenAPI')
     parser.add_argument('--url', help='Ghi đè link webapp')
     parser.add_argument('--out', help='Thư mục artifacts')
     parser.add_argument('--profile', choices=('agent',), help=argparse.SUPPRESS)
-    parser.add_argument('--feature', help=argparse.SUPPRESS)
     parser.add_argument('--module', help=argparse.SUPPRESS)
     parser.add_argument('--llm', action=argparse.BooleanOptionalAction, default=None,
                         help='Bật/tắt LLM (mặc định theo project); model/key lấy từ QCTOOL_LLM_*')
@@ -509,7 +573,18 @@ def _project_flags(parser):
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args, unknown = parser.parse_known_args(argv)
+    # `run salonhub --customer` — tên feature dùng thẳng làm cờ. Chỉ nhận đúng
+    # tên thư mục feature có thật; còn lại vẫn là lỗi cờ lạ như argparse thường.
+    if unknown and getattr(args, "project", None) and hasattr(args, "features"):
+        names = {p.parent.name for p in resolve_targets(args.project)}
+        for token in unknown:
+            if token.startswith("--") and token[2:] in names:
+                args.features = [*(args.features or []), token[2:]]
+            else:
+                parser.error(f"cờ không hợp lệ: {token}" + (f" (feature có: {', '.join(sorted(names))})" if token.startswith("--") else ""))
+    elif unknown:
+        parser.error(f"cờ không hợp lệ: {' '.join(unknown)}")
     return args.func(args)
 
 

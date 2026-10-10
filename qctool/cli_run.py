@@ -35,7 +35,7 @@ class Preflight:
 
 def _mapping_file(path):
     try:
-        data = yaml.safe_load(path.read_text(encoding='utf-8'))
+        data = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
     except (OSError, UnicodeError, yaml.YAMLError):
         raise PreflightError('Không đọc được YAML đầu vào; kiểm tra đường dẫn và cú pháp.') from None
     if not isinstance(data, dict):
@@ -256,7 +256,9 @@ def build_summary(result):
                          'generation':str(result.generation_path) if result.generation_path else None,
                          'testcases':str(result.testcases_path) if result.testcases_path else None,
                          'xlsx':str(result.xlsx_path) if result.xlsx_path else None,
-                         'report':str(result.report_path) if result.report_path else None}}
+                         'report':str(result.report_path) if result.report_path else None,
+                         'results':str(result.run_dir/'results.json') if result.run_dir else None,
+                         'run':str(result.out_dir/'run.json') if result.out_dir else None}}
 
 
 def redact(value,cfg):
@@ -339,7 +341,7 @@ def cmd_project(args, *, validate_only=False):
     terminal = sys.stdout
     progress = []
     try:
-        out = cfg.out_dir or Path('artifacts')/cfg.feature
+        out = cfg.out_dir or pipeline.ARTIFACTS_ROOT/cfg.feature
         out.mkdir(parents=True,exist_ok=True)
         # Use the original terminal while raw dependency output stays buffered.
         # Flush each phase to terminal AND disk before browser/model work proceeds.
@@ -355,7 +357,7 @@ def cmd_project(args, *, validate_only=False):
                 result = pipeline.run_pipeline(cfg,on_progress=on_progress,
                     resolution_llm=checked.adapter,exploration_llm=checked.adapter)
         summary = redact(build_summary(result),cfg)
-        out = result.out_dir or cfg.out_dir or Path('artifacts')/cfg.feature
+        out = result.out_dir or cfg.out_dir or pipeline.ARTIFACTS_ROOT/cfg.feature
         out.mkdir(parents=True,exist_ok=True)
         (out/'pipeline.log').write_text(redact('\n'.join(progress+result.log)+'\n'+buffer.getvalue(),cfg),encoding='utf-8')
         (out/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding='utf-8')

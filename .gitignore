@@ -4,6 +4,7 @@ __pycache__/
 
 # Output của mỗi lần chạy — sinh lại được, không commit
 artifacts/
+projects/**/artifacts/
 reports/
 
 # Bí mật: không bao giờ commit

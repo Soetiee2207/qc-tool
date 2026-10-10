@@ -27,7 +27,7 @@ from qctool.report import build_markdown, write_csv, write_json, write_junit  # 
 from qctool.core.testcase import Step, StepKind, TestCase  # noqa: E402
 from tests.mock_server import create_server  # noqa: E402
 
-SAMPLE_SPEC = Path(__file__).resolve().parent.parent / "samples" / "openapi" / "task-manager-sample.yaml"
+SAMPLE_SPEC = Path(__file__).resolve().parent.parent / "projects" / "demo" / "task-manager" / "openapi.yaml"
 
 
 @pytest.fixture(scope="module")

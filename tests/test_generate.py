@@ -27,7 +27,7 @@ from qctool.core.testcase import (  # noqa: E402
 from qctool.core.validate import validate_batch  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
-SAMPLE_SPEC = Path(__file__).resolve().parent.parent / "samples" / "openapi" / "task-manager-sample.yaml"
+SAMPLE_SPEC = Path(__file__).resolve().parent.parent / "projects" / "demo" / "task-manager" / "openapi.yaml"
 
 
 # ── Vocabulary đóng ──────────────────────────────────────────────────────────

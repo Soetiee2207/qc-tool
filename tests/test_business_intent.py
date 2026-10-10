@@ -34,8 +34,8 @@ def test_tc002_normal_pipeline_preserves_every_outcome(tmp_path, monkeypatch, ev
     import qctool.ui
     monkeypatch.setattr(qctool.ui, "crawl", lambda *a, **kw: evidence)
     repo = Path(__file__).resolve().parents[1]
-    cfg = PipelineConfig(docs_dir=repo / "samples/smoke",
-                         openapi=repo / "samples/smoke/openapi.yaml",
+    cfg = PipelineConfig(docs_dir=repo / "tests/fixtures/smoke",
+                         openapi=repo / "tests/fixtures/smoke/openapi.yaml",
                          feature="salonhub-smoke", module="SALON_AUTH",
                          web_url=evidence.base_url, auth_mode="manual",
                          skip_run=True, out_dir=tmp_path, llm_enabled=False)

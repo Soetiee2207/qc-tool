@@ -10,8 +10,8 @@ Xác nhận đặt lịch). Muốn test các bước đó cần mutation policy 
 ## Chạy
 
 ```bash
-qctool check customer_e2e_test_1     # offline
-qctool run customer_e2e_test_1       # LLM timeout/thinking đặt trong .env
+qctool check salonhub --customer_e2e_test_1     # offline
+qctool run salonhub --customer_e2e_test_1       # LLM timeout/thinking đặt trong .env
 ```
 
 `.env` cần `QCTOOL_USERNAME` / `QCTOOL_PASSWORD` (customer có sẵn) và cấu hình DeepSeek.
@@ -19,8 +19,8 @@ Thử rẻ trước: thêm `max_intents: 2` vào mục `generation` của config
 
 ## Kết quả và bằng chứng
 
-`artifacts/customer_e2e_test_1/`: `testcases.yaml` / `.xlsx`, `generation.json`
-(agent gọi tool nào, lỗi gì), `runs/<thời gian>/results.json` + `report.md`.
-Config bật `ui.evidence: always` và `ui.trace: true` → `evidence/<MÃ>-*.png`,
-`evidence/<MÃ>.trace.zip`; xem: `uv run playwright show-trace <file>.trace.zip`.
+`artifacts/`: `run.json` (bước nào lỗi), `3-generate/testcases.yaml`, `4-render/testcases.xlsx`, `3-generate/generation.json`
+(agent gọi tool nào, lỗi gì), `artifacts/5-execute/results.json` + `artifacts/6-report/report.md`.
+Config bật `ui.evidence: always` và `ui.trace: true` → `artifacts/5-execute/evidence/<MÃ>-*.png`,
+`<MÃ>.trace.zip`; xem: `qctool trace salonhub <MÃ>`.
 Trace chứa dữ liệu phiên — không chia sẻ ra ngoài.

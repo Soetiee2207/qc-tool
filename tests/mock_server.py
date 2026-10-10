@@ -1,7 +1,7 @@
 """API giả để chạy thử executor — chỉ dùng thư viện chuẩn.
 
 Mục đích: chứng minh runner thật sự chạy được testcase, không cần chờ spec thật.
-Server này cài đặt ĐÚNG contract trong `samples/openapi/task-manager-sample.yaml`
+Server này cài đặt ĐÚNG contract trong `projects/demo/task-manager/openapi.yaml`
 — nhưng **cố ý có bug**, để báo cáo có cả Pass lẫn Fail. Một mock hoàn hảo thì
 không chứng minh được gì: không biết runner có phát hiện lỗi hay không.
 

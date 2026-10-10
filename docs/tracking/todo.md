@@ -7,6 +7,7 @@ owner: "@binhhm"
 created: 2026-09-18
 updated: 2026-10-10
 changelog:
+  - 2026-10-10 | claude | projects/<project>/<feature>, artifacts theo bước, run.json
   - 2026-10-10 | claude | Dọn repo: projects/, CLI ngắn; thêm việc chạy lại LLM thật
   - 2026-10-09 | claude | V2: mapper retire, đã commit agent-redesign
   - 2026-10-09 | claude | Customer 7 intent: 5/7 Pass, 0 Fail; thêm việc tiếp theo
@@ -158,6 +159,11 @@ Chi tiết, lỗi đã sửa và số liệu từng lượt: finding mục "Ch�
 | [x] `qctool/core/`, `qctool/data/`; `llm_provider`/`exploration_actions` vào `agent/` | yêu cầu user |
 | [x] `projects/<tên>/qctool.yaml` dạng gọn + `account:` thay `qc_config/`; sửa bug `evidence: off` bị đọc thành on-fail | yêu cầu user |
 | [x] CLI `init/check/run/trace/ui/demo/step`; `--only <AC>` | yêu cầu user |
-| [ ] Chạy lại `qctool run customer_e2e_test_1` với DeepSeek thật để xác nhận kết quả tương đương 9/11 — chưa chạy sau khi dọn | verification |
-| [ ] `samples/smoke/` còn có cặp `SRS.md`/`srs.md` + `URD.md`/`urd.md` trùng tên khác hoa — chỉ test dùng, xem gộp | dọn repo |
+| [ ] Chạy lại `qctool run salonhub --customer_e2e_test_1` với DeepSeek thật để xác nhận kết quả tương đương 9/11 — chưa chạy sau khi dọn | verification |
+| [ ] `tests/fixtures/smoke/` còn có cặp `SRS.md`/`srs.md` + `URD.md`/`urd.md` trùng tên khác hoa — chỉ test dùng, xem gộp | dọn repo |
+| [x] Bỏ `samples/` + `artifacts/` gốc → `projects/<project>/<feature>/` (tài liệu + config + artifacts) | yêu cầu user |
+| [x] Artifacts theo bước `1-ingest … 6-report`, `stage.log`/`error.log`, `run.json`, `events.jsonl` | yêu cầu user |
+| [x] `qctool run <project>` chạy mọi feature; `--<feature>` chỉ một feature | yêu cầu user |
+| [ ] UI web: đọc `run.json`/`events.jsonl` để hiện tiến trình từng bước + link `error.log` (chưa làm, mới có dữ liệu) | yêu cầu user |
+| [ ] Lưu lịch sử nhiều lượt chạy (hiện mỗi lượt ghi đè, chỉ giữ tri thức + phiên đăng nhập) | dọn repo |
 

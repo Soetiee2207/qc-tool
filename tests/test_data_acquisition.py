@@ -100,7 +100,7 @@ def test_public_requirement_literal_id_is_not_proof_of_entity_existence():
 
 def test_no_fuzzy_endpoint_guessing_or_incomplete_creation_contract():
     case,store,_=inputs(env={})
-    op=replace(load_endpoints(Path('samples/smoke/openapi.yaml'))[0][0],operation_id='createCustomer',method='POST',path='/users',requires_auth=False,responses={'201':{}})
+    op=replace(load_endpoints(Path('tests/fixtures/smoke/openapi.yaml'))[0][0],operation_id='createCustomer',method='POST',path='/users',requires_auth=False,responses={'201':{}})
     assert acquire_test_data(case,fixture_store=store,endpoints=[op]).status==DataStatus.MISSING_TEST_DATA
     sources={'provisioning':[{'fixture':'active_user','operation_id':'createCustomer','provides':FACTS,'external_interaction':False}]}
     assert acquire_test_data(case,fixture_store=store,sources=sources,endpoints=[replace(op,responses={'200':{}})]).status==DataStatus.MISSING_TEST_DATA

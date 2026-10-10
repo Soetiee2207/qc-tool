@@ -139,8 +139,40 @@ def feature_name(path: Path) -> str:
     return path.parent.name if path.name == "qctool.yaml" else path.stem
 
 
+def _merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for key, value in over.items():
+        out[key] = _merge(out[key], value) if isinstance(value, dict) and isinstance(out.get(key), dict) else value
+    return out
+
+
+def project_file(feature_config: Path) -> Path | None:
+    """`projects/<p>/<f>/qctool.yaml` → `projects/<p>/project.yaml` nếu có."""
+    candidate = feature_config.parent.parent / "project.yaml"
+    return candidate if feature_config.name == "qctool.yaml" and candidate.is_file() else None
+
+
 def expand_project(data: dict, path: Path, repo: Path | None = None) -> dict:
+    """Dạng gọn → dạng đầy đủ. Feature thắng project; khoá tường minh thắng mặc định.
+
+    Mặc định theo thư mục feature: tài liệu là chính thư mục (nếu có urd.md/srs.md),
+    `openapi.yaml` nếu có, output vào `<feature>/artifacts/`.
+    """
+    import yaml
+    if shared := project_file(path):
+        base = yaml.safe_load(shared.read_text(encoding="utf-8")) or {}
+        if not isinstance(base, dict):
+            raise ConfigError(f"{shared} phải là YAML mapping.")
+        data = _merge(base, data)
     data = dict(data)
+    here = path.parent
+    if path.name == "qctool.yaml":
+        if "docs" not in data and "docs_dir" not in data and any((here / n).is_file() for n in ("urd.md", "srs.md")):
+            data["docs_dir"] = "."
+        if "openapi" not in data and (here / "openapi.yaml").is_file():
+            data["openapi"] = "openapi.yaml"
+        if "dir" not in (data.get("out") or {}):
+            data["out"] = {**(data.get("out") or {}), "dir": "artifacts"}
     for short, long in (("docs", "docs_dir"), ("web", "web_url")):
         if short in data:
             data.setdefault(long, data.pop(short))

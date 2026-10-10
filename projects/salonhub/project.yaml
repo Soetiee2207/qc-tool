@@ -1,0 +1,12 @@
+# SalonHub — cấu hình chung cho mọi feature. Feature ghi đè trong <feature>/qctool.yaml.
+# Tài khoản ở .env (QCTOOL_USERNAME/PASSWORD), không ghi vào đây.
+web: https://salonhub-soe.vercel.app
+api: https://salonhub-3cg8.onrender.com
+llm: true
+account:
+  role: customer
+run:
+  timeout_seconds: 45   # Render cold start
+ui:
+  evidence: always
+  trace: true

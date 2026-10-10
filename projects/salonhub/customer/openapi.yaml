@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: SalonHub customer — source-derived smoke contract
   version: 1.0.0
-  description: Bốn operations cho login và đọc khu vực cá nhân, đối chiếu samples/customer/srs.md.
+  description: Bốn operations cho login và đọc khu vực cá nhân, đối chiếu srs.md cùng thư mục.
     Không chứa credentials hoặc operation mutation dữ liệu.
 servers:
 - url: https://salonhub-3cg8.onrender.com

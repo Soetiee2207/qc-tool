@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from qctool import config as cfg_mod
+from qctool import pipeline
 from qctool.pipeline import PipelineConfig, run_pipeline
 
 MAX_BODY = 2 * 1024 * 1024
@@ -492,10 +493,14 @@ class Handler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             retry = 0
 
+        feature = (p.get("feature") or "feature").strip()
         return PipelineConfig(
             docs_dir=docs_dir,
             openapi=openapi,
-            feature=(p.get("feature") or "feature").strip(),
+            feature=feature,
+            # Lượt chạy từ web chưa gắn project: gom vào projects/web/<feature>/ để
+            # cùng bố cục artifacts theo bước như CLI, không rải ra thư mục gốc.
+            out_dir=pipeline.WEB_ROOT / Path(feature).name / "artifacts",
             module=(p.get("module") or "").strip() or None,
             base_url=base_url,
             web_url=web_url,

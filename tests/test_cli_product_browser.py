@@ -43,7 +43,7 @@ def test_primary_cli_business_runs_accepted_cases_and_retains_manual_legacy_arti
         assert summary['counts']['Pass']>=1
         assert summary['counts']['Fail']==summary['counts']['Blocked']==0
         assert summary['counts']['Not Executed']==0
-        results=json.loads(Path(summary['artifacts']['report']).with_name('results.json').read_text())
+        results=json.loads(Path(summary['artifacts']['results']).read_text())
         assert all(r['steps'] for r in results['results'] if r['status']=='Pass')
         assert all(r['status']=='Pass' for r in results['results'])
         assert not (out/'legacy-testcases.yaml').exists()

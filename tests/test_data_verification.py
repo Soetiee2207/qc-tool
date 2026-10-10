@@ -29,7 +29,7 @@ def rule(proves=None):
 
 def setup(record=None, facts=None, requirements=None):
     case, store, config = inputs(facts=facts, acquisition={'verification': [record or rule()]})
-    op = replace(load_endpoints(Path('samples/smoke/openapi.yaml'))[0][0],
+    op = replace(load_endpoints(Path('tests/fixtures/smoke/openapi.yaml'))[0][0],
                  servers=[], contract_servers=[BASE])
     acquired = acquire_test_data(case, fixture_store=store, requirements=requirements or [need()])
     return case, store, config, op, acquired

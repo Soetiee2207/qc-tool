@@ -24,7 +24,7 @@ from qctool.web.app import PAGE, Handler  # noqa: E402
 from tests.mock_server import create_server  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
-SAMPLE_SPEC = REPO / "samples" / "openapi" / "task-manager-sample.yaml"
+SAMPLE_SPEC = REPO / "projects" / "demo" / "task-manager" / "openapi.yaml"
 FIXTURE_DOCS = Path(__file__).parent / "fixtures" / "urd_srs"
 
 
@@ -264,8 +264,8 @@ def test_manual_auth_mode_never_logs_in(tmp_path, monkeypatch):
     run_pipeline(cfg)
     assert calls == [], f"auth.mode=manual mà vẫn đăng nhập: {calls}"
     # Agent without opt-in LLM performs no browser work at all.
-    assert (cfg.out_dir / 'testcases.yaml').is_file()
-    assert not (cfg.out_dir / 'ui-map.yaml').exists()
+    assert (cfg.out_dir / '3-generate/testcases.yaml').is_file()
+    assert not (cfg.out_dir / '2-crawl/ui-map.yaml').exists()
 
 
 # ── Web UI ───────────────────────────────────────────────────────────────────
@@ -342,7 +342,9 @@ def test_ui_blocks_download_outside_project(ui):
 
 
 def test_ui_downloads_generated_file(ui, tmp_path):
-    target = REPO / "artifacts" / "_test_download.txt"
+    import shutil
+    folder = REPO / "projects" / "_test_download"
+    target = folder / "artifacts" / "file.txt"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("nội dung thử", encoding="utf-8")
     try:
@@ -350,7 +352,7 @@ def test_ui_downloads_generated_file(ui, tmp_path):
         assert code == 200
         assert body == "nội dung thử"
     finally:
-        target.unlink(missing_ok=True)
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def test_ui_config_endpoint(ui):
