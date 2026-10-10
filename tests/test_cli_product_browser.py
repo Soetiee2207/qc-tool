@@ -6,7 +6,7 @@ import threading
 import pytest
 
 from qctool.cli import main
-from scripts.autonomous_acceptance_app import create_server
+from tests.acceptance_app import create_server
 
 pytestmark = pytest.mark.playwright
 
@@ -15,7 +15,7 @@ def test_primary_cli_business_runs_accepted_cases_and_retains_manual_legacy_arti
     import qctool.config as config
     import qctool.pipeline as pipeline
     monkeypatch.setattr(config,'load_dotenv',lambda *a:None)
-    from scripts.run_generation_acceptance import RouteReplay
+    from tests.route_replay import RouteReplay
     monkeypatch.setattr(pipeline,'load_llm_provider',lambda:RouteReplay('/entry'))
     docs=tmp_path/'docs';docs.mkdir()
     (docs/'urd.md').write_text('''# URD
@@ -57,7 +57,7 @@ def test_primary_cli_exact_quoted_flow_has_assessable_coverage(tmp_path,monkeypa
     import qctool.config as config
     import qctool.pipeline as pipeline
     monkeypatch.setattr(config,'load_dotenv',lambda *a:None)
-    from scripts.run_generation_acceptance import RouteReplay
+    from tests.route_replay import RouteReplay
     monkeypatch.setattr(pipeline,'load_llm_provider',lambda:RouteReplay('/entry'))
     docs=tmp_path/'docs';docs.mkdir()
     (docs/'srs.md').write_text('# SRS — kiểm tra route công khai\n')

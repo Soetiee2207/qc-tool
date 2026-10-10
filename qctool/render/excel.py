@@ -184,3 +184,16 @@ def _decorate(ws, last_row: int) -> None:
     ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}{max(end, 2000)}"
     ws.sheet_view.showGridLines = False
     ws.sheet_properties.tabColor = "1F4E79"
+
+
+def read_review_labels(path):
+    """Read QC decisions without changing runtime status or expected outcomes."""
+    from openpyxl import load_workbook
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        if 'Review' not in wb.sheetnames:
+            return {}
+        return {r[0]: {'review_decision': r[3]} for r in wb['Review'].iter_rows(min_row=2, values_only=True)
+                if r[0] and r[3] in {'accepted', 'rejected'}}
+    finally:
+        wb.close()

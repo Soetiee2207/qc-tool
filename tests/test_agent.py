@@ -215,7 +215,7 @@ def test_read_contract_host_does_not_authorize_browser_document_navigation():
 
 def test_review_labels_do_not_change_runtime_results(tmp_path):
     from qctool.render.excel import render
-    from qctool.generation_evaluation import read_review_labels
+    from qctool.render.excel import read_review_labels
     from openpyxl import load_workbook
     c=case();c.generation_status='needs_review';c.review_reasons=['Weak oracle']
     path=tmp_path/'cases.xlsx';render([c],path)
