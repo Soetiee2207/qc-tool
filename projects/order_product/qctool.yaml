@@ -1,0 +1,41 @@
+# SalonHub — đặt hàng COD. ⚠ Cho phép tạo ĐƠN THẬT trên production theo rule bên dưới.
+docs: ../../samples/order_product
+openapi: ../../samples/order_product/openapi.yaml
+web: https://salonhub-soe.vercel.app
+api: https://salonhub-3cg8.onrender.com
+llm: true
+account:
+  role: customer
+  login_for: [001-1]
+provisioning:
+  enabled: true   # không tự cấp quyền tạo đơn, vẫn qua exploration bên dưới
+  environment: production
+exploration:
+  mutation:
+    enabled: true # Explicitly change to true to allow scoped REAL order exploration.
+    environment: production
+    allowed_environment: production
+    application_origin: https://salonhub-soe.vercel.app
+    rules:
+      - id: cart-to-checkout
+        requirement_id: AC-order_product-001-1
+        page: /cart
+        target: cart-checkout-btn
+        expected_url: /checkout
+        max_attempts: 1
+      - id: create-cod-order
+        requirement_id: AC-order_product-001-1
+        page: /checkout
+        target: checkout-submit-btn
+        expected_url: /my-orders
+        max_attempts: 1
+        operation:
+          operation_id: createOrder
+          method: POST
+          path: /api/orders
+          origin: https://salonhub-3cg8.onrender.com
+          required_json: { paymentMethod: cod }
+          allowed_json_fields: [address, phone, paymentMethod, cartItemIds]
+ui:
+  evidence: "off"
+  trace: true

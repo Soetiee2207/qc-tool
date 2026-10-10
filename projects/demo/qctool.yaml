@@ -1,0 +1,8 @@
+# Demo trên API giả (4 bug cài sẵn) — `qctool demo` tự bật mock server rồi chạy file này.
+openapi: ../../samples/openapi/task-manager-sample.yaml
+api: http://127.0.0.1:8099/api/v1
+auth:
+  mode: token
+  token: demo-token
+run:
+  timeout_seconds: 10

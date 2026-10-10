@@ -125,3 +125,74 @@ def load_config() -> Config:
         timeout_seconds=int(os.environ.get("QCTOOL_TIMEOUT_SECONDS", "30")),
         verify_ssl=_flag("QCTOOL_VERIFY_SSL", True),
     )
+
+
+# ── File project (`projects/<tên>/qctool.yaml`) ─────────────────────────────
+# Dạng gọn được mở rộng thành đúng dạng đầy đủ mà PipelineConfig.from_file đọc,
+# nên logic chạy không đổi. Dạng đầy đủ vẫn dùng được và luôn thắng dạng gọn.
+
+AGENT_BUDGET = {"max_turns": 14, "max_tokens": 90000, "max_seconds": 480, "completion_tokens": 2200}
+
+
+def feature_name(path: Path) -> str:
+    """`projects/customer/qctool.yaml` → `customer`; `x/foo.yaml` → `foo`."""
+    return path.parent.name if path.name == "qctool.yaml" else path.stem
+
+
+def expand_project(data: dict, path: Path, repo: Path | None = None) -> dict:
+    data = dict(data)
+    for short, long in (("docs", "docs_dir"), ("web", "web_url")):
+        if short in data:
+            data.setdefault(long, data.pop(short))
+    if "api" in data:
+        data["run"] = {"base_url": data.pop("api"), **(data.get("run") or {})}
+    if isinstance(data.get("llm"), bool):
+        data["llm"] = {"enabled": data["llm"]}
+    data.setdefault("feature", feature_name(path))
+    data.setdefault("module", data["feature"].upper().replace("-", "_"))
+    gen = dict(data.get("generation") or {})
+    gen.setdefault("budget", dict(AGENT_BUDGET))
+    data["generation"] = gen
+    if "account" in data:
+        data = _expand_account(data, path, repo or Path.cwd())
+    return data
+
+
+def _expand_account(data: dict, path: Path, repo: Path) -> dict:
+    """`account:` → test_fixtures (bindings + acquisition) cho đúng các AC liệt kê.
+
+    Chỉ AC nằm trong `login_for` nhận tài khoản — AC kiểu "sai mật khẩu" không được
+    bind ngầm. Credential luôn lấy từ env, không bao giờ từ YAML.
+    """
+    account = data.pop("account")
+    if not isinstance(account, dict) or not isinstance(account.get("login_for"), list):
+        raise ConfigError("account cần `login_for: [<AC>, …]`, ví dụ `login_for: [001-1, 001-3]`.")
+    name = account.get("name", "active_user")
+    facts = {"role": account.get("role", "user"), "account_state": account.get("state", "active")}
+    aliases = [f"{name}.email", f"{name}.password"]
+    proven = {"account_exists": True, "password_valid": True, "account_state": facts["account_state"]}
+    docs = Path(data.get("docs_dir") or ".")
+    docs = (docs if docs.is_absolute() else path.parent / docs).resolve()
+    try:
+        urd = docs.relative_to(repo.resolve()) / "urd.md"
+    except ValueError:
+        urd = docs / "urd.md"
+    feature = data["feature"]
+    bindings, requirements = {}, {}
+    for raw in account["login_for"]:
+        short = str(raw).removeprefix("AC-").removeprefix(f"{feature}-")
+        ac = f"AC-{feature}-{short}"
+        bindings[ac] = {"email": aliases[0], "password": aliases[1], "correct_password": aliases[1]}
+        requirements[ac] = [{"fixture": name, "aliases": list(aliases), "facts": dict(proven),
+                             "require_verified": False, "source_ref": f"{urd.as_posix()}:AC-{short}"}]
+    data.setdefault("auth", {}).setdefault("mode", "browser")
+    data["test_fixtures"] = {
+        "fixtures": {name: {"email": {"env": "QCTOOL_USERNAME"}, "password": {"env": "QCTOOL_PASSWORD"},
+                            "facts": facts}},
+        "bindings": bindings,
+        "acquisition": {"requirements": requirements, "evidence": [{
+            "fixture": name, "facts": {**proven, "role": facts["role"]}, "assurance": "DECLARED",
+            "source_ref": f"operator:confirmed-existing-{facts['role']}-account"}]},
+        **(data.get("test_fixtures") or {}),
+    }
+    return data

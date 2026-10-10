@@ -86,7 +86,7 @@ class PipelineConfig:
 
     @classmethod
     def from_file(cls, path: Path) -> "PipelineConfig":
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data = cfg_mod.expand_project(yaml.safe_load(path.read_text(encoding="utf-8")) or {}, path)
         base = path.parent
 
         def resolve(value: str | None) -> Path | None:
@@ -165,7 +165,7 @@ class PipelineConfig:
             exploration_mutation=exploration_mutation,
             fixture_store=fixture_store,
             ui_retry=max(0, min(int(ui.get("retry", 0) or 0), 3)),
-            ui_evidence=str(ui.get("evidence", "on-fail") or "on-fail"),
+            ui_evidence="off" if ui.get("evidence") is False else str(ui.get("evidence") or "on-fail"),  # YAML: off → False
             ui_trace=bool(ui.get("trace", False)),
             ui_trace_sensitive=bool(ui.get("trace_sensitive", False)),
             ui_axe=bool(ui.get("axe", False)) or "assert.axe" in _verbs_in_file(path),

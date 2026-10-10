@@ -1,0 +1,14 @@
+# SalonHub — login, mua hàng, đặt lịch (read-only). Tài khoản ở .env.
+docs: ../../samples/customer_e2e_test_1
+openapi: ../../samples/customer_e2e_test_1/openapi.yaml
+web: https://salonhub-soe.vercel.app
+api: https://salonhub-3cg8.onrender.com
+llm: true
+account:
+  role: customer
+  login_for: [001-1, 002-3, 002-4, 003-3, 003-4]
+run:
+  timeout_seconds: 45
+ui:
+  evidence: always
+  trace: true
