@@ -10,24 +10,18 @@ module `CUSTOMER`. Không có testcase YAML viết tay; tool ingest AC và tự 
 Từ root qc-tool:
 
 ```bash
-uv run qctool validate --config qc_config/qctool.customer.e2e.yaml --llm
-uv run qctool run --config qc_config/qctool.customer.e2e.yaml --llm
+qctool check customer
+qctool run customer
 ```
 
-`validate` chỉ preflight offline, không browser/model/API. `run` chạy toàn bộ
+`check` chỉ preflight offline, không browser/model/API. `run` chạy toàn bộ
 pipeline: ingest → crawl (đăng nhập) → preparation dữ liệu tin cậy → agent DeepSeek
 viết từng case (quan sát → nháp → gate → dry-run) → runner Chromium → XLSX/report.
 Không bảo đảm cả 7 ca map được: thiếu bằng chứng hoặc dữ liệu phải unresolved,
 không được coi là Pass. Web UI đang mở để xem trực tiếp (`headless: false`).
 Không đóng terminal hoặc Chromium khi đang chạy.
 
-Entrypoint `all` dùng cùng pipeline agent:
-
-```bash
-uv run qctool all --config qc_config/qctool.customer.e2e.yaml --llm
-```
-
-Ưu tiên `run` cho summary và exit codes. Không chạy hai lệnh `run`/`all`
+Không chạy hai lệnh `run`
 cùng lúc; chúng dùng cùng thư mục output. Config bật sẵn `llm.enabled: true`; `--no-llm`
 để tắt (khi đó 7 case ở dạng thủ công, Not Executed). Nên có `QCTOOL_LLM_THINKING=disabled`
 trong `.env` — chế độ thinking làm câu trả lời bị cắt (`finish_reason: length`).

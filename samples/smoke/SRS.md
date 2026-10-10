@@ -100,8 +100,7 @@ Parser hiện tại cần `urd.md`, `srs.md`, `srs/*flow*.md`; các symlink kèm
 trỏ tới URD.md, SRS.md và flows.md, không tạo bản nội dung thứ hai.
 
 ```bash
-uv run qctool ingest samples/smoke --feature salonhub-smoke
-uv run qctool all --config qctool.smoke.yaml
+qctool step ingest samples/smoke --feature salonhub-smoke
 ```
 
 Config mặc định `skip_run: true`: chỉ sinh/resolve và xuất artifact; chưa thực thi

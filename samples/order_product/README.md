@@ -34,7 +34,7 @@ minh những preconditions đó. Đơn có tổng tiền dương, không voucher
 Preflight offline, không gọi website/LLM/Chromium:
 
 ```bash
-uv run qctool validate --config qc_config/qctool.order_product.e2e.yaml --llm
+qctool check order_product
 ```
 
 Kiểm tra offline hiện nhận hai requirement records (US và AC), **một obligation**
@@ -45,13 +45,7 @@ lỗi OpenAPI hoặc bằng chứng testcase đã chạy.
 Chạy pipeline đầy đủ, bật provider thật tường minh:
 
 ```bash
-uv run qctool run --config qc_config/qctool.order_product.e2e.yaml --llm
-```
-
-Nếu muốn entrypoint `all` đang dùng:
-
-```bash
-uv run qctool all --config qc_config/qctool.order_product.e2e.yaml --llm
+qctool run order_product
 ```
 
 Chỉ chạy một trong hai lệnh full. `generation.profile: business` là alias của `agent` (V2).
