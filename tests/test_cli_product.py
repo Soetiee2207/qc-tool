@@ -219,22 +219,32 @@ def test_preflight_errors_are_controlled(flags,capsys):
 def test_preflight_only_no_execution_or_artifact_write(monkeypatch,tmp_path,capsys):
     path,out=inputs(monkeypatch,tmp_path)
     monkeypatch.setattr(pipeline,'run_pipeline',lambda *a,**kw:pytest.fail('Preflight must not run'))
-    assert main(['validate','--config',str(path)])==0
+    assert main(['check','--config',str(path)])==0
     assert not out.exists() and 'PREFLIGHT OK' in capsys.readouterr().out
 
 
 def test_bad_yaml_error_never_echoes_secret(monkeypatch,tmp_path,capsys):
     path=tmp_path/'bad.yaml';path.write_text('password: [PRIVATE-SECRET:')
-    assert main(['validate','--config',str(path)])==2
+    assert main(['check','--config',str(path)])==2
     assert 'PRIVATE-SECRET' not in capsys.readouterr().out
 
 
-def test_legacy_run_remains_available_and_mixed_mode_is_rejected(monkeypatch,tmp_path):
+def test_existing_testcase_yaml_runs_via_step_exec(monkeypatch,tmp_path):
     import qctool.cli as cli
     seen=[]
     monkeypatch.setattr(cli,'cmd_run_testcases',lambda args:seen.append(args.testcases) or 0)
-    assert main(['run','old.yaml','--base-url',BASE])==0 and seen==['old.yaml']
-    assert main(['run','old.yaml','--docs','docs','--url',BASE])==2
+    assert cli.main(['step','exec','old.yaml','--base-url',BASE])==0 and seen==['old.yaml']
+
+
+def test_project_name_resolves_under_projects_and_rejects_unknown(monkeypatch,tmp_path):
+    import qctool.cli as cli
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(['init','shop'])==0 and (tmp_path/'projects/shop/qctool.yaml').is_file()
+    assert cli.main(['init','shop'])==2
+    assert cli.resolve_project('shop')==Path('projects/shop/qctool.yaml')
+    assert cli.resolve_project('projects/shop')==Path('projects/shop/qctool.yaml')
+    with pytest.raises(SystemExit, match='shop'):
+        cli.resolve_project('nope')
 
 
 def test_missing_locked_fixture_shows_exact_need_without_verifying_or_provisioning(monkeypatch,tmp_path,capsys):
@@ -267,10 +277,10 @@ def test_openapi_preflight_reuses_loader_without_network(monkeypatch,tmp_path,ca
     spec=tmp_path/'api.yaml'
     spec.write_text(yaml.safe_dump({'openapi':'3.0.0','info':{'title':'Example','version':'1'},
         'paths':{'/health':{'get':{'responses':{'200':{'description':'OK'}}}}}}))
-    assert main(['validate','--openapi',str(spec),'--url',BASE])==0
+    assert main(['check','--openapi',str(spec),'--url',BASE])==0
     assert 'API operations: 1' in capsys.readouterr().out
     spec.write_text('paths: []')
-    assert main(['validate','--openapi',str(spec),'--url',BASE])==2
+    assert main(['check','--openapi',str(spec),'--url',BASE])==2
 
 
 def test_inline_secret_is_redacted_using_config_not_just_environment(monkeypatch,tmp_path,capsys):

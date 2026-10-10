@@ -111,10 +111,12 @@ def run_generation(requirements, existing_cases=(), *, flows=None, endpoints=Non
     coverage = analyze_coverage(rows, original, flows=deepcopy(flows))
     obligations = list({o.id: o for r in coverage.requirements for o in r.obligations if o.status != CoverageStatus.COVERED}.values())
     if intent_ids is not None:
-        unknown = set(intent_ids) - {o.id for o in obligations}
-        if unknown:
+        # `AC-x-001-4` chọn mọi obligation của AC đó; `AC-x-001-4:then` chọn đúng một.
+        def picked(o, wanted):
+            return o.id == wanted or (':' not in wanted and o.id.split(':')[0] == wanted)
+        if any(not any(picked(o, w) for o in obligations) for w in intent_ids):
             raise ValueError('Unknown source obligation selection')
-        obligations = [o for o in obligations if o.id in intent_ids]
+        obligations = [o for o in obligations if any(picked(o, w) for w in intent_ids)]
     if max_intents is not None:
         if type(max_intents) is not int or max_intents < 1:
             raise ValueError('max_intents must be a positive integer')

@@ -202,6 +202,17 @@ def test_enabled_pipeline_missing_config_returns_error(monkeypatch, tmp_path):
     assert KEY not in "\n".join(result.log)
 
 
+def _capture_runs(monkeypatch, tmp_path):
+    import qctool.pipeline as pipeline
+    (tmp_path / "spec.yaml").write_text("openapi: 3.0.0\ninfo: {title: t, version: '1'}\n"
+                                        "paths: {/h: {get: {responses: {'200': {description: OK}}}}}\n")
+    monkeypatch.setattr(pipeline, "load_llm_provider", lambda: object())
+    calls = []
+    monkeypatch.setattr(pipeline, "run_pipeline",
+                        lambda cfg, **kwargs: calls.append(cfg) or PipelineResult(ok=True))
+    return calls
+
+
 @pytest.mark.parametrize("env_enabled,flag,expected", [
     (None, [], False), (None, ["--llm"], True),
     ("true", [], True), ("true", ["--no-llm"], False),
@@ -212,10 +223,8 @@ def test_cli_explicit_enablement(monkeypatch, tmp_path, env_enabled, flag, expec
         monkeypatch.setenv("QCTOOL_LLM_ENABLED", env_enabled)
     monkeypatch.setenv("QCTOOL_LLM_MODEL", "model")
     monkeypatch.setenv("QCTOOL_LLM_API_KEY", KEY)
-    calls = []
-    monkeypatch.setattr(cli, "run_pipeline",
-                        lambda cfg, **kwargs: calls.append(cfg) or PipelineResult(ok=True))
-    assert main(["all", "--openapi", str(tmp_path / "spec.yaml"), "--skip-run", *flag]) == 0
+    calls = _capture_runs(monkeypatch, tmp_path)
+    main(["run", "--openapi", str(tmp_path / "spec.yaml"), "--skip-run", *flag])
     assert calls[0].llm_enabled is expected
 
 
@@ -225,10 +234,9 @@ def test_yaml_disabled_overrides_env_and_cli_can_enable(monkeypatch, tmp_path):
     path = tmp_path / "config.yaml"
     path.write_text("llm:\n  enabled: false\n")
     assert PipelineConfig.from_file(path).llm_enabled is False
-    calls = []
-    monkeypatch.setattr(cli, "run_pipeline",
-                        lambda cfg, **kwargs: calls.append(cfg) or PipelineResult(ok=True))
-    assert main(["all", "--config", str(path), "--llm"]) == 0
+    calls = _capture_runs(monkeypatch, tmp_path)
+    path.write_text(f"llm:\n  enabled: false\nopenapi: {tmp_path / 'spec.yaml'}\nout:\n  skip_run: true\n")
+    main(["run", str(path), "--llm"])
     assert calls[0].llm_enabled is True
     path.write_text('llm:\n  enabled: "false"\n')
     with pytest.raises(config.ConfigError):

@@ -49,6 +49,10 @@ def preflight(args, *, require_target=True):
     if args.config:
         path = Path(args.config).expanduser()
         data = _mapping_file(path)
+        try:
+            data = config.expand_project(data, path)
+        except config.ConfigError as exc:
+            raise PreflightError(str(exc)) from None
         for key in ('run','auth','out','ui','llm','provisioning','generation'):
             if key in data and not isinstance(data[key], dict):
                 raise PreflightError('Các section cấu hình phải là YAML mappings.')
@@ -88,6 +92,10 @@ def preflight(args, *, require_target=True):
             setattr(cfg,attr,value)
     if getattr(args,'skip_run',False):
         cfg.skip_run = True
+    if only := getattr(args,'only',None):
+        cfg.intent_ids = tuple(a if a.startswith('AC-') else f'AC-{cfg.feature}-{a}' for a in only)
+    if getattr(args,'trace_sensitive',None):
+        cfg.ui_trace = cfg.ui_trace_sensitive = True
     if getattr(args,'headless',True) is False:
         cfg.headless = False
     if not cfg.docs_dir and not cfg.openapi:
