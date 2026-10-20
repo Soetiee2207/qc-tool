@@ -157,3 +157,20 @@ def test_bootstrap_does_not_record_credentials_in_trace(site, tmp_path):
         content = b"".join(trace.read(name) for name in trace.namelist())
     assert b"test-only-secret" not in content
     assert b"qc@example.test" not in content
+
+
+
+def test_screenshot_masks_password_and_fixture_fields(site, tmp_path):
+    """Case đăng nhập vẫn có ảnh làm bằng chứng — ô mật khẩu và ô điền fixture bị che."""
+    with BrowserSession(site[0], headless=True, timeout_ms=3000, evidence_dir=tmp_path) as browser:
+        browser.start_case("TC_LOGIN_001")
+        browser.page.set_content('<input data-testid="email"><input data-testid="pwd" type="text">')
+        browser.fill({"target": "email", "value": "qc@example.test", "_fixture_alias": "active_user.email"})
+        browser.fill({"target": "pwd", "value": "test-only-secret", "_fixture_alias": "active_user.password"})
+        assert len(browser._secret_locators) == 2      # ô "hiện mật khẩu" (type=text) cũng bị che
+        browser.capture_final()
+        browser.end_case("Pass")
+        browser.start_case("TC_LOGIN_002")
+        assert browser._secret_locators == []          # không mang sang case sau
+        browser.end_case("")
+    assert (tmp_path / "TC_LOGIN_001-final.png").is_file()

@@ -1,5 +1,6 @@
 """LLM authoring entry point; native runner remains the runtime authority."""
 from copy import deepcopy
+import time
 from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
@@ -136,11 +137,15 @@ def run_generation(requirements, existing_cases=(), *, flows=None, endpoints=Non
     design_audit = []
     if llm and intents:
         try:
+            (on_progress or (lambda *_: None))('agent', f'LLM thiết kế tiêu đề/thứ tự cho {len(intents)} intent…')
+            began = time.monotonic()
             with capture_provider_attempts() as captured_design:
                 try:
                     intents, _ = design_intents(public(intents, fixture_store), llm)
                 finally:
                     design_audit = deepcopy(captured_design)
+                    (on_progress or (lambda *_: None))('agent', f'LLM thiết kế xong sau {time.monotonic() - began:.1f}s, '
+                        f'{sum(a.get("usage", {}).get("total_tokens", 0) for a in captured_design)} token')
         except Exception as exc:
             issues.append(GenerationIssue('design', 'DESIGN_FAILED', getattr(exc, 'safe_message', type(exc).__name__)))
             # Design only titles/orders source obligations. A malformed design
@@ -148,7 +153,12 @@ def run_generation(requirements, existing_cases=(), *, flows=None, endpoints=Non
             # failure stops authoring calls.
             if isinstance(exc, LLMProviderError):
                 llm = None
-    for intent in intents:
+    say = on_progress or (lambda *_: None)
+    if intents and (llm is None or not base_url):
+        missing = ' và '.join(m for m, gone in (('LLM (llm.enabled / QCTOOL_LLM_*)', llm is None),
+                                                ('URL ứng dụng (web_url)', not base_url)) if gone)
+        say('agent', f'⚠ Không chạy authoring agent: thiếu {missing} — {len(intents)} intent giữ dạng thủ công')
+    for index, intent in enumerate(intents, 1):
         case_id = allocator.next(module)
         while case_id in existing_ids:
             case_id = allocator.next(module)
@@ -176,7 +186,13 @@ def run_generation(requirements, existing_cases=(), *, flows=None, endpoints=Non
             background_paths=background_paths, safe_controls=safe_controls, safe_paths=safe_paths)
         tools = AgentTools(intent, case_id, module, policy, storage_state=storage_state,
             knowledge=knowledge, headless=headless, on_progress=on_progress)
+        say('agent', f'▶ Intent {index}/{len(intents)} · {case_id} ← {intent["id"]}: {intent["expected"][:160]}')
+        began = time.monotonic()
         record = author_intent(intent, tools, llm, budget=budget, critic=critic)
+        tokens = sum(a.get('usage', {}).get('total_tokens', 0) for a in record.provider_attempts)
+        say('agent', f'■ Intent {index}/{len(intents)} · {case_id}: {record.stop_reason} · '
+            f'{len(record.history)} tool call · {tokens} token · {time.monotonic() - began:.1f}s'
+            + (f' — {"; ".join(record.issues)[:300]}' if record.issues else ''))
         authored.append(record)
         generated.append(record.case)
         issues.extend(GenerationIssue('agent', record.stop_reason, msg, case_id) for msg in record.issues)

@@ -13,7 +13,8 @@ qctool check salonhub                 # kiểm tra mọi feature, không gọi m
 qctool run   salonhub                 # chạy MỌI feature của project
 qctool run   salonhub --auth          # chỉ chạy feature auth (lặp được: --auth --profile)
 qctool trace salonhub TC_AUTH_001     # xem lại từng bước của một case
-qctool ui                             # giao diện web
+qctool ui                             # trợ lý chat: tải tài liệu + tài khoản, nói muốn test gì → duyệt kế hoạch → chạy
+                                      # bảng điều khiển chi tiết (log, agent, kết quả): /console
 ```
 
 Chạy trong venv của repo (`uv sync` một lần, `source .venv/bin/activate`), hoặc thêm
@@ -61,6 +62,11 @@ account:
 | `generation.budget` | 14 lượt · 90k token · 480 giây mỗi AC |
 | `run.timeout_seconds` | 30 |
 | `ui.evidence` / `ui.trace` | `on-fail` / tắt |
+
+**Không cần mở file:** `qctool ui` → **📎 Dữ liệu đầu vào** chỉnh được ảnh bằng chứng/trace/timeout
+(mục 1), tick AC *dùng tài khoản thật* + giá trị giả cho từng AC (mục 2, sau khi chọn chức năng), vai trò
+tài khoản (mục 3). Khoá nâng cao (`exploration.safe_controls`, `write.deny`…) sửa ở ô *Nâng cao* — YAML
+được nạp thử bằng loader của pipeline trước khi lưu, sai thì giữ file cũ.
 
 **Tài khoản** luôn lấy từ `.env` (`QCTOOL_USERNAME`, `QCTOOL_PASSWORD`), không bao giờ ghi
 vào YAML. Chỉ AC nằm trong `login_for` mới được dùng tài khoản. AC kiểu *"sai mật khẩu

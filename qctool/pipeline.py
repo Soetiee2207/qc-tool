@@ -205,6 +205,7 @@ def _warm_up(cfg: PipelineConfig, log) -> None:
     if not target or not cfg.web_url:
         return
     started = time.monotonic()
+    log(f"Warm-up {target} (Render free tier có thể ngủ, chờ tới {max(cfg.timeout_seconds, 10)}s)…")
     try:
         from qctool.execute.runner import USER_AGENT   # UA mặc định của urllib bị một số môi trường chặn
         req = urllib.request.Request(target + "/", headers={"User-Agent": USER_AGENT})
@@ -348,6 +349,12 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                        f"{counts.get('non_functional', 0)} NFR)")
             notify("ingest", message)
             log(message)
+            for source in data.get("sources", []):
+                log(f"  đã đọc {source['path']} ({source['type']})")
+            for attachment in data.get("attachments", []):
+                log(f"  đã đọc {attachment['path']} ({attachment['type']})")
+            if any((data.get("flows") or {}).values()):
+                log("  luồng nghiệp vụ: " + ", ".join(f"{k}={len(v)}" for k, v in data["flows"].items() if v))
             for warning in data.get("warnings", []):
                 log(f"  ⚠ {warning}")
         else:
@@ -385,6 +392,8 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
         source_data = (yaml.safe_load(requirements_path.read_text(encoding="utf-8")) or {}
                        if requirements_path else {})
         endpoints = generate.load_endpoints(openapi_path)[0] if openapi_path else None
+        if openapi_path:
+            log(f"  đã đọc OpenAPI {openapi_path}: {len(endpoints or ())} operation")
         needs_ui_evidence = bool(requirements_path and resolution_llm)
         auth_operations = []
         state_path = stage_dir(out_dir, "crawl") / ".auth-state.json"
@@ -635,6 +644,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
                     axe=cfg.ui_axe,
                 )
                 browser.trace_sensitive = cfg.ui_trace and cfg.ui_trace_sensitive
+                browser.evidence_always = cfg.ui_evidence == "always"
                 if browser.trace_sensitive:
                     notify("ui", "⚠ trace_sensitive: trace chứa MẬT KHẨU/TOKEN thật — chỉ xem trên "
                                  "máy này, xoá evidence/ sau khi xem, không chia sẻ/commit")
@@ -664,7 +674,11 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
             if cfg.soft_assert:
                 extra.append("kiểm tra mềm")
             if cfg.ui_evidence != "off":
-                extra.append("lưu ảnh bằng chứng")
+                extra.append("ảnh mọi case (ô mật khẩu bị che)" if cfg.ui_evidence == "always"
+                             else "ảnh khi case lỗi")
+            if cfg.ui_trace:
+                extra.append("trace Playwright" + (" cả case có mật khẩu" if cfg.ui_trace_sensitive
+                                                   else " (trừ case điền mật khẩu/bắt request)"))
             if extra:
                 notify("ui", "UI/UX: " + ", ".join(extra))
 

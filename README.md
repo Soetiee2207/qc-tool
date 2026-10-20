@@ -45,7 +45,7 @@ qctool init shop/login && qctool check shop
 qctool run shop --login --only 001-1   # một feature, một AC — giới hạn chi phí
 ```
 
-Đặt tài liệu vào `projects/shop/login/`, điền web/api trong `projects/shop/project.yaml` và `QCTOOL_LLM_*` trong `.env` trước. Xem [hướng dẫn](HUONG-DAN.md) và [kết quả kiểm chứng giới hạn](docs/findings/agent-redesign.md).
+Đặt tài liệu vào `projects/shop/login/`, điền web/api trong `projects/shop/project.yaml` và `QCTOOL_LLM_*` trong `.env` trước. Xem [hướng dẫn](HUONG-DAN.md), [tài liệu phát triển](DEVELOPMENT.md) và [kết quả kiểm chứng giới hạn](docs/findings/agent-redesign.md).
 Không còn patch engine/legacy execution flag. API-only generation vẫn deterministic.
 
 ### V2 — kết quả kiểm chứng (2026-10-09)

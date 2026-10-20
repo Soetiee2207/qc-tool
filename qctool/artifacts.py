@@ -13,6 +13,7 @@ Mọi message đi qua `redact` trước khi chạm đĩa — log là thứ ngư�
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -49,7 +50,8 @@ class RunTracker:
         self.current: str | None = None
         _clean(root)
         root.mkdir(parents=True, exist_ok=True)
-        self.state = {"feature": feature, "status": "running", "started_at": _now(),
+        # pid: UI biết ngay tiến trình chạy lượt này đã chết (Ctrl+C, tắt `qctool ui`) thay vì tin "running".
+        self.state = {"feature": feature, "status": "running", "started_at": _now(), "pid": os.getpid(),
                       "finished_at": None, "current_stage": None, "error": None,
                       "stages": {name: {"dir": folder, "status": "pending"} for name, folder in STAGES.items()}}
         self._save()

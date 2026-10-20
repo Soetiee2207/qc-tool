@@ -500,11 +500,12 @@ def _run_once(case: TestCase, session: HttpSession,
             result.actual = [result.blocked_reason]
             return result
     capture_settings = {}
-    # Mặc định: case có mật khẩu/bắt request không có trace/ảnh (file sẽ chứa bí mật).
-    # `trace_sensitive` là opt-in tường minh của người chạy (ui.trace_sensitive).
+    # Mặc định: case có mật khẩu/bắt request không có TRACE (trace ghi nguyên văn giá trị điền và
+    # body request/response → mật khẩu/token thật). Ảnh chụp vẫn giữ vì `browser.screenshot` che
+    # ô mật khẩu và ô điền fixture. `trace_sensitive` là opt-in tường minh (ui.trace_sensitive).
     if ((fixture_steps or any(s.args.get("capture_response") or s.args.get("capture_requests") for s in case.steps))
             and browser is not None and not getattr(browser, "trace_sensitive", False)):
-        for name, replacement in (("trace_enabled", False), ("evidence_dir", None)):
+        for name, replacement in (("trace_enabled", False),):
             if hasattr(browser, name):
                 capture_settings[name] = getattr(browser, name)
                 setattr(browser, name, replacement)
@@ -615,6 +616,9 @@ def _run_once(case: TestCase, session: HttpSession,
                 if result.status == STATUS_FAIL:
                     with contextlib.suppress(Exception):
                         browser.capture_failure()
+                elif getattr(browser, "evidence_always", False):
+                    with contextlib.suppress(Exception):
+                        browser.capture_final()
                 browser.end_case(result.status)
                 result.evidence = browser.evidence.to_dict()
         finally:

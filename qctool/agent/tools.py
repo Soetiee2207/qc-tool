@@ -317,5 +317,4 @@ class AgentTools:
             result = {'items': result}
         self.audit.append({'tool': name, 'ok': result.get('ok', True), 'error': result.get('error'),
                            'failed_step': result.get('failed_step')})
-        self.on_progress('agent', f'{self.case_id}: {name} → {"OK" if result.get("ok", True) else "cần sửa"}')
         return result

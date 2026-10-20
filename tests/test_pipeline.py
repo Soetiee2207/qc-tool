@@ -271,8 +271,9 @@ def test_manual_auth_mode_never_logs_in(tmp_path, monkeypatch):
 # ── Web UI ───────────────────────────────────────────────────────────────────
 def test_ui_serves_page(ui):
     code, body = _get(ui + "/")
+    assert code == 200 and "qc-tool" in body       # trang chat
+    code, body = _get(ui + "/console")
     assert code == 200
-    assert "qc-tool" in body
     assert "Chạy QC" in body
 
 
@@ -359,3 +360,55 @@ def test_ui_config_endpoint(ui):
     code, body = _get(ui + "/api/config")
     assert code == 200
     assert "base_url" in json.loads(body)
+
+
+def _feature(tmp_path, monkeypatch, body: str) -> str:
+    import shutil
+    feature = tmp_path / "projects" / "p" / "f"
+    shutil.copytree(FIXTURE_DOCS, feature)
+    (feature / "qctool.yaml").write_text(body, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    return "projects/p/f/qctool.yaml"
+
+
+def test_ui_project_run_uses_feature_config(tmp_path, monkeypatch):
+    """Web phải chạy feature đúng như CLI: `llm: true`, account, out dir từ qctool.yaml.
+
+    Trước đây web tự dựng PipelineConfig và bỏ mất llm → agent không bao giờ chạy, mọi
+    case thành thủ công (Not Executed) dù checkbox "Sinh bằng AI" đang tick.
+    """
+    from qctool.web.app import _project_config
+    monkeypatch.setenv("QCTOOL_LLM_MODEL", "m")
+    monkeypatch.setenv("QCTOOL_LLM_API_KEY", "k")
+    path = _feature(tmp_path, monkeypatch, "web: https://app.test\nllm: true\n")
+    cfg, adapter = _project_config({"config": path})
+    assert cfg.llm_enabled and adapter is not None
+    assert cfg.out_dir.resolve() == (tmp_path / "projects/p/f/artifacts").resolve()
+    cfg, adapter = _project_config({"config": path, "llm": False, "only": "001-1"})
+    assert not cfg.llm_enabled and adapter is None
+    assert cfg.intent_ids == ("AC-f-001-1",)
+
+
+def test_ui_refuses_write_mode_without_confirmation(tmp_path, monkeypatch):
+    from qctool.web.app import _project_config
+    path = _feature(tmp_path, monkeypatch, "web: https://app.test\nmode: write\n")
+    with pytest.raises(ValueError, match="mode: write"):
+        _project_config({"config": path})
+
+
+def test_ui_run_detail_reads_disk(ui, tmp_path):
+    """Log/tiến trình đọc từ run.json + events.jsonl — lượt chạy CLI cũng xem được."""
+    import shutil
+    folder = REPO / "projects" / "_test_detail" / "f" / "artifacts"
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        (folder / "run.json").write_text(json.dumps({"status": "done", "stages": {}}), encoding="utf-8")
+        (folder / "events.jsonl").write_text("\n".join(json.dumps({"t": "", "stage": "ingest", "level": "info",
+                                                                   "message": f"m{i}"}) for i in range(5)) + "\n")
+        code, body = _get(ui + "/api/run?since=3&dir=" + str(folder.relative_to(REPO)))
+        data = json.loads(body)
+        assert code == 200 and data["events_total"] == 5
+        assert [e["message"] for e in data["events"]] == ["m3", "m4"]
+        assert _get(ui + "/api/run?dir=/etc")[0] == 403
+    finally:
+        shutil.rmtree(REPO / "projects" / "_test_detail", ignore_errors=True)

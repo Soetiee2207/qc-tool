@@ -189,17 +189,25 @@ def author_intent(intent, tools, llm, *, budget=None, critic=False):
             if consumed + estimate + budget.completion_tokens > budget.max_tokens:
                 result.stop_reason = 'TOKEN_BUDGET'
                 break
+            asked = time.monotonic()
             with capture_provider_attempts() as attempts:
                 try:
                     response = llm.chat(deepcopy(public(messages, store)), definitions, max_tokens=budget.completion_tokens)
                 finally:
                     result.provider_attempts.extend(deepcopy(attempts))
-            consumed += sum(a.get('usage', {}).get('total_tokens', 0) for a in attempts) or estimate
+            used = sum(a.get('usage', {}).get('total_tokens', 0) for a in attempts)
+            consumed += used or estimate
             if not isinstance(response, dict) or response.get('role') != 'assistant':
                 raise ValueError('Invalid assistant envelope')
             # reasoning_content stays runtime-only, never audit or knowledge.
             messages.append(public(response, store))
             calls = response.get('tool_calls', [])
+            # Log chỉ phần trả lời hiển thị (`content`, đã qua `public`), không phải reasoning_content.
+            names = ', '.join(c['function']['name'] for c in calls) or 'không gọi tool'
+            tools.on_progress('agent', f'{tools.case_id} · lượt {turn}: LLM {time.monotonic() - asked:.1f}s, '
+                              f'{used or "~" + str(estimate)} token (tổng {consumed}) → {names}')
+            if text := str(public(response.get('content') or '', store)).strip():
+                tools.on_progress('agent', f'{tools.case_id} · LLM nói: {text[:600]}')
             if not calls:
                 result.stop_reason = 'MODEL_ABSTAINED'
                 result.issues.append('Model returned no executable draft/tool call')
@@ -211,9 +219,17 @@ def author_intent(intent, tools, llm, *, budget=None, critic=False):
                     args = json.loads(call['function']['arguments'], object_pairs_hook=_unique_keys, parse_constant=_reject_constant)
                     if not isinstance(args, dict):
                         raise ValueError('Tool arguments must be an object')
+                    called = time.monotonic()
                     answer = tools.call(name, args)
                 except (ValueError, KeyError, TypeError):
+                    called = time.monotonic()
                     answer = {'ok': False, 'error': 'Malformed tool arguments; return exact schema, no duplicate keys'}
+                shown = audit_arguments(name, args, store) if isinstance(args, dict) else None
+                problem = answer.get('error') or '; '.join(map(str, answer.get('errors') or []))
+                tools.on_progress('agent', f'{tools.case_id} ·   {name}'
+                    + (f' {json.dumps(shown, ensure_ascii=False)[:300]}' if shown else '')
+                    + f' → {"OK" if answer.get("ok", True) else "cần sửa"} ({time.monotonic() - called:.1f}s)'
+                    + (f': {str(problem)[:400]}' if problem else ''))
                 if name == 'draft_case' and tools.candidate is not None:
                     result.last_draft = public(tools.candidate.to_dict(), store)
                 result.history.append({'turn': turn, 'tool': name, 'ok': answer.get('ok', True),

@@ -161,6 +161,8 @@ class BrowserSession:
         self.storage_state = storage_state
         self.viewport = dict(viewport or DEFAULT_VIEWPORT)
         self.trace_enabled = trace
+        self.evidence_always = False     # ui.evidence: always → ảnh cuối mỗi case, kể cả Pass
+        self._secret_locators = []       # ô đã điền giá trị fixture → che trong ảnh chụp
         self.axe_enabled = axe
         self.axe_severity = axe_severity
         self.inflight_ms = inflight_ms
@@ -233,6 +235,7 @@ class BrowserSession:
             options["storage_state"] = str(self.storage_state)
 
         self.case_id = case_id
+        self._secret_locators = []
         self.soft_failures = []
         self.evidence = Evidence(case_id=case_id)
         self._console = []
@@ -983,6 +986,8 @@ class BrowserSession:
     def fill(self, args: dict) -> str:
         locator = self.locate(args)
         locator.fill(str(args.get("value", "")), timeout=self.timeout_ms)
+        if args.get("_fixture_alias"):
+            self._secret_locators.append(locator)
         return f"Đã điền «{args.get('_fixture_alias', args.get('value', ''))}» vào «{self._label(args)}»"
 
     def select(self, args: dict) -> str:
@@ -1286,17 +1291,27 @@ class BrowserSession:
 
     # ── Bằng chứng ──────────────────────────────────────────────────────────
     def screenshot(self, name: str, full_page: bool = True) -> Path | None:
-        """Lưu ảnh chụp — dùng khi case fail, để có bằng chứng."""
+        """Lưu ảnh chụp làm bằng chứng.
+
+        Ô mật khẩu và mọi ô đã điền giá trị fixture (tài khoản thật) bị che bằng `mask` của
+        Playwright — kể cả khi trang đã đổi ô mật khẩu sang type=text ("hiện mật khẩu").
+        Nhờ vậy case đăng nhập vẫn có ảnh mà không lộ bí mật; trace thì không che được.
+        """
         if not self.evidence_dir:
             return None
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{self.case_id}-{name}")[:80]
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
         path = self.evidence_dir / f"{safe}.png"
         with contextlib.suppress(Exception):
-            self.page.screenshot(path=str(path), full_page=full_page)
+            mask = [self.page.locator('input[type="password"]'), *self._secret_locators]
+            self.page.screenshot(path=str(path), full_page=full_page, mask=mask)
             self.evidence.screenshots.append(path.name)
             return path
         return None
+
+    def capture_final(self) -> None:
+        """Ảnh trạng thái cuối của case (ui.evidence: always) — chứng minh case đã thật sự chạy."""
+        self.screenshot("final")
 
     def capture_failure(self) -> None:
         """Ảnh + trạng thái trang lúc case vừa fail."""

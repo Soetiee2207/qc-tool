@@ -35,6 +35,7 @@ là **pilot đầu tiên**, không phải phạm vi.
 | Bản đồ element của webapp | `qctool/ui/crawl.py` → `ui-map.yaml` (có `test_id`) |
 | Test | `tests/` — `test_browser.py` mở Chromium thật (marker `playwright`) |
 | Hướng dẫn người dùng | `HUONG-DAN.md` — đọc file này khi giải thích cho người mới |
+| Tài liệu phát triển (kiến trúc, luồng, hàm chính, công thức sửa) | `DEVELOPMENT.md` — sửa cùng commit khi đổi luồng/kiến trúc |
 | File cấu hình mẫu | `qctool init <project>[/<feature>]` (`cli.py::PROJECT_TEMPLATE`, `FEATURE_TEMPLATE`) |
 | Báo cáo tổng hợp | `projects/<p>/summary/<YYYY-MM-DD_HH-MM-SS>/` (`qctool/summary.py`, gọi từ `cli._each_feature` sau `run`) — chép kết quả vì artifacts bị ghi đè; feature có `run.json.started_at` cũ hơn lượt chạy bị coi là không chạy. Gitignored |
 | Output sinh ra | `<feature>/artifacts/` — gitignored. Bố cục + `run.json`/`events.jsonl`: `qctool/artifacts.py` |
@@ -96,6 +97,19 @@ OpenAPI  ─┼─► requirements.yaml ─► testcases.yaml ─► runner ─�
 
 Mọi đường đi đều qua `qctool/pipeline.py::run_pipeline()`. **CLI, web UI và CI dùng
 chung một hàm** — không có logic nào chỉ tồn tại trong giao diện.
+Web UI chạy feature của project qua **đúng** `cli_run.preflight` (đọc `qctool.yaml` + `project.yaml`,
+ghi vào `<feature>/artifacts/`) — không tự dựng `PipelineConfig` (từng bỏ mất `llm`/`account` → 0 case
+tự động). Mọi màn hình xem lượt chạy đọc từ đĩa (`run.json`, `events.jsonl`, `generation.json`,
+`results.json`), nên lượt chạy CLI cũng xem được; feature `mode: write` bị web từ chối (không có bước xác nhận).
+
+**Chế độ chat** (`/`, `web/chat.py` + `chat_page.py`; bảng điều khiển cũ ở `/console`): agent điều phối
+chỉ có tool **chỉ-đọc** (danh mục feature/AC, tìm AC, đọc kết quả) và `propose_test_plan` — mọi mã AC được
+kiểm với tài liệu đã ingest, sai là trả lỗi cho model sửa. Kế hoạch **chỉ chạy khi người dùng bấm**; mỗi mục =
+`_run_feature` = `qctool run <p> --<feature> --only …` qua `_project_config`. Scope `flow` chạy feature theo
+thứ tự nhưng mỗi AC vẫn là case độc lập — không được nói là E2E. Phiên lưu `projects/<p>/chat/<id>.json`
+(không có `reasoning_content`, không có username/mật khẩu — tài khoản đi thẳng `.env`, model chỉ thấy
+`account_set`). Thông báo hệ thống (đã tải tài liệu, kế hoạch chạy xong) vào transcript ở tin nhắn kế tiếp
+qua `pending_notes`, không chèn giữa tool_calls/tool.
 
 ## Kiến trúc — 4 chặng
 
@@ -298,12 +312,20 @@ Các luật còn lại:
   `3-generate/generation.json` → `agent_history` (agent gọi tool nào, lỗi gate/dry-run gì, token);
   `3-generate/testcases.yaml` (bước runner chạy); `5-execute/results.json` (Playwright chạy từng bước
   ra sao); `5-execute/evidence/` (ảnh, `.trace.zip`).
-  Case có điền mật khẩu (fixture alias) hoặc `capture_*` **cố ý không có trace/ảnh**
-  (`runner.py` tắt) — trace sẽ chứa mật khẩu/token thật. Không gỡ chặn này mặc định.
+  Case có điền mật khẩu (fixture alias) hoặc `capture_*` **cố ý không có trace** (`runner.py` tắt) — trace
+  ghi nguyên văn giá trị điền/body → mật khẩu/token thật. Không gỡ chặn này mặc định. **Ảnh vẫn có**:
+  `browser.screenshot` che (`mask`) ô `type=password` và mọi ô đã điền fixture; `ui.evidence: always` →
+  `<MÃ>-final.png` cho mọi case (kể cả Pass) để người dùng thấy tool đã chạy thật.
   Opt-in tường minh: `ui.trace_sensitive: true` (cần `ui.trace: true`) hoặc `qctool run <tên>
-  --trace-sensitive`. Pipeline in cảnh báo; chỉ dùng cục bộ với tài khoản test.
+  --trace-sensitive`; web: checkbox trên thẻ kế hoạch chat / form `/console` (`trace_sensitive`). Pipeline in
+  cảnh báo; chỉ dùng cục bộ với tài khoản test. Nút "Mở trace" (`/api/trace/open`) chạy `playwright show-trace`
+  trên máy chạy `qctool ui`. Lượt chạy từ web/chat cũng ghi `projects/<p>/summary/<ngày_giờ>/` (`_project_summary`).
 
 Changelog:
+- 2026-10-20 | claude | DEVELOPMENT.md: tài liệu phát triển cho người mới vào dự án
+- 2026-10-19 | claude | Ảnh che mật khẩu cho case đăng nhập, mở trace từ web, summary cho lượt web
+- 2026-10-14 | claude | Chế độ chat: agent điều phối lập kế hoạch, người dùng bấm mới chạy
+- 2026-10-12 | claude | Web UI dùng preflight như CLI; log/agent/kết quả đọc từ artifacts
 - 2026-10-10 | claude | mode: write/--write, observe-only, background_paths, safe_controls
 - 2026-10-10 | claude | summary/<ngày_giờ>/ tổng hợp mọi testcase mỗi lượt run project
 - 2026-10-10 | claude | projects/<project>/<feature>, artifacts theo bước, run <project> --<feature>

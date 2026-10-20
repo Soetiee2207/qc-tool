@@ -36,11 +36,12 @@ class FakeBrowser:
         self.error = error
         self.evidence = type("Evidence", (), {"to_dict": lambda self: {"console": [SECRETS["ACTIVE_PASSWORD"]]}})()
 
+    # Case điền mật khẩu: tắt TRACE (ghi nguyên văn giá trị điền); ảnh vẫn giữ vì ô bị che.
     def start_case(self, case_id):
-        assert self.trace_enabled is False and self.evidence_dir is None
+        assert self.trace_enabled is False and self.evidence_dir == Path("fictional-evidence")
 
     def end_case(self, status):
-        assert self.trace_enabled is False and self.evidence_dir is None
+        assert self.trace_enabled is False and self.evidence_dir == Path("fictional-evidence")
 
     def goto(self, url):
         return url
@@ -105,7 +106,8 @@ def _fixture_case():
     return store().bind(case)
 
 
-@pytest.mark.parametrize("sensitive, expected", [(False, (False, None)), (True, (True, Path("fictional-evidence")))])
+@pytest.mark.parametrize("sensitive, expected", [(False, (False, Path("fictional-evidence"))),
+                                                 (True, (True, Path("fictional-evidence")))])
 def test_trace_sensitive_is_explicit_opt_in(sensitive, expected):
     from qctool.execute.runner import run_case
     browser = TraceProbe(sensitive)
