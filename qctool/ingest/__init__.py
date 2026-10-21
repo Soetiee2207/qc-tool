@@ -18,9 +18,9 @@ from pathlib import Path
 
 import yaml
 
-from ..model import Attachment, Requirement, file_sha256
-from . import flows as flows_mod
-from . import markdown
+from qctool.core.model import Attachment, Requirement, file_sha256
+from qctool.ingest import flows as flows_mod
+from qctool.ingest import markdown
 
 # Tài liệu chính: parse sâu để lấy requirement
 PRIMARY_DOCS = {
@@ -237,7 +237,7 @@ def _as_requirement(raw: dict) -> Requirement:
     Cần vì `ingest_one` trả dict (để ghi YAML), còn bước gộp nhiều feature phải
     thao tác trên object. Đi qua lại chỉ ở đây, không rải khắp code.
     """
-    from ..model import ApiSpec, SourceRef
+    from qctool.core.model import ApiSpec, SourceRef
 
     known = {f for f in Requirement.__dataclass_fields__}
     data = {k: v for k, v in raw.items() if k in known}
@@ -283,7 +283,7 @@ def write_yaml(data: dict, out_path: Path) -> None:
     )
     header = (
         "# Sinh tự động bởi qc-tool — KHÔNG sửa tay.\n"
-        "# Sửa tài liệu nguồn rồi chạy lại: uv run qctool ingest <feature-dir>\n"
+        "# Sửa tài liệu nguồn rồi chạy lại: qctool step ingest <feature-dir>\n"
         f"# generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} (GMT+7)\n"
         "#\n"
         "# `content_hash` chỉ tính trên nội dung ngữ nghĩa của requirement — sửa chỗ khác\n"

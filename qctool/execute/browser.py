@@ -23,6 +23,8 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
+from qctool.data.capture import origin_of, validate_capture, matches_request
 
 DEFAULT_VIEWPORT = {"width": 1440, "height": 900}
 
@@ -55,6 +57,14 @@ class BrowserError(Exception):
     """Không mở được trình duyệt, hoặc Playwright chưa cài."""
 
 
+class LoginError(BrowserError):
+    """Lỗi bootstrap có mã và thông báo an toàn, không chứa dữ liệu form."""
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(f"{code}: {message}")
+
+
 class NeedsEnvironment(Exception):
     """Bước này không chạy được vì **môi trường**, không phải vì sản phẩm.
 
@@ -62,6 +72,13 @@ class NeedsEnvironment(Exception):
     đó hỏng. Nếu để nó thành `Fail` thì báo cáo nói "sản phẩm sai" trong khi
     sản phẩm chưa hề được kiểm — đúng loại nói dối mà cả tool này sinh ra để tránh.
     """
+
+
+class ResponseCaptureError(NeedsEnvironment):
+    """Cannot identify one completed response; never echo transport/body secrets."""
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code + ": no unique safely captured UI response")
 
 
 class NeedsLogin(NeedsEnvironment):
@@ -144,6 +161,8 @@ class BrowserSession:
         self.storage_state = storage_state
         self.viewport = dict(viewport or DEFAULT_VIEWPORT)
         self.trace_enabled = trace
+        self.evidence_always = False     # ui.evidence: always → ảnh cuối mỗi case, kể cả Pass
+        self._secret_locators = []       # ô đã điền giá trị fixture → che trong ảnh chụp
         self.axe_enabled = axe
         self.axe_severity = axe_severity
         self.inflight_ms = inflight_ms
@@ -161,6 +180,7 @@ class BrowserSession:
         self._expect = None
         self._console: list[str] = []
         self._network: list[str] = []
+        self._capture_private = False
         self._inflight = 0
         self._last_activity = 0.0
         self._axe_source: str | None = None
@@ -215,6 +235,7 @@ class BrowserSession:
             options["storage_state"] = str(self.storage_state)
 
         self.case_id = case_id
+        self._secret_locators = []
         self.soft_failures = []
         self.evidence = Evidence(case_id=case_id)
         self._console = []
@@ -287,10 +308,12 @@ class BrowserSession:
     # ── Thu thập trong lúc chạy ─────────────────────────────────────────────
     def _on_console(self, message) -> None:
         if message.type == "error":
-            self._console.append(f"console.error: {_short(message.text)}")
+            self._console.append("console.error during response capture (content omitted)" if self._capture_private
+                                 else f"console.error: {_short(message.text)}")
 
     def _on_pageerror(self, error) -> None:
-        self._console.append(f"pageerror: {_short(error)}")
+        self._console.append("pageerror during response capture (content omitted)" if self._capture_private
+                             else f"pageerror: {_short(error)}")
 
     def _on_request(self, request) -> None:
         self._inflight += 1
@@ -303,6 +326,8 @@ class BrowserSession:
         with contextlib.suppress(Exception):
             if response.status >= 400:
                 url = response.url
+                if self._capture_private:
+                    url = origin_of(url) + urlsplit(url).path
                 if any(host in url for host in _IGNORED_REQUEST_HOSTS):
                     return
                 self._network.append(
@@ -313,10 +338,9 @@ class BrowserSession:
         self._inflight = max(0, self._inflight - 1)
         self._last_activity = time.monotonic()
         with contextlib.suppress(Exception):
-            self._network.append(
-                f"{request.method} {_short(request.url, 90)} → không gửi được "
-                f"({_short(request.failure or 'lỗi mạng', 60)})"
-            )
+            url = origin_of(request.url) + urlsplit(request.url).path if self._capture_private else request.url
+            failure = "request failed; details omitted" if self._capture_private else request.failure or "lỗi mạng"
+            self._network.append(f"{request.method} {_short(url, 90)} → không gửi được ({_short(failure, 60)})")
 
     def wait_network_quiet(self, quiet_ms: int | None = None,
                            max_wait_ms: int | None = None) -> bool:
@@ -346,6 +370,7 @@ class BrowserSession:
         context = self._context
         if context is not None:
             context.storage_state(path=str(path))
+            path.chmod(0o600)
 
     # ── Đăng nhập ───────────────────────────────────────────────────────────
     def session_alive(self) -> bool:
@@ -375,6 +400,94 @@ class BrowserSession:
         return any(mark in path for mark in ("/login", "/signin", "/sign-in"))
 
     def login(self, username: str, password: str) -> str:
+        """Đăng nhập form trực tiếp nếu có, hoặc dùng luồng SSO hiện có.
+
+        Chỉ chọn form/control duy nhất; không đoán selector theo sản phẩm.
+        Không thu nội dung console, URL query hay trace chứa credentials.
+        """
+        self.authenticated = False
+        self.login_controls = None
+        private_before = self._capture_private
+        self._capture_private = True
+        traced = False
+        try:
+            self._implicit_context()
+            if self.trace_enabled:
+                self._context.tracing.stop()  # discard bootstrap trace before filling
+                traced = True
+            self.goto("/login")
+            if self._login_local_form(username, password):
+                self.authenticated = True
+                return "Đã đăng nhập qua form trực tiếp"
+            return self._login_sso(username, password)
+        except LoginError:
+            raise
+        except Exception as exc:
+            # Playwright exceptions may include filled values / URL parameters.
+            raise LoginError("LOGIN_BROWSER_ERROR", type(exc).__name__) from None
+        finally:
+            self._capture_private = private_before
+            if traced and self.authenticated:
+                self._context.tracing.start(screenshots=True, snapshots=True)
+
+    def _login_local_form(self, username: str, password: str) -> bool:
+        """False chỉ khi không có form mật khẩu trực tiếp (có thể là SSO)."""
+        passwords = [field for field in self.page.locator('input[type="password"]').all()
+                     if field.is_visible() and field.is_editable()]
+        if not passwords:
+            return False
+        if len(passwords) != 1:
+            raise LoginError("LOGIN_FORM_AMBIGUOUS", "Có nhiều ô mật khẩu khả dụng")
+        password_field = passwords[0]
+        form = password_field.locator("xpath=ancestor::form")
+        if form.count() != 1:
+            raise LoginError("LOGIN_FORM_UNSUPPORTED", "Ô mật khẩu không thuộc một form duy nhất")
+        fields = [field for field in form.locator(
+            'input:not([type="password"]):not([type="hidden"]):not([type="submit"]):not([type="button"])'
+        ).all() if field.is_visible() and field.is_editable()
+                  and field.get_attribute("type") in (None, "text", "email", "tel")]
+        identified = [field for field in fields
+                      if (field.get_attribute("name") or "").lower() in {"email", "username"}
+                      or field.get_attribute("type") == "email"
+                      or (field.get_attribute("autocomplete") or "").lower() in {"email", "username"}]
+        candidates = identified or fields
+        if len(candidates) != 1:
+            raise LoginError("LOGIN_FORM_AMBIGUOUS", "Không xác định duy nhất ô tài khoản")
+        submits = [control for control in form.locator("button, input").all()
+                   if control.is_visible() and control.is_enabled()
+                   and control.evaluate("el => el.type === 'submit'")]
+        if len(submits) != 1:
+            raise LoginError("LOGIN_FORM_AMBIGUOUS", "Không xác định duy nhất nút submit của form")
+        initial_url = self.page.url
+        ids = [control.get_attribute('data-testid') for control in (candidates[0], password_field, submits[0])]
+        self.login_controls = ({'url': initial_url, 'email': ids[0], 'password': ids[1], 'submit': ids[2]}
+            if all(isinstance(i, str) and i and self.page.get_by_test_id(i).count() == 1 for i in ids) else None)
+        candidates[0].fill(username, timeout=self.timeout_ms)
+        password_field.fill(password, timeout=self.timeout_ms)
+        submits[0].click(timeout=self.timeout_ms)
+        try:
+            self.page.wait_for_url(
+                lambda url: str(url) != initial_url
+                and origin_of(str(url)) == origin_of(self.base_url)
+                and not self._on_login_url(str(url)),
+                timeout=self.timeout_ms,
+            )
+        except Exception:
+            raise LoginError("LOGIN_NOT_COMPLETED", "Không về ứng dụng trong thời hạn; kiểm tra phản hồi login/mạng") from None
+        # SPA URL updates can precede React removing the form. Auto-wait for
+        # the original form to disappear, rather than reading DOM once.
+        try:
+            self._expect(self.page.locator('input[type="password"]:visible')).to_have_count(
+                0, timeout=self.timeout_ms,
+            )
+        except Exception:
+            raise LoginError("LOGIN_NOT_COMPLETED", "Form mật khẩu vẫn hiển thị sau submit") from None
+        self._wait_for_render()
+        if origin_of(self.page.url) != origin_of(self.base_url) or self._on_login_url(self.page.url):
+            raise LoginError("LOGIN_NOT_COMPLETED", "Chưa ở trạng thái ứng dụng sau submit")
+        return True
+
+    def _login_sso(self, username: str, password: str) -> str:
         """Đăng nhập qua form của IdP — giống người dùng thật làm.
 
         Vì sao không dùng password grant: client SPA công khai (Keycloak `vd-portal`)
@@ -384,7 +497,6 @@ class BrowserSession:
         Đăng nhập xong thì session trình duyệt đã có phiên, nên mọi case UI chạy
         sau đó đều ở trạng thái đã đăng nhập.
         """
-        self.goto("/login")
         self.page.wait_for_timeout(1200)
 
         # Bấm nút đăng nhập của portal để chuyển sang IdP
@@ -397,9 +509,7 @@ class BrowserSession:
                     clicked = True
                     break
         if not clicked:
-            raise BrowserError(
-                f"Không tìm thấy nút đăng nhập trên trang (đang ở {self.page.url[:80]})"
-            )
+            raise LoginError("LOGIN_CONTROL_NOT_FOUND", "Không tìm thấy nút đăng nhập SSO")
 
         # Chờ chuyển sang trang của IdP — đây là bước dễ hỏng nhất khi mạng chập
         for _ in range(12):
@@ -407,20 +517,14 @@ class BrowserSession:
             if "auth." in self.page.url or "openid-connect" in self.page.url:
                 break
         else:
-            raise BrowserError(
-                f"Bấm đăng nhập nhưng không chuyển được sang trang IdP "
-                f"(đang ở {self.page.url[:80]})"
-            )
+            raise LoginError("LOGIN_IDP_NOT_REACHED", "Không chuyển được sang trang IdP")
 
         # Điền form của IdP
         try:
             self.page.locator("input[name='username']").first.fill(username, timeout=15000)
             self.page.locator("input[name='password']").first.fill(password, timeout=15000)
         except Exception as exc:                        # noqa: BLE001
-            raise BrowserError(
-                f"Không thấy form đăng nhập của IdP (đang ở {self.page.url[:80]}). "
-                f"Chi tiết: {type(exc).__name__}"
-            ) from exc
+            raise LoginError("LOGIN_IDP_FORM_NOT_FOUND", type(exc).__name__) from None
 
         for selector in ("button[type='submit']", "input[type='submit']",
                          "#kc-login", "button:has-text('Sign In')"):
@@ -436,13 +540,10 @@ class BrowserSession:
         self._wait_for_render()
 
         url = self.page.url
-        if "auth.datafactory" in url or "/protocol/openid-connect/auth" in url:
-            raise BrowserError(
-                "Đăng nhập không thành công — vẫn đang ở trang của IdP. "
-                "Kiểm tra lại tài khoản/mật khẩu."
-            )
+        if origin_of(url) != origin_of(self.base_url) or self._on_login_url(url) or "/protocol/openid-connect/auth" in url:
+            raise LoginError("LOGIN_NOT_COMPLETED", "Vẫn ở trang đăng nhập/IdP sau submit")
         self.authenticated = True
-        return f"Đã đăng nhập, hiện ở {url}"
+        return "Đã đăng nhập qua SSO"
 
     # ── Lấy token cho các test API ──────────────────────────────────────────
     def _capture_auth_header(self, request) -> None:
@@ -534,6 +635,24 @@ class BrowserSession:
         target = str(args.get("target") or "").strip()
         name = str(args.get("by_name") or "").strip()
 
+        if getattr(self, "strict_locators", False):
+            result = self.page.get_by_test_id(target)
+            if result.count() == 0 and args.get("role"):
+                result = self.page.get_by_role(args["role"], name=name or target, exact=True)
+            elif result.count() == 0 and args.get("by_name") and not _looks_like_test_id(target):
+                result = self.page.get_by_text(name, exact=True)
+            # Preserve the strict locator; Playwright expect/action reports zero
+            # or multiple matches without selecting an arbitrary .first().
+            return result
+        if args.get("role"):
+            # Agent-generated cases use the exact accessible role/name observed
+            # live. Preserve Playwright strictness rather than choosing .first.
+            if target and _looks_like_test_id(target):
+                exact_id = self.page.get_by_test_id(target)
+                if exact_id.count():
+                    return exact_id
+            return self.page.get_by_role(args["role"], name=name or target, exact=True)
+
         if target and _looks_like_test_id(target):
             locator = self._test_id_locator(target)
             with contextlib.suppress(Exception):
@@ -616,6 +735,19 @@ class BrowserSession:
                         "() => { try { localStorage.clear(); sessionStorage.clear(); }"
                         " catch (e) {} }"
                     )
+            # A context loaded from storage_state already contains localStorage
+            # even while its first page is about:blank. Clear those known origins
+            # without visiting them (visiting /login could immediately redirect).
+            origins = {self.base_url}
+            if self.storage_state and Path(self.storage_state).is_file():
+                with contextlib.suppress(Exception):
+                    state = json.loads(Path(self.storage_state).read_text())
+                    origins.update(o['origin'] for o in state.get('origins', []) if o.get('origin'))
+            with contextlib.suppress(Exception):
+                cdp = context.new_cdp_session(self.page)
+                for origin in origins:
+                    cdp.send('Storage.clearDataForOrigin', {'origin': origin, 'storageTypes': 'all'})
+                cdp.detach()
             with contextlib.suppress(Exception):
                 context.clear_cookies()
             with contextlib.suppress(Exception):
@@ -687,7 +819,7 @@ class BrowserSession:
         SPA phải chạy JS và gọi API lấy phiên rồi mới render menu. Chờ mạng lắng
         xuống trước, nếu không sẽ lúc được lúc không tuỳ tốc độ mạng.
         """
-        from ..ui.crawl import INTERACTIVE
+        from qctool.ui.crawl import INTERACTIVE
 
         with contextlib.suppress(Exception):
             self.page.wait_for_load_state("networkidle", timeout=min(max_wait_ms, 7000))
@@ -706,14 +838,157 @@ class BrowserSession:
 
     def click(self, args: dict) -> str:
         locator = self.locate(args)
-        locator.click(timeout=self.timeout_ms)
+        # networkidle can already be satisfied on an SPA's existing document.
+        # It is not a barrier for a POST started by this click; navigating next
+        # can cancel the request before the app stores its resulting session.
+        # Track only writes started by the click, never old/background polling,
+        # and retain no URL, headers, payload or response body.
+        pending = set()
+        collecting = True
+        initial_url = self.page.url
+        def started(request):
+            if (collecting and request.resource_type in {'xhr', 'fetch'}
+                    and request.method not in {'GET', 'HEAD', 'OPTIONS'}):
+                pending.add(request)
+        def finished(request):
+            pending.discard(request)
+        listeners = [('request', started), ('requestfinished', finished), ('requestfailed', finished)]
+        deadline = time.monotonic() + self.timeout_ms / 1000
+        for event, handler in listeners:
+            self.page.on(event, handler)
+        try:
+            locator.click(timeout=self.timeout_ms)
+            self.page.wait_for_timeout(50)  # Dispatch the click's immediate async work.
+            collecting = False
+            # A completed navigation is also a completion signal. Some apps
+            # navigate after response headers and abandon an unread fetch body,
+            # so the old document may never emit requestfinished for that body.
+            while pending and self.page.url == initial_url and time.monotonic() < deadline:
+                self.page.wait_for_timeout(50)
+            if pending and self.page.url == initial_url:
+                error = NeedsEnvironment('UI_ACTION_RESPONSE_TIMEOUT: click-triggered request did not complete within the browser timeout.')
+                error.code = 'UI_ACTION_RESPONSE_TIMEOUT'
+                raise error
+            self.page.wait_for_timeout(50)  # Let the completed response update SPA state.
+        finally:
+            for event, handler in listeners:
+                with contextlib.suppress(Exception):
+                    self.page.remove_listener(event, handler)
         self._wait_for_render(max_wait_ms=4000)
         return f"Đã bấm «{self._label(args)}» → {self.page.url}"
+
+    def click_and_capture(self, args: dict, step_seq: int) -> dict:
+        """Inspect only requests started inside this click's bounded window.
+
+        Listen before clicking; collect the entire window to reject duplicates.
+        Download completion must occur within the window before reading JSON.
+        Only public boolean success is retained; never headers/raw payloads.
+        """
+        spec = args["capture_response"]
+        try:
+            validate_capture(spec)
+        except (ValueError, TypeError):
+            raise ResponseCaptureError("INVALID_UI_RESPONSE_CAPTURE") from None
+        page = self.page
+        private_before = self._capture_private
+        self._capture_private = True
+        requests, responses, finished = [], [], set()
+        # Mặc định theo timeout bước của lượt chạy (run.timeout_seconds), không cố định 10s:
+        # backend ngủ (Render free tier) cần 30–60s để trả response đầu tiên.
+        deadline = time.monotonic() + spec.get("timeout_ms", max(10000, self.timeout_ms)) / 1000
+        settled = []
+        def matches(req):
+            return matches_request(req, spec)
+        def on_request(req):
+            if time.monotonic() <= deadline and matches(req):
+                requests.append(req)
+        def on_response(resp):
+            if resp.request in requests and matches(resp.request):
+                responses.append(resp)
+        def on_finished(req):
+            if req in requests:
+                finished.add(req)
+                settled.append(time.monotonic())
+        listeners = [("request", on_request), ("response", on_response), ("requestfinished", on_finished)]
+        for event, handler in listeners:
+            page.on(event, handler)
+        try:
+            self.locate(args).click(timeout=max(1, int((deadline - time.monotonic()) * 1000)))
+            # Thoát sớm 1s sau khi response duy nhất hoàn tất — vẫn đủ để bắt request trùng
+            # (AMBIGUOUS) mà không bắt mọi case đăng nhập chờ hết cửa sổ 45s.
+            while time.monotonic() < deadline and not (settled and time.monotonic() - settled[0] >= 1.0):
+                page.wait_for_timeout(min(50, max(1, int((deadline - time.monotonic()) * 1000))))
+            if len(requests) > 1 or len(responses) > 1:
+                raise ResponseCaptureError("AMBIGUOUS_UI_RESPONSE")
+            if len(responses) != 1 or responses[0].request not in finished:
+                raise ResponseCaptureError("UI_RESPONSE_TIMEOUT")
+            response = responses[0]
+            raw = response.body()
+            if len(raw) > 1048576:
+                raise ResponseCaptureError("UI_RESPONSE_BODY_LIMIT")
+            try:
+                data = json.loads(raw)
+            except (ValueError, UnicodeError):
+                data = None
+            # Projection, not a redacted copy of an auth response: token/user/
+            # password and all unknown payload fields never enter saved/results.
+            body = {"success": data["success"]} if isinstance(data, dict) and type(data.get("success")) is bool else None
+            return {"status": response.status, "body": body, "error": None,
+                    "_ui_trigger": {"step_seq": step_seq, "method": spec["method"],
+                                    "path": spec["path"], "origin": spec["origin"]}}
+        except ResponseCaptureError:
+            raise
+        except Exception:
+            raise ResponseCaptureError("UI_RESPONSE_CAPTURE_FAILED") from None
+        finally:
+            self._capture_private = private_before
+            for event, handler in listeners:
+                with contextlib.suppress(Exception):
+                    page.remove_listener(event, handler)
+
+    def click_and_observe_requests(self, args: dict, step_seq: int) -> dict:
+        """Count exact requests during this submit window, including failed calls.
+
+        Zero means absence only within the explicit bounded window. Every match
+        counts; duplicates cannot be mistaken for absence. No response/body read.
+        """
+        spec = args["capture_requests"]
+        try:
+            validate_capture(spec)
+        except (ValueError, TypeError):
+            raise ResponseCaptureError("INVALID_UI_RESPONSE_CAPTURE") from None
+        page = self.page
+        private_before = self._capture_private
+        self._capture_private = True
+        count = 0
+        deadline = None
+        window_ms = spec.get("timeout_ms", 10000)
+        def on_request(req):
+            nonlocal count
+            if (deadline is None or time.monotonic() <= deadline) and matches_request(req, spec):
+                count += 1
+        page.on("request", on_request)
+        try:
+            self.locate(args).click(timeout=window_ms)
+            deadline = time.monotonic() + window_ms / 1000
+            while time.monotonic() < deadline:
+                page.wait_for_timeout(min(50, max(1, int((deadline-time.monotonic())*1000))))
+            return {"body": {"request_count": count}, "_ui_trigger": {
+                "step_seq": step_seq, "method": spec["method"], "path": spec["path"],
+                "origin": spec["origin"], "window_ms": spec.get("timeout_ms", 10000)}}
+        except Exception:
+            raise ResponseCaptureError("UI_REQUEST_OBSERVATION_FAILED") from None
+        finally:
+            self._capture_private = private_before
+            with contextlib.suppress(Exception):
+                page.remove_listener("request", on_request)
 
     def fill(self, args: dict) -> str:
         locator = self.locate(args)
         locator.fill(str(args.get("value", "")), timeout=self.timeout_ms)
-        return f"Đã điền «{args.get('value', '')}» vào «{self._label(args)}»"
+        if args.get("_fixture_alias"):
+            self._secret_locators.append(locator)
+        return f"Đã điền «{args.get('_fixture_alias', args.get('value', ''))}» vào «{self._label(args)}»"
 
     def select(self, args: dict) -> str:
         locator = self.locate(args)
@@ -823,6 +1098,17 @@ class BrowserSession:
             return self._record(True, f"«{name}» không có trên trang — đúng như mong đợi")
         if locator.count() == 0:
             return self._record(True, f"«{name}» không có trên trang — đúng như mong đợi")
+        target = str(args.get("target") or "").strip()
+        text = str(args.get("by_name") or "").strip()
+        if text and text != target and _looks_like_test_id(target):
+            # testid + chữ: "vùng <target> không hiển thị <chữ>". Vùng thông báo/live region
+            # thường LUÔN có trong DOM (rỗng, sr-only) — kiểm to_be_hidden trên nó là Fail giả
+            # (TC_CONTACT_005, SalonHub 2026-10-10).
+            with contextlib.suppress(Exception):
+                if locator.is_hidden():
+                    return self._record(True, f"«{target}» đang ẩn — không hiển thị «{text}»")
+            return self._check(locator, "not_to_contain_text",
+                               f"«{target}» không hiển thị «{text}»", expected=text)
         return self._check(locator, "to_be_hidden",
                            f"«{name}» không hiện trên màn hình")
 
@@ -1005,17 +1291,27 @@ class BrowserSession:
 
     # ── Bằng chứng ──────────────────────────────────────────────────────────
     def screenshot(self, name: str, full_page: bool = True) -> Path | None:
-        """Lưu ảnh chụp — dùng khi case fail, để có bằng chứng."""
+        """Lưu ảnh chụp làm bằng chứng.
+
+        Ô mật khẩu và mọi ô đã điền giá trị fixture (tài khoản thật) bị che bằng `mask` của
+        Playwright — kể cả khi trang đã đổi ô mật khẩu sang type=text ("hiện mật khẩu").
+        Nhờ vậy case đăng nhập vẫn có ảnh mà không lộ bí mật; trace thì không che được.
+        """
         if not self.evidence_dir:
             return None
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{self.case_id}-{name}")[:80]
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
         path = self.evidence_dir / f"{safe}.png"
         with contextlib.suppress(Exception):
-            self.page.screenshot(path=str(path), full_page=full_page)
+            mask = [self.page.locator('input[type="password"]'), *self._secret_locators]
+            self.page.screenshot(path=str(path), full_page=full_page, mask=mask)
             self.evidence.screenshots.append(path.name)
             return path
         return None
+
+    def capture_final(self) -> None:
+        """Ảnh trạng thái cuối của case (ui.evidence: always) — chứng minh case đã thật sự chạy."""
+        self.screenshot("final")
 
     def capture_failure(self) -> None:
         """Ảnh + trạng thái trang lúc case vừa fail."""

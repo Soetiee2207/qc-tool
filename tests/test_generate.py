@@ -15,14 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from qctool.generate import IdAllocator, generate_all  # noqa: E402
 from qctool.generate.loader import SpecError, load_endpoints, resolve_ref  # noqa: E402
 from qctool.generate.from_openapi import generate_for_endpoint  # noqa: E402
-from qctool.generate.from_flows import generate_from_flows  # noqa: E402
-from qctool.generate.from_functions import generate_from_functions  # noqa: E402
-from qctool.generate.from_requirements import (  # noqa: E402
-    _extract_threshold,
-    generate_from_acceptance,
-    generate_from_nfr,
-)
-from qctool.testcase import (  # noqa: E402
+from qctool.core.testcase import (  # noqa: E402
     ACTION_VERBS,
     CaseType,
     Priority,
@@ -31,10 +24,10 @@ from qctool.testcase import (  # noqa: E402
     TestCase,
     ValidationError,
 )
-from qctool.validate import validate_batch  # noqa: E402
+from qctool.core.validate import validate_batch  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
-SAMPLE_SPEC = Path(__file__).resolve().parent.parent / "samples" / "openapi" / "task-manager-sample.yaml"
+SAMPLE_SPEC = Path(__file__).resolve().parent.parent / "projects" / "demo" / "task-manager" / "openapi.yaml"
 
 
 # ── Vocabulary đóng ──────────────────────────────────────────────────────────
@@ -218,56 +211,6 @@ def test_boundary_values_generated_from_constraints():
 
 
 # ── Generator từ requirement ─────────────────────────────────────────────────
-def test_acceptance_criteria_produce_cases():
-    reqs = [
-        {"id": "US-001", "kind": "user_story", "title": "Đăng nhập"},
-        {"id": "AC-001-1", "kind": "acceptance_criterion", "belongs_to": "US-001",
-         "given": "Chưa đăng nhập", "when": "Mở /projects", "then": "Redirect /login"},
-    ]
-    result = generate_from_acceptance(reqs, IdAllocator(), "AUTH")
-    assert len(result.cases) == 1
-    case = result.cases[0]
-    assert case.traces_to == ["AC-001-1", "US-001"]
-    assert case.preconditions == ["Chưa đăng nhập"]
-    assert case.needs_mapping, "case từ văn xuôi phải được đánh dấu chưa map"
-
-
-def test_incomplete_acceptance_criterion_skipped_not_guessed():
-    """Thiếu vế Given/When/Then thì bỏ qua và cảnh báo — không đoán."""
-    reqs = [
-        {"id": "AC-001-1", "kind": "acceptance_criterion",
-         "given": "x", "when": "y", "then": None},
-    ]
-    result = generate_from_acceptance(reqs, IdAllocator(), "AUTH")
-    assert not result.cases
-    assert result.warnings and "thiếu vế Given/When/Then" in result.warnings[0]
-
-
-def test_nfr_without_threshold_not_generated():
-    """NFR không có ngưỡng phải vào danh sách 'không kiểm chứng được', không sinh bừa."""
-    reqs = [{"id": "NFR-1", "kind": "non_functional", "statement": "shall be user-friendly"}]
-    result = generate_from_nfr(reqs, IdAllocator(), "NFR")
-    assert not result.cases
-    assert len(result.unverifiable) == 1
-
-
-@pytest.mark.parametrize("text,expected_ms", [
-    ("`/auth/config` p95 < 100ms", 100),
-    ("Độ trễ dưới 250ms khi tải hồ sơ", 250),
-    ("p99 < 1.5ms", 1.5),
-])
-def test_extract_threshold_from_text(text, expected_ms):
-    result = _extract_threshold(text)
-    assert result is not None
-    _, value, unit = result
-    assert value == expected_ms and unit == "ms"
-
-
-def test_extract_threshold_seconds_converted():
-    result = _extract_threshold("phải phản hồi trong 3 giây")
-    assert result is not None
-    _, value, unit = result
-    assert unit == "s" and value == 3
 
 
 # ── Validator lô ─────────────────────────────────────────────────────────────
@@ -470,77 +413,9 @@ def test_422_case_with_body_still_sends_bad_body():
     assert not isinstance(args["body"]["name"], str)
 
 
-def test_flows_generate_manual_cases_with_steps():
-    """Case từ luồng: mỗi bước tài liệu → một bước testcase, và là case thủ công."""
-    from qctool.generate.from_flows import generate_from_flows
-
-    flows = {"flow": [{
-        "id": "FLOW-demo-001", "title": "Đăng nhập", "source_kind": "sequence",
-        "steps": [
-            {"seq": 1, "action": "Mở /login", "expected": ""},
-            {"seq": 2, "action": "Bấm Sign in", "expected": "Redirect IdP"},
-        ],
-        "source_file": "srs/x-flows.md", "source_line": 1, "source_quote": "q",
-    }]}
-    cases = generate_from_flows(flows, IdAllocator(), "DEMO")
-
-    assert len(cases) == 1
-    case = cases[0]
-    assert case.execution == "manual"
-    assert case.traces_to == ["FLOW-demo-001"]
-    # 2 bước tài liệu + 1 bước kiểm tra cuối
-    assert len(case.steps) == 3
-    assert "Mở /login" in case.steps[0].describe()
-
-
-def test_decision_generates_two_branches():
-    """Điểm quyết định phải sinh 2 case — một nhánh đúng, một nhánh sai.
-
-    Sinh một case cho cả hai nhánh là sai bản chất: chỉ cần một nhánh chạy đúng
-    thì case vẫn 'đạt', trong khi nhánh kia có thể hỏng hoàn toàn.
-    """
-    from qctool.generate.from_flows import generate_from_flows
-
-    flows = {"decision": [{
-        "id": "DEC-demo-001", "flow": "Đăng nhập", "condition": "keycloak bật?",
-        "yes": "Init PKCE", "no": "Hiện authError",
-        "source_file": "b.md", "source_line": 1, "source_quote": "q",
-    }]}
-    cases = generate_from_flows(flows, IdAllocator(), "DEMO")
-    assert len(cases) == 2
-    assert {c.case_type.value for c in cases} == {"positive", "negative"}
-
-
-def test_functions_generate_cases_without_endpoint():
-    """FR không có `endpoint` vẫn phải sinh được case từ flow + error handling.
-
-    Đây là lỗi người dùng gặp thật: 7/10 FR của login-sso không khai endpoint, và
-    tool sinh ra **0 case** cho chúng — dù SRS mô tả đủ flow và bảng hành vi lỗi.
-    """
-    from qctool.generate.from_functions import generate_from_functions
-
-    reqs = [{
-        "id": "FR-demo-006", "kind": "functional", "title": "Logout",
-        "source": {"file": "srs.md", "line": 10},
-        "api": {
-            "flow": ["clearSession + logout redirectUri"],
-            "error_handling": [
-                {"condition": "Init timeout", "behavior": "Show login + authError"},
-                {"condition": "Refresh fail", "behavior": "clearSession → /login"},
-            ],
-        },
-    }]
-    cases = generate_from_functions(reqs, IdAllocator(), "DEMO")
-
-    # 1 case luồng chính + 2 case xử lý lỗi
-    assert len(cases) == 3
-    assert all(c.traces_to == ["FR-demo-006"] for c in cases)
-    assert all(c.execution == "manual" for c in cases)
-
-
 def test_describe_has_no_internal_vocabulary():
     """Cột Test Steps không được lộ `perform.unmapped:` — người QC đọc cột đó."""
-    from qctool.testcase import Step, StepKind
+    from qctool.core.testcase import Step, StepKind
 
     step = Step(1, StepKind.WHEN, "perform.unmapped",
                 {"description": "Bấm Sign in", "expectation": "Redirect IdP"})
@@ -560,63 +435,11 @@ def test_slug_keeps_words_separated():
 
 
 # ── Hồi quy: phiên ẩn danh — điều kiện để test login/redirect/guard ─────────
-def test_anonymous_case_gets_session_step():
-    """Case UI nói "chưa authenticated" phải được chèn bước xoá phiên.
-
-    Không có bước này thì case chạy trong trình duyệt vốn đã đăng nhập — kết quả
-    vô nghĩa, tệ hơn là `Pass` giả tạo vì trang không hề chuyển hướng.
-    """
-    from qctool.generate.mapper import _case_session
-    from qctool.testcase import Step
-
-    case = _case(
-        title="Router guard chạy → Redirect /login",
-        preconditions=["User chưa authenticated, mở /projects"],
-        steps=[Step(1, StepKind.WHEN, "ui.goto", {"url": "https://x.test"})],
-    )
-    assert _case_session(case) == "anonymous"
-
-
-def test_authenticated_case_detected():
-    from qctool.generate.mapper import _case_session
-    from qctool.testcase import Step
-
-    case = _case(
-        title="TopBar Sign Out → logout",
-        preconditions=["Đã đăng nhập, session active"],
-        steps=[Step(1, StepKind.WHEN, "ui.click", {"target": "sign_out"})],
-    )
-    assert _case_session(case) == "authenticated"
-
-
-def test_api_case_never_gets_session_step():
-    """Case API **không** được chèn `ui.session`.
-
-    Case API tự quyết định xác thực bằng tham số `auth` của `http.request`. Chèn
-    bước UI vào chúng làm hỏng case: chạy trong CI không có trình duyệt thì case
-    API lẽ ra `Pass` lại thành `Fail` vì thiếu browser.
-
-    Tôi đã mắc đúng lỗi này — preconditions của case API viết "KHÔNG gửi token",
-    khớp nhầm mẫu "chưa xác thực", và cả 8 case API bị chèn bước xoá phiên.
-    """
-    from qctool.generate.mapper import _case_session
-    from qctool.testcase import Step
-
-    api_case = _case(
-        title="GET /auth/me trả 401 khi chưa xác thực",
-        preconditions=["KHÔNG gửi token, hoặc token đã hết hạn"],
-        steps=[
-            Step(1, StepKind.WHEN, "http.request",
-                 {"method": "GET", "path": "/auth/me", "auth": "none"}),
-            Step(2, StepKind.THEN, "assert.http_status", {"expected": 401}),
-        ],
-    )
-    assert _case_session(api_case) is None
 
 
 def test_unmapped_text_gets_no_internal_vocabulary():
     """Cột Test Steps không lộ `perform.unmapped:` — người QC đọc cột đó."""
-    from qctool.testcase import Step
+    from qctool.core.testcase import Step
 
     for action, args, expect in (
         ("perform.unmapped", {"description": "Bấm Sign in", "expectation": "Redirect"},
@@ -630,24 +453,3 @@ def test_unmapped_text_gets_no_internal_vocabulary():
         text = Step(1, StepKind.WHEN, action, args).describe()
         assert text == expect, f"{action}: {text!r} != {expect!r}"
         assert "unmapped" not in text and "target=" not in text
-
-
-def test_shared_error_table_not_duplicated():
-    """Bảng `error_handling` bị chép vào nhiều FR → chỉ sinh case MỘT lần.
-
-    SRS login-sso chép cùng ba dòng lỗi auth vào 7 mục FR. Sinh case cho từng bản
-    sao tạo ra 21 case trùng — báo cáo phình ra mà không thêm giá trị.
-    """
-    from qctool.generate.from_functions import generate_from_functions
-
-    shared = {"condition": "Init timeout", "behavior": "Show login + authError"}
-    reqs = [
-        {"id": f"FR-demo-00{i}", "kind": "functional", "title": f"Chức năng {i}",
-         "source": {"file": "srs.md", "line": i},
-         "api": {"error_handling": [dict(shared)]}}
-        for i in (1, 2, 3)
-    ]
-    cases = generate_from_functions(reqs, IdAllocator(), "DEMO")
-
-    timeout_cases = [c for c in cases if "Init timeout" in c.title]
-    assert len(timeout_cases) == 1, f"phải khử trùng, đang có {len(timeout_cases)}"

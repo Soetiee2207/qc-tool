@@ -11,16 +11,31 @@ from __future__ import annotations
 import json
 import traceback
 import urllib.parse
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
 import yaml
 
-from . import config as cfg_mod
-from . import execute, generate, ingest, render, report, validate
+from qctool import config as cfg_mod
+from qctool import execute, generate, ingest, render, report
+from qctool.core import validate
+from qctool.generation import GenerationResult, GenerationStatus, run_generation
+from qctool.core.coverage import analyze_coverage
+from qctool.core.executability import analyze_executability
+from qctool.agent.loop import AgentLLM
+from qctool.agent.llm_provider import load_llm_provider
+from qctool.data.fixtures import FixtureStore, load_fixture_store
+from qctool.artifacts import RunTracker, stage_dir
 
 ProgressFn = Callable[[str, str], None]      # (bước, mô tả)
+
+
+# Output khi lượt chạy không gắn project (config tự do, API trực tiếp). Project thì
+# luôn ghi vào <feature>/artifacts/ — xem config.expand_project.
+ARTIFACTS_ROOT = Path("artifacts")
+WEB_ROOT = Path("projects") / "web"      # lượt chạy từ web UI: <WEB_ROOT>/<feature>/artifacts
 
 
 def _noop(stage: str, message: str) -> None:
@@ -52,18 +67,40 @@ class PipelineConfig:
     headless: bool = True               # chạy trình duyệt ẩn
     out_dir: Path | None = None         # mặc định: artifacts/<feature>/
     created_by: str = "qc-tool"
+    fixture_store: FixtureStore | None = field(default=None, repr=False)
+    llm_enabled: bool = False          # chỉ bật tường minh; không suy từ credential
+    generation_profile: str = "agent" # direct/all callers retain compatibility
+    allow_provisioning: bool = False   # opt-in, vẫn phải qua reviewed engine policy
+    data_environment: str | None = None
+    exploration_mutation: dict = field(default_factory=dict)
+
+    agent_critic: bool = False
+    # `mode: write` (đã được người dùng xác nhận): agent được tạo/sửa/xoá dữ liệu thật trên
+    # origin của ứng dụng, trừ `write_deny`. Mặc định safe — chỉ đọc.
+    write_mode: bool = False
+    write_deny: tuple[str, ...] = ()
+    background_paths: tuple[str, ...] = ("/socket.io/",)
+    safe_controls: tuple[str, ...] = ()
+    safe_paths: tuple[str, ...] = ()
+    agent_budget: dict = field(default_factory=dict)
+    intent_ids: tuple[str, ...] | None = None
+    max_intents: int | None = None
 
     # ── UI/UX test (Playwright) ────────────────────────────────────────────
     ui_retry: int = 0                   # số lần chạy lại case hỏng (tối đa 3)
     ui_evidence: str = "on-fail"        # off | on-fail | always
     ui_trace: bool = False              # lưu trace Playwright (.zip) mỗi case
+    # Trace cả case có điền mật khẩu / bắt request đăng nhập. Mặc định TẮT: file
+    # .trace.zip khi đó chứa mật khẩu, token, cookie thật ở dạng rõ. Chỉ bật cục bộ
+    # với tài khoản test; không chia sẻ/commit thư mục evidence/.
+    ui_trace_sensitive: bool = False
     ui_axe: bool = False                # bật quét accessibility
     soft_assert: bool = False           # bước kiểm tra sai không dừng case
     viewport: tuple[int, int] = (1440, 900)
 
     @classmethod
     def from_file(cls, path: Path) -> "PipelineConfig":
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data = cfg_mod.expand_project(yaml.safe_load(path.read_text(encoding="utf-8")) or {}, path)
         base = path.parent
 
         def resolve(value: str | None) -> Path | None:
@@ -76,11 +113,24 @@ class PipelineConfig:
         auth = data.get("auth", {}) or {}
         out = data.get("out", {}) or {}
         ui = data.get("ui", {}) or {}
+        llm = data.get("llm", {}) or {}
+        generation_profile = (data.get("generation") or {}).get("profile", "agent")
+        if generation_profile not in {"agent", "business", "legacy"}:
+            raise cfg_mod.ConfigError("generation.profile must be agent (business/legacy are deprecated aliases).")
+        if type((data.get('generation') or {}).get('critic', False)) is not bool:
+            raise cfg_mod.ConfigError('generation.critic must be a boolean.')
+        provisioning = data.get("provisioning", {}) or {}
+        allow_provisioning = provisioning.get("enabled", False)
+        if type(allow_provisioning) is not bool:
+            raise cfg_mod.ConfigError("provisioning.enabled must be a boolean.")
 
         # Tài khoản lấy từ `.env` nếu file cấu hình không ghi.
         # Nhờ vậy `qc.yaml` commit được mà không lộ bí mật, còn người dùng vẫn
         # chỉ cần chạy một lệnh.
         env = cfg_mod.load_config()
+        llm_enabled = llm.get("enabled", cfg_mod._flag("QCTOOL_LLM_ENABLED", False))
+        if type(llm_enabled) is not bool:
+            raise cfg_mod.ConfigError("llm.enabled must be a boolean.")
 
         username = auth.get("username") or env.username
         password = auth.get("password") or env.password
@@ -95,6 +145,12 @@ class PipelineConfig:
             else:
                 mode = "manual"
 
+        from qctool.agent.exploration_actions import mutation_policy
+        fixture_store = load_fixture_store(data.get("test_fixtures"))
+        try:
+            exploration_mutation = mutation_policy((data.get('exploration') or {}).get('mutation'), fixture_store=fixture_store)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise cfg_mod.ConfigError('Invalid exploration.mutation policy') from exc
         return cls(
             docs_dir=resolve(data.get("docs_dir")),
             openapi=resolve(data.get("openapi")),
@@ -112,13 +168,60 @@ class PipelineConfig:
             headless=bool(out.get("headless", True)),
             out_dir=resolve(out.get("dir")),
             created_by=out.get("created_by") or "qc-tool",
+            llm_enabled=llm_enabled,
+            generation_profile=generation_profile,
+            agent_critic=(data.get("generation") or {}).get("critic", False),
+            agent_budget=(data.get("generation") or {}).get("budget", {}),
+            intent_ids=tuple((data.get("generation") or {})["intent_ids"]) if "intent_ids" in (data.get("generation") or {}) else None,
+            max_intents=(data.get("generation") or {}).get("max_intents"),
+            allow_provisioning=allow_provisioning,
+            data_environment=provisioning.get("environment"),
+            exploration_mutation=exploration_mutation,
+            fixture_store=fixture_store,
+            write_mode=_write_mode(data),
+            write_deny=tuple((data.get('write') or {}).get('deny') or ()),
+            background_paths=tuple((data.get('exploration') or {}).get('background_paths') or ('/socket.io/',)),
+            safe_controls=tuple((data.get('exploration') or {}).get('safe_controls') or ()),
+            safe_paths=tuple((data.get('exploration') or {}).get('safe_paths') or ()),
             ui_retry=max(0, min(int(ui.get("retry", 0) or 0), 3)),
-            ui_evidence=str(ui.get("evidence", "on-fail") or "on-fail"),
+            ui_evidence="off" if ui.get("evidence") is False else str(ui.get("evidence") or "on-fail"),  # YAML: off → False
             ui_trace=bool(ui.get("trace", False)),
+            ui_trace_sensitive=bool(ui.get("trace_sensitive", False)),
             ui_axe=bool(ui.get("axe", False)) or "assert.axe" in _verbs_in_file(path),
             soft_assert=bool(ui.get("soft_assert", False)),
             viewport=_viewport_of(ui),
         )
+
+
+def _warm_up(cfg: PipelineConfig, log) -> None:
+    """Đánh thức backend ngủ (Render free tier cold start 30–60s) trước khi đo bất cứ gì.
+
+    Một GET tới gốc API; mọi mã trả về đều được — chỉ cần server đã thức. Lỗi không chặn
+    lượt chạy: case nào thật sự cần API sẽ tự báo Blocked với lý do của nó.
+    """
+    import time
+    import urllib.request
+    target = (cfg.base_url or "").rstrip("/")
+    if not target or not cfg.web_url:
+        return
+    started = time.monotonic()
+    log(f"Warm-up {target} (Render free tier có thể ngủ, chờ tới {max(cfg.timeout_seconds, 10)}s)…")
+    try:
+        from qctool.execute.runner import USER_AGENT   # UA mặc định của urllib bị một số môi trường chặn
+        req = urllib.request.Request(target + "/", headers={"User-Agent": USER_AGENT})
+        urllib.request.urlopen(req, timeout=max(cfg.timeout_seconds, 10)).close()
+    except Exception as exc:   # noqa: BLE001 — HTTPError 404 vẫn nghĩa là server đã thức
+        if not hasattr(exc, "code"):
+            log(f"  ⚠ Warm-up {target} không phản hồi ({type(exc).__name__})")
+            return
+    log(f"Warm-up {target}: {time.monotonic() - started:.1f}s")
+
+
+def _write_mode(data: dict) -> bool:
+    mode = data.get("mode", "safe")
+    if mode not in {"safe", "write"}:
+        raise cfg_mod.ConfigError("mode phải là safe hoặc write.")
+    return mode == "write"
 
 
 def _viewport_of(ui: dict) -> tuple[int, int]:
@@ -158,12 +261,27 @@ class PipelineResult:
     xlsx_path: Path | None = None
     run_dir: Path | None = None
     report_path: Path | None = None
+    tracker: object | None = field(default=None, repr=False)   # artifacts.RunTracker
     counts: dict = field(default_factory=dict)
     total_cases: int = 0
     generated_report: object | None = None      # validate.Report
     run_result: object | None = None            # execute.RunResult
     error: str | None = None
     log: list[str] = field(default_factory=list)
+    generation_result: GenerationResult | None = None
+    generation_path: Path | None = None
+
+    generation_profile: str = "agent"
+    case_scopes: dict = field(default_factory=dict)
+    legacy_testcases_path: Path | None = None
+
+    @property
+    def generation_status(self) -> str | None:
+        return self.generation_result.status.value if self.generation_result is not None else None
+
+    @property
+    def generation_success(self) -> bool:
+        return self.generation_result is not None and self.generation_result.success
 
     @property
     def pass_rate(self) -> float:
@@ -171,18 +289,47 @@ class PipelineResult:
         return (self.counts.get("Pass", 0) / executed * 100) if executed else 0.0
 
 
-def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> PipelineResult:
+def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None, *,
+                 resolution_llm: AgentLLM | None = None,
+                 exploration_llm: AgentLLM | None = None) -> PipelineResult:
     """Chạy toàn bộ pipeline. Không bao giờ ném lỗi ra ngoài — trả về `error`."""
-    notify = on_progress or _noop
-    result = PipelineResult(feature=cfg.feature)
+    progress = on_progress or _noop
+    result = PipelineResult(feature=cfg.feature, generation_profile=cfg.generation_profile)
+    if cfg.generation_profile not in {"agent", "business", "legacy"}:
+        result.error = "Unsupported generation profile"
+        return result
+
+    def safe(message: str) -> str:
+        return cfg.fixture_store.redact(message) if cfg.fixture_store else message
+
+    tracker: RunTracker | None = None
+
+    def notify(stage: str, message: str) -> None:
+        progress(stage, safe(message))
+        if tracker:
+            tracker.event(stage, message, "error" if stage == "error" else "info")
 
     def log(message: str) -> None:
-        result.log.append(message)
+        result.log.append(safe(message))
+        if tracker:
+            tracker.event(tracker.current or "", message, "detail")
 
     try:
-        out_dir = cfg.out_dir or Path("artifacts") / cfg.feature
+        if cfg.llm_enabled and (resolution_llm is None or exploration_llm is None):
+            adapter = load_llm_provider()
+            resolution_llm = resolution_llm if resolution_llm is not None else adapter
+            exploration_llm = exploration_llm if exploration_llm is not None else adapter
+            log("LLM authoring bật tường minh; tool safety/schema/citation được kiểm tra trước khi chạy")
+        out_dir = cfg.out_dir or ARTIFACTS_ROOT / cfg.feature
         result.out_dir = out_dir
-        out_dir.mkdir(parents=True, exist_ok=True)
+        tracker = RunTracker(out_dir, redact=safe, feature=cfg.feature)
+        result.tracker = tracker
+        tracker.state["mode"] = "write" if cfg.write_mode else "safe"
+        if cfg.write_mode:
+            if cfg.ui_retry:
+                cfg.ui_retry = 0          # chạy lại một case ghi = ghi thêm lần nữa
+            notify("ingest", "⚠ CHẾ ĐỘ GHI: agent và runner được tạo/sửa/xoá dữ liệu thật; ui.retry = 0; "
+                f"write.deny = {list(cfg.write_deny) or '—'}")
 
         # ── Chặng 1 ────────────────────────────────────────────────────────
         requirements_path: Path | None = None
@@ -191,8 +338,9 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
             if not cfg.docs_dir.is_dir():
                 raise FileNotFoundError(f"Không tìm thấy thư mục tài liệu: {cfg.docs_dir}")
             data = ingest.ingest_feature(cfg.docs_dir, cfg.feature)
-            requirements_path = out_dir / "requirements.yaml"
+            requirements_path = tracker.dir("ingest") / "requirements.yaml"
             ingest.write_yaml(data, requirements_path)
+            tracker.output("ingest", requirements_path)
             counts = data["counts"]
             message = (f"Đọc được {counts.get('total', 0)} requirement "
                        f"({counts.get('user_story', 0)} US, "
@@ -201,10 +349,17 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
                        f"{counts.get('non_functional', 0)} NFR)")
             notify("ingest", message)
             log(message)
+            for source in data.get("sources", []):
+                log(f"  đã đọc {source['path']} ({source['type']})")
+            for attachment in data.get("attachments", []):
+                log(f"  đã đọc {attachment['path']} ({attachment['type']})")
+            if any((data.get("flows") or {}).values()):
+                log("  luồng nghiệp vụ: " + ", ".join(f"{k}={len(v)}" for k, v in data["flows"].items() if v))
             for warning in data.get("warnings", []):
                 log(f"  ⚠ {warning}")
         else:
             notify("ingest", "Không có tài liệu — bỏ qua chặng ingest")
+            tracker.skip("ingest", "Không có tài liệu")
 
         result.requirements_path = requirements_path
 
@@ -229,26 +384,24 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
             log(f"  ⚠ {warning}")
             openapi_path = None
 
-        # Không truyền module mặc định: `generate_all` tự suy module theo từng
-        # feature. Truyền cứng ở đây sẽ dồn 29 feature vào một module duy nhất và
-        # làm ID testcase đụng nhau.
-        cases, validation, meta = generate.generate_all(
-            requirements_path, openapi_path, cfg.module,
-        )
-
-        # ── Chặng 2b: đăng nhập + map văn xuôi → hành động cụ thể ──────────
-        # Cảnh báo từ lúc đọc spec (operation bị bỏ qua, spec trộn nhiều service…)
-        # phải hiện ra ngay. Nếu im lặng, người dùng chỉ thấy số testcase tụt mà
-        # không biết vì sao — và sẽ tưởng tool bỏ sót phần quan trọng.
-        for warning in meta.get("warnings", []):
-            log(f"  ⚠ {warning}")
-            notify("generate", f"⚠ {warning}"[:90])
-
-        state_path = out_dir / ".auth-state.json"
-        token_path = out_dir / ".token"
+        # Prose goes directly to authoring. Keep deterministic OpenAPI generation
+        # for API-only inputs; no speculative prose seeds/crawl snapshot mapping.
+        cases, validation, meta = generate.generate_all(None, openapi_path, cfg.module)
+        if requirements_path:
+            cases = []
+        source_data = (yaml.safe_load(requirements_path.read_text(encoding="utf-8")) or {}
+                       if requirements_path else {})
+        endpoints = generate.load_endpoints(openapi_path)[0] if openapi_path else None
+        if openapi_path:
+            log(f"  đã đọc OpenAPI {openapi_path}: {len(endpoints or ())} operation")
+        needs_ui_evidence = bool(requirements_path and resolution_llm)
+        auth_operations = []
+        state_path = stage_dir(out_dir, "crawl") / ".auth-state.json"
+        token_path = stage_dir(out_dir, "crawl") / ".token"
         ui_map = None
-        if cfg.web_url and (any(c.needs_mapping for c in cases) or not cfg.skip_run):
+        if cfg.web_url and (needs_ui_evidence or not cfg.skip_run):
             notify("crawl", f"Mở trình duyệt tới {cfg.web_url}…")
+            _warm_up(cfg, log)
             # Đăng nhập chỉ khi người dùng CHỌN chế độ trình duyệt. `auth.mode:
             # manual` nghĩa là "không xác thực" — chỉ vì `.env` có sẵn tài khoản
             # mà tự đi đăng nhập là đoán ý người dùng, và nó làm hỏng cả lượt chạy
@@ -258,9 +411,9 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
             # chạy trong trạng thái chưa đăng nhập, UI map chỉ có màn hình login,
             # và gần như mọi case UI rơi vào "chưa map" mà không có lỗi nào được báo.
             if cfg.auth_mode == "browser" and cfg.username and cfg.password:
-                need_login = not state_path.is_file()
+                need_login = cfg.llm_enabled or not state_path.is_file()
                 if not need_login:
-                    from .execute.browser import BrowserSession
+                    from qctool.execute.browser import BrowserSession
 
                     with BrowserSession(cfg.web_url, headless=cfg.headless,
                                         timeout_ms=cfg.timeout_seconds * 1000,
@@ -275,17 +428,49 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
 
                 if need_login:
                     try:
-                        notify("crawl", f"Đăng nhập bằng {cfg.username}…")
-                        from .execute.browser import BrowserSession
+                        notify("crawl", "Đăng nhập bằng tài khoản đã cấu hình…")
+                        from qctool.execute.browser import BrowserSession
 
                         with BrowserSession(cfg.web_url, headless=cfg.headless,
                                             timeout_ms=cfg.timeout_seconds * 1000) as session:
+                            # Explicit browser-login configuration authorizes only
+                            # the exact credential-bearing contract operation seen
+                            # during this trusted bootstrap. Never persist bodies.
+                            def auth_request(req):
+                                from urllib.parse import urlsplit
+                                from qctool.data.capture import origin_of
+                                try:
+                                    body = req.post_data_json
+                                    if (isinstance(body, dict) and cfg.username in body.values() and cfg.password in body.values()
+                                        and any(e.method == req.method and e.path == urlsplit(req.url).path for e in endpoints or ())):
+                                        auth_operations.append({'method': req.method, 'path': urlsplit(req.url).path,
+                                            'origin': origin_of(req.url), 'fields': sorted(body)})
+                                except Exception:
+                                    pass
+                            session.page.on('request', auth_request)
                             notify("crawl", session.login(cfg.username, cfg.password))
                             session.save_state(state_path)
+                            controls = getattr(session, 'login_controls', None)
+                            if controls and cfg.fixture_store:
+                                from qctool.agent.knowledge import AppKnowledge
+                                kb = AppKnowledge(stage_dir(out_dir, 'crawl') / 'app-model.yaml', cfg.web_url.rstrip('/'), store=cfg.fixture_store)
+                                metadata = cfg.fixture_store.to_dict()['aliases']
+                                for name in sorted({a.split('.')[0] for a in metadata}):
+                                    email, password = name + '.email', name + '.password'
+                                    if (email in metadata and password in metadata and metadata[email]['available'] and metadata[password]['available']
+                                        and cfg.fixture_store.resolve(email) == cfg.username and cfg.fixture_store.resolve(password) == cfg.password):
+                                        kb.remember('authenticate:' + name, [
+                                            {'action':'ui.session','args':{'mode':'anonymous'}},
+                                            {'action':'ui.goto','args':{'url':controls['url']}},
+                                            {'action':'ui.fill','args':{'target':controls['email'],'value':email}},
+                                            {'action':'ui.fill','args':{'target':controls['password'],'value':password}},
+                                            {'action':'ui.click','args':{'target':controls['submit']}}])
+                                kb.save()
                             # Lấy token để test API dùng chính phiên đăng nhập này.
                             # Không có bước này thì mọi case cần xác thực đều 401.
                             if api_token := session.extract_token():
                                 token_path.write_text(api_token, encoding="utf-8")
+                                token_path.chmod(0o600)
                                 notify("crawl", "Lấy được access token cho test API")
                             else:
                                 notify("crawl", "Không lấy được token — case cần xác thực sẽ 401")
@@ -293,83 +478,70 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
                         # Đăng nhập hỏng KHÔNG được chặn phần còn lại: crawl ẩn danh
                         # vẫn dựng được UI map, và case cần xác thực sẽ báo `Blocked`
                         # kèm lý do — đúng nghĩa "thiếu điều kiện", không phải lỗi sản phẩm.
-                        log(f"  ⚠ Đăng nhập không thành công: {type(exc).__name__}: {exc}")
-                        notify("crawl", "Đăng nhập không thành công — crawl không cần "
+                        from qctool.execute.browser import LoginError
+                        reason = str(exc) if isinstance(exc, LoginError) else type(exc).__name__
+                        log(f"  ⚠ Đăng nhập không thành công: {reason}")
+                        notify("crawl", f"Đăng nhập không thành công ({reason}) — crawl không cần "
                                         "đăng nhập vẫn chạy tiếp")
-            try:
-                if any(c.needs_mapping for c in cases):
-                    from .ui import crawl as _crawl
+        if not cfg.web_url or not (needs_ui_evidence or not cfg.skip_run):
+            tracker.skip("crawl", "Không có web_url hoặc không cần trình duyệt")
+        notify("generate", "Authoring agent: quan sát → viết testcase → dry-run; assertion giữ theo tài liệu")
+        generation_result = run_generation(
+            source_data.get("requirements", []), existing_cases=cases,
+            flows=source_data.get("flows"), endpoints=endpoints,
+            base_url=cfg.web_url or _resolve_base_url(cfg, meta) or None,
+            storage_state=state_path if state_path.is_file() else None,
+            resolution_llm=resolution_llm,
+            module=cfg.module or "GEN", fixture_store=cfg.fixture_store,
+            allow_provisioning=cfg.allow_provisioning, environment=cfg.data_environment,
+            mutation_policy=cfg.exploration_mutation, knowledge_path=stage_dir(out_dir, "crawl") / "app-model.yaml",
+            agent_budget=cfg.agent_budget, intent_ids=cfg.intent_ids, max_intents=cfg.max_intents,
+            headless=cfg.headless, on_progress=notify, auth_operations=auth_operations, critic=cfg.agent_critic,
+            write_mode=cfg.write_mode, write_deny=cfg.write_deny, background_paths=cfg.background_paths,
+            safe_controls=cfg.safe_controls, safe_paths=cfg.safe_paths,
+        )
+        result.generation_result = generation_result
+        generation_path = tracker.dir("generate") / "generation.json"
+        result.case_scopes = {case.id: "BUSINESS_COVERAGE" for case in generation_result.cases}
+        generation_payload = generation_result.to_dict()
+        generation_payload["generation_profile"] = cfg.generation_profile
+        generation_payload["case_scopes"] = result.case_scopes
+        if cfg.fixture_store:
+            generation_payload = cfg.fixture_store.redact(generation_payload)
+        generation_path.write_text(json.dumps(generation_payload,
+                                             ensure_ascii=False, indent=2), encoding="utf-8")
+        result.generation_path = generation_path
+        tracker.output("generate", generation_path)
+        if (stage_dir(out_dir, "crawl") / "app-model.yaml").is_file():
+            tracker.output("crawl", stage_dir(out_dir, "crawl") / "app-model.yaml")
+        summary = (f"Generation: {result.generation_status} · "
+                   f"{len(generation_result.executable_cases)} executable · "
+                   f"{len(generation_result.unresolved_cases)} unresolved")
+        notify("generate", summary)
+        log(summary)
+        if not generation_result.success:
+            log("  ⚠ Coverage executable chưa được xác nhận đầy đủ; xem generation.json")
+        for issue in generation_result.issues:
+            log(f"  ⚠ Generation {issue.code}: {issue.message}")
 
-                    doc_paths = _paths_from_docs(requirements_path)
-                    if doc_paths:
-                        notify("crawl", f"Dò thêm {len(doc_paths)} đường dẫn trích từ tài liệu")
-                    fresh = _crawl(cfg.web_url, on_progress=lambda m: notify("crawl", m),
-                                   storage_state=state_path if state_path.is_file() else None,
-                                   extra_paths=["/", *doc_paths],
-                                   anonymous_paths=["/", "/login", *doc_paths[:5]])
-
-                    # Không ghi đè bản đồ TỐT bằng bản nghèo. Crawl có thể ra ít
-                    # element vì lý do tạm thời (phiên vừa hết hạn, mạng chập), và
-                    # ghi đè khi đó làm mất bản đồ đầy đủ đã dò hôm trước — lần sau
-                    # mọi case UI lại thành "chưa map" mà không rõ vì sao.
-                    old_path = out_dir / "ui-map.yaml"
-                    kept = _keep_better_map(fresh, old_path)
-                    ui_map = fresh if kept is fresh else _load_map(old_path)
-                    if kept is not fresh:
-                        warn = (f"⚠ Crawl lần này chỉ ra {len(fresh.elements)} element, "
-                                f"ít hơn bản đồ đã có ({len(ui_map.elements)}) — giữ bản "
-                                "cũ. Kiểm tra đăng nhập nếu con số này cứ thấp.")
-                        notify("crawl", warn)
-                        log(f"  {warn}")
-                    else:
-                        fresh.save(old_path)
-                    notify("crawl", f"Dùng bản đồ {len(ui_map.elements)} element "
-                                    f"trên {len(ui_map.pages)} trang" +
-                                    ("" if kept is not fresh else " (mới dò)"))
-                    # UI map nghèo là **nguyên nhân gốc** của "case chưa map được",
-                    # và nó không tự lộ ra: người dùng chỉ thấy báo cáo đầy case thủ
-                    # công mà không biết vì sao. Nói thẳng ra ở đây.
-                    if len(ui_map.elements) < 10:
-                        warn = (f"⚠ Chỉ có {len(ui_map.elements)} element — quá ít. "
-                                "Nhiều khả năng chưa vào được bên trong app (chưa đăng "
-                                "nhập, hoặc phiên hết hạn). Phần lớn case UI sẽ ở trạng "
-                                "thái «chưa map», không phải vì tài liệu thiếu.")
-                        notify("crawl", warn)
-                        log(f"  {warn}")
-            except Exception as exc:                    # noqa: BLE001
-                log(f"  ⚠ Không crawl được: {type(exc).__name__}: {exc}")
-                notify("crawl", f"Không crawl được: {type(exc).__name__}: {str(exc)[:60]}")
-
-        if ui_map is not None:
-            from .generate.mapper import map_testcases
-
-            api_paths = _api_paths_from(meta)
-            notify("map", "Map bước văn xuôi sang hành động cụ thể…")
-            before = sum(1 for c in cases if c.needs_mapping)
-            stats = map_testcases(cases, ui_map, cfg.web_url, api_paths)
-            message = f"Map được {stats.mapped}/{before} case từ tài liệu"
-            notify("map", message)
-            log(message)
-            if not api_paths:
-                note = ("  (không có OpenAPI spec nên không map HTTP — đường dẫn "
-                        "trong tài liệu chưa chắc là đường dẫn API thật)")
-                notify("map", note.strip())
-                log(note)
-            for reason in stats.reasons[:8]:
-                log(f"    · {reason}")
-            if len(stats.reasons) > 8:
-                log(f"    · … và {len(stats.reasons) - 8} câu nữa")
-
+        cases = list(deepcopy(generation_result.cases))
+        # Keep unresolved generated candidates in Excel/results for diagnosis,
+        # while the unchanged runner's manual gate prevents any execution.
+        pending_ids = {case.id for case in generation_result.generated_cases} - {
+            case.id for case in generation_result.accepted_generated_cases}
+        for case in cases:
+            if case.id in pending_ids:
+                case.execution = "manual"
+        validation = validate.validate_batch(cases, source_data.get("requirements", []),
+                                             sources=meta.get("coverage_sources"))
         result.total_cases = len(cases)
         result.generated_report = validation
 
-        testcases_path = out_dir / "testcases.yaml"
-        generate.write_cases(cases, testcases_path, meta)
+        testcases_path = tracker.dir("generate") / "testcases.yaml"
+        generate.write_cases(cases, testcases_path, {**meta, "generation_profile": cfg.generation_profile, "case_scopes": result.case_scopes})
         result.testcases_path = testcases_path
+        tracker.output("generate", testcases_path)
 
-        xlsx_path = out_dir / "testcases.xlsx"
-        render.render(cases, xlsx_path, created_by=cfg.created_by)
-        result.xlsx_path = xlsx_path
 
         message = f"Sinh được {len(cases)} testcase"
         manual = sum(1 for c in cases if c.execution == "manual")
@@ -392,16 +564,28 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
                     shown = ", ".join(missing)
                 log(f"  chưa có test · {kind}: {shown}")
 
-        # ── Chặng 3 + 4 ────────────────────────────────────────────────────
-        if cfg.skip_run:
-            notify("run", "Bỏ qua chạy test (skip_run = true)")
-            log("Bỏ qua chạy test theo cấu hình")
-            result.ok = True
-            return result
+        notify("render", "Xuất testcase ra Excel 14 cột…")
+        xlsx_path = tracker.dir("render") / "testcases.xlsx"
+        render.render(cases, xlsx_path, created_by=cfg.created_by)
+        result.xlsx_path = xlsx_path
+        tracker.output("render", xlsx_path)
 
-        if not cfg.base_url and not cfg.web_url:
-            notify("run", "Không có `base_url` / `web_url` — chỉ sinh testcase, không chạy")
-            log("Không có địa chỉ môi trường nên không chạy test")
+        # ── Chặng 3 + 4 ────────────────────────────────────────────────────
+        if (not validation.ok or generation_result.status in {
+                GenerationStatus.INVALID_TESTCASES, GenerationStatus.FAILED}):
+            result.error = f"Generation {result.generation_status}: xem generation.json"
+            log(f"LỖI: {result.error}")
+            notify("error", result.error)
+            tracker.fail(result.error, "Xem 3-generate/generation.json → issues, agent_history")
+            return result
+        if cfg.skip_run or (not cfg.base_url and not cfg.web_url):
+            reason = ("Bỏ qua chạy test (skip_run = true)" if cfg.skip_run
+                      else "Không có `base_url` / `web_url` — chỉ sinh testcase, không chạy")
+            notify("run", reason)
+            log(reason)
+            for stage in ("execute", "report"):
+                tracker.skip(stage, reason)
+            tracker.finish()
             result.ok = True
             return result
 
@@ -446,19 +630,24 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
         if needs_browser and cfg.web_url:
             notify("run", "Mở trình duyệt…")
             try:
-                from .execute.browser import BrowserSession
+                from qctool.execute.browser import BrowserSession
 
                 browser = BrowserSession(
                     cfg.web_url, headless=cfg.headless,
                     timeout_ms=cfg.timeout_seconds * 1000,
                     evidence_dir=(None if cfg.ui_evidence == "off"
-                                  else out_dir / "evidence"),
+                                  else tracker.dir("execute") / "evidence"),
                     authenticated=bool(token or cfg.username),
                     storage_state=state_path if state_path.is_file() else None,
                     viewport={"width": cfg.viewport[0], "height": cfg.viewport[1]},
                     trace=cfg.ui_trace,
                     axe=cfg.ui_axe,
                 )
+                browser.trace_sensitive = cfg.ui_trace and cfg.ui_trace_sensitive
+                browser.evidence_always = cfg.ui_evidence == "always"
+                if browser.trace_sensitive:
+                    notify("ui", "⚠ trace_sensitive: trace chứa MẬT KHẨU/TOKEN thật — chỉ xem trên "
+                                 "máy này, xoá evidence/ sau khi xem, không chia sẻ/commit")
                 browser.start()
                 if cfg.auth_mode == "browser" and cfg.username and not state_path.is_file():
                     # Đăng nhập hỏng KHÔNG làm mất trình duyệt: case UI không cần
@@ -468,8 +657,10 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
                         notify("run", browser.login(cfg.username, cfg.password))
                     except Exception as exc:            # noqa: BLE001
                         browser.authenticated = False
-                        log(f"  ⚠ Đăng nhập không thành công: {type(exc).__name__}: {exc}")
-                        notify("run", "Đăng nhập không thành công — vẫn chạy tiếp; "
+                        from qctool.execute.browser import LoginError
+                        reason = str(exc) if isinstance(exc, LoginError) else type(exc).__name__
+                        log(f"  ⚠ Đăng nhập không thành công: {reason}")
+                        notify("run", f"Đăng nhập không thành công ({reason}) — vẫn chạy tiếp; "
                                       "case cần xác thực sẽ báo bị chặn")
             except Exception as exc:                    # noqa: BLE001
                 log(f"  ⚠ Không mở được trình duyệt: {type(exc).__name__}: {exc}")
@@ -483,7 +674,11 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
             if cfg.soft_assert:
                 extra.append("kiểm tra mềm")
             if cfg.ui_evidence != "off":
-                extra.append("lưu ảnh bằng chứng")
+                extra.append("ảnh mọi case (ô mật khẩu bị che)" if cfg.ui_evidence == "always"
+                             else "ảnh khi case lỗi")
+            if cfg.ui_trace:
+                extra.append("trace Playwright" + (" cả case có mật khẩu" if cfg.ui_trace_sensitive
+                                                   else " (trừ case điền mật khẩu/bắt request)"))
             if extra:
                 notify("ui", "UI/UX: " + ", ".join(extra))
 
@@ -492,6 +687,7 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
             run_result = execute.run_cases(
                 cases, session, environment=cfg.web_url or target,
                 browser=browser, retry=cfg.ui_retry, soft_assert=cfg.soft_assert,
+                fixture_store=cfg.fixture_store,
             )
         finally:
             if browser is not None:
@@ -501,13 +697,22 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
 
         # ── Chặng 4 ────────────────────────────────────────────────────────
         notify("report", "Xuất báo cáo…")
-        run_dir = out_dir / "runs" / run_result.started_at.replace("-", "").replace(":", "").replace(" ", "-")
+        run_dir = tracker.dir("execute")
         report.write_json(run_result, run_dir / "results.json")
         report.write_csv(run_result, run_dir / "results.csv")
         report.write_junit(run_result, run_dir / "junit.xml")
-        report.render_markdown(run_result, run_dir / "report.md")
+        report_path = tracker.dir("report") / "report.md"
+        report.render_markdown(run_result, report_path)
+        if cfg.write_mode:
+            report_path.write_text("> ⚠ **Chế độ GHI** — lượt chạy này đã tạo/sửa/xoá dữ liệu thật trên môi trường "
+                                   "được test.\n\n" + report_path.read_text(encoding="utf-8"), encoding="utf-8")
         result.run_dir = run_dir
-        result.report_path = run_dir / "report.md"
+        result.report_path = report_path
+        for name in ("results.json", "results.csv", "junit.xml"):
+            tracker.output("execute", run_dir / name)
+        if (run_dir / "evidence").is_dir():
+            tracker.output("execute", run_dir / "evidence")
+        tracker.output("report", report_path)
 
         # Ghi kết quả ngược vào chính file testcase — bản ghi hai pha
         filled = render.fill_results(xlsx_path, run_result, executed_by=cfg.created_by)
@@ -545,14 +750,17 @@ def run_pipeline(cfg: PipelineConfig, on_progress: ProgressFn | None = None) -> 
             rate += " · " + " · ".join(parts)
         notify("done", rate)
         log(rate)
+        tracker.finish()
         result.ok = True
         return result
 
     except Exception as exc:                       # noqa: BLE001 — báo cho người dùng, không sập
-        result.error = f"{type(exc).__name__}: {exc}"
+        result.error = safe(f"{type(exc).__name__}: {exc}")
         result.log.append(f"LỖI: {result.error}")
-        result.log.append(traceback.format_exc())
+        result.log.append(safe(traceback.format_exc()))
         notify("error", result.error)
+        if tracker:
+            tracker.fail(result.error, safe(traceback.format_exc()))
         return result
 
 
@@ -563,7 +771,7 @@ def _keep_better_map(fresh, old_path: Path):
     Crawl có thể ra ít element vì lý do tạm thời — ghi đè khi đó làm mất dữ liệu
     dò được hôm trước, và lần sau mọi case UI lại thành "chưa map".
     """
-    from .ui.crawl import UIMap
+    from qctool.ui.crawl import UIMap
 
     if not old_path.is_file():
         return fresh
@@ -577,7 +785,7 @@ def _keep_better_map(fresh, old_path: Path):
 
 
 def _load_map(path: Path):
-    from .ui.crawl import UIMap
+    from qctool.ui.crawl import UIMap
 
     return UIMap.load(path)
 

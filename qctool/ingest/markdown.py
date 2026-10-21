@@ -12,8 +12,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ..model import ApiSpec, Requirement, SourceRef
-from . import ids
+from qctool.core.model import ApiSpec, Requirement, SourceRef
+from qctool.ingest import ids
 
 # ── Nhận dạng cấu trúc ───────────────────────────────────────────────────────
 H_US = re.compile(r"^###\s+(US-\d{3})\s+—\s+(.+?)\s*$")

@@ -17,7 +17,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from ..testcase import TestCase
+from qctool.core.testcase import TestCase
 
 # (tên cột, bề rộng, có phải cột runtime không)
 COLUMNS = [
@@ -68,6 +68,18 @@ def render(cases: list[TestCase], out_path: Path, *, created_by: str = "qc-tool"
         row += 1
 
     _decorate(ws, last_row=row - 1)
+    agent_cases = [c for c in cases if c.generation_status in {'ready', 'needs_review', 'manual', 'blocked_env'}]
+    if agent_cases:
+        review = wb.create_sheet('Review')
+        review.append(['Test Case ID', 'Generation status', 'Review reasons', 'Decision', 'Reviewer note'])
+        decision = DataValidation(type='list', formula1='"accepted,rejected"', allow_blank=True)
+        review.add_data_validation(decision)
+        for case in agent_cases:
+            review.append([case.id, case.generation_status, '; '.join(case.review_reasons), None, None])
+        decision.add(f'D2:D{len(agent_cases)+1}')
+        review.freeze_panes = 'A2'
+        for column, width in {'A':24,'B':20,'C':75,'D':18,'E':65}.items():
+            review.column_dimensions[column].width = width
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
 
@@ -116,6 +128,8 @@ def _objective_text(case: TestCase) -> str:
     thông tin người đọc cần biết trước tiên. Đánh dấu ngay đầu cột mô tả thay vì
     thêm cột mới — cấu trúc template là hợp đồng với người dùng, không tự đổi.
     """
+    if case.generation_status == 'needs_review':
+        return f"[Needs review] {case.objective}\n" + '; '.join(case.review_reasons)
     if case.execution == "manual":
         return f"[Thủ công] {case.objective}"
     return case.objective
@@ -170,3 +184,16 @@ def _decorate(ws, last_row: int) -> None:
     ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}{max(end, 2000)}"
     ws.sheet_view.showGridLines = False
     ws.sheet_properties.tabColor = "1F4E79"
+
+
+def read_review_labels(path):
+    """Read QC decisions without changing runtime status or expected outcomes."""
+    from openpyxl import load_workbook
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        if 'Review' not in wb.sheetnames:
+            return {}
+        return {r[0]: {'review_decision': r[3]} for r in wb['Review'].iter_rows(min_row=2, values_only=True)
+                if r[0] and r[3] in {'accepted', 'rejected'}}
+    finally:
+        wb.close()

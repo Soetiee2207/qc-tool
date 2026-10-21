@@ -5,8 +5,14 @@ lang: vi
 status: living
 owner: "@binhhm"
 created: 2026-09-18
-updated: 2026-09-21
+updated: 2026-10-10
 changelog:
+  - 2026-10-10 | claude | Trace SalonHub 43/83; thêm mode write; việc đo lại
+  - 2026-10-10 | claude | projects/<project>/<feature>, artifacts theo bước, run.json
+  - 2026-10-10 | claude | Dọn repo: projects/, CLI ngắn; thêm việc chạy lại LLM thật
+  - 2026-10-09 | claude | V2: mapper retire, đã commit agent-redesign
+  - 2026-10-09 | claude | Customer 7 intent: 5/7 Pass, 0 Fail; thêm việc tiếp theo
+  - 2026-10-09 | codex | Agent redesign: gate/citation/dry-run, live acceptance chưa chốt
   - 2026-09-21 | manual | M06: tầng Playwright đầy đủ — 12 verb UI/UX, context mỗi case, retry+flake, evidence+trace, axe. 172 test
   - 2026-09-21 | manual | thêm `ui.session`: test được login/redirect/guard; khử 63 bước đệm + 19 case bịa. 111 test
   - 2026-09-21 | manual | theo phản hồi user: đọc cả cây tài liệu, parser luồng nghiệp vụ, case thủ công. 25 → 92 case
@@ -107,7 +113,7 @@ changelog:
 | [x] | **Bảng map ID** tài liệu ↔ canonical: `F-01` → `FR-login-sso-001`, `NFR-SEC-01` → `NFR-login-sso-001`. Giữ ID gốc trong `source_ids[]` | M01 | findings P10 |
 | [x] | Vocabulary đóng cho `action:` — 20 verb + schema tham số, validator chặn verb lạ | M02, M04 | brainstorm §5 Q1 |
 | [ ] | Golden fixture: manifest trỏ tới 6 file login-sso + hash, để regression mỗi lần đổi prompt | M01, M02 | brainstorm §10 |
-| [ ] | Map 17 case `needs_mapping` của login-sso sang hành động cụ thể — cần UI map hoặc OpenAPI thật | M06, M04 | kết quả generate |
+| [ ] | ~~Map 17 case `needs_mapping` login-sso bằng mapper~~ — mapper đã retire; chạy lại login-sso bằng agent V2 | M06, M04 | kết quả generate |
 | [ ] | Thử nghiệm: đo xem deterministic sinh được bao nhiêu % case so với LLM, để biết tỉ lệ thật | M02 | brainstorm §3.2 |
 | [x] | Chạy thử trên môi trường thật khi có OpenAPI spec + xác thực (D2) — **xong 09-21**: 8/8 case API đạt trên portal thật | M04 | D2 |
 
@@ -123,3 +129,46 @@ changelog:
 | W38-11 | Dựng template OpenAPI + script kiểm tra (3 operation thật của login-sso) | 09-18 | `templates/api/` |
 | W38-12 | Dựng template báo cáo ngôn ngữ đơn giản + ví dụ đã điền | 09-18 | `templates/report/` |
 | W38-15 | **M01 xong phần parser**: tài liệu login-sso → `requirements.yaml`, 44 requirement, 3 tính chất đã verify | 09-18 | `qctool/ingest/`, `artifacts/login-sso/requirements.yaml` |
+
+## Agent redesign — 2026-10-09
+
+Nhánh `agent-redesign`: prose authoring bằng tool calling, giữ native runner và
+14 cột XLSX. Không đánh dấu milestone Done chỉ vì có code. Xem
+[Finding agent redesign](../findings/agent-redesign.md).
+
+Cần xác nhận: live testcase ready chạy thật; độ đầy đủ ngữ nghĩa của action/oracle
+qua QC review; false-fail/semantic benchmark có labels. Không thay business expectation
+theo observation để tăng runnable count.
+
+Đã chạy đủ 7 intent customer (lượt `final4`): **5/7 executable, 5 Pass, 0 Fail**.
+Chi tiết, lỗi đã sửa và số liệu từng lượt: finding mục "Chạy đủ 7 intent customer".
+
+| # | Việc | Nguồn |
+|---|---|---|
+| [ ] | Profile: agent lặp locator không duy nhất tới hết budget — hướng agent dùng `role`+name khi text trùng; không nới uniqueness | finding agent-redesign |
+| [ ] | Đo tỉ lệ qua nhiều lượt (≥3) thay vì một lượt; báo median + dao động | finding agent-redesign |
+| [ ] | Timeout DeepSeek 2/37 call: cân nhắc timeout dài hơn hoặc giảm prompt mỗi turn | finding agent-redesign |
+| [ ] | QC gắn nhãn sheet Review cho case `needs_review` → đo tỉ lệ chấp nhận | plan Phase 3 |
+| [ ] | Chạy agent trên `order_product` (cần mutation policy đã review) và `smoke` | plan Phase 4 |
+| [x] | Commit nhánh `agent-redesign` — `5e19097 QC-TOOL V2` | — |
+
+## Dọn repo — 2026-10-10
+
+| Việc | Nguồn |
+|---|---|
+| [x] Xoá `materials/`, `over_view.md`, `qc.sh`, script benchmark/diagnose, module chết, `samples/{acceptance,evaluation}` | yêu cầu user |
+| [x] `qctool/core/`, `qctool/data/`; `llm_provider`/`exploration_actions` vào `agent/` | yêu cầu user |
+| [x] `projects/<tên>/qctool.yaml` dạng gọn + `account:` thay `qc_config/`; sửa bug `evidence: off` bị đọc thành on-fail | yêu cầu user |
+| [x] CLI `init/check/run/trace/ui/demo/step`; `--only <AC>` | yêu cầu user |
+| [ ] Chạy lại `qctool run salonhub --customer_e2e_test_1` với DeepSeek thật để xác nhận kết quả tương đương 9/11 — chưa chạy sau khi dọn | verification |
+| [ ] `tests/fixtures/smoke/` còn có cặp `SRS.md`/`srs.md` + `URD.md`/`urd.md` trùng tên khác hoa — chỉ test dùng, xem gộp | dọn repo |
+| [x] Bỏ `samples/` + `artifacts/` gốc → `projects/<project>/<feature>/` (tài liệu + config + artifacts) | yêu cầu user |
+| [x] Artifacts theo bước `1-ingest … 6-report`, `stage.log`/`error.log`, `run.json`, `events.jsonl` | yêu cầu user |
+| [x] `qctool run <project>` chạy mọi feature; `--<feature>` chỉ một feature | yêu cầu user |
+| [ ] UI web: đọc `run.json`/`events.jsonl` để hiện tiến trình từng bước + link `error.log` (chưa làm, mới có dữ liệu) | yêu cầu user |
+| [ ] Lưu lịch sử nhiều lượt chạy (hiện mỗi lượt ghi đè, chỉ giữ tri thức + phiên đăng nhập) | dọn repo |
+| [x] Trace lượt đầu SalonHub (43/83) → `docs/findings/salonhub-first-run.md`; sửa socket/observe-only/test_values/safe_controls/capture timeout | yêu cầu user |
+| [x] Chế độ ghi `mode: write` / `--write` (xác nhận, write.deny, dry-run dừng trước ghi) | yêu cầu user |
+| [ ] Đo lại `qctool run salonhub` sau các sửa — mục tiêu ≥ 70/72 AC không-ghi thành case tự động | verification |
+| [ ] Chế độ ghi: dữ liệu duy nhất (email đăng ký mới mỗi lượt) và dọn dữ liệu sau khi chạy | mode write |
+

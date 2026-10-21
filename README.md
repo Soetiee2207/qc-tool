@@ -8,7 +8,8 @@ cái đó bị bỏ qua và tool nói rõ hệ quả.
 
 ```bash
 uv sync && uv run playwright install chromium
-uv run qctool serve            # giao diện web — bấm là chạy
+uv run qctool demo             # thử ngay trên API giả
+uv run qctool run salonhub     # chạy mọi feature của projects/salonhub/
 ```
 
 ## Bốn chặng
@@ -34,103 +35,154 @@ OpenAPI  ─┼─► requirements.yaml ─► testcases.yaml ─► runner ─�
 ra một lần, rồi chạy điền kết quả vào chính file đó (4 cột runtime). QC không phải đối
 chiếu hai file.
 
-**LLM không bao giờ sinh ra thứ không chạy được.** LLM chỉ làm hai việc — prose → mô hình
-test, và prose → step theo vocabulary đóng. Hiện chưa có track LLM; mọi case đều
-`generated_by: engine`.
+**Agent authoring:** LLM dùng tools để quan sát ARIA, viết testcase có source quote,
+nhận lỗi và sửa trong cùng session. Gate giữ schema/safety/citation; dry-run chỉ kiểm
+action/locator, không cho model đọc actual assertion để sửa expected theo sản phẩm.
+Runner mới quyết định Pass/Fail. Weak oracle là `needs_review`, không generation success.
+
+```bash
+qctool init shop/login && qctool check shop
+qctool run shop --login --only 001-1   # một feature, một AC — giới hạn chi phí
+```
+
+Đặt tài liệu vào `projects/shop/login/`, điền web/api trong `projects/shop/project.yaml` và `QCTOOL_LLM_*` trong `.env` trước. Xem [hướng dẫn](HUONG-DAN.md), [tài liệu phát triển](DEVELOPMENT.md) và [kết quả kiểm chứng giới hạn](docs/findings/agent-redesign.md).
+Không còn patch engine/legacy execution flag. API-only generation vẫn deterministic.
+
+### V2 — kết quả kiểm chứng (2026-10-09)
+
+Trên SalonHub thật (role Customer, DeepSeek, Chromium):
+
+| Bộ tài liệu | Executable | Pass | Fail |
+|---|---|---|---|
+| customer (7 AC) | 5/7 | 5 | 0 |
+| customer_e2e_test_1 (11 AC: đăng nhập, mua hàng, đặt lịch — read-only) | 9/11 | 9 | 0 |
+
+_Số liệu lịch sử, đo trên bộ tài liệu cũ; từ 2026-10-10 thay bằng 11 feature trong `projects/salonhub/`, chưa đo lại._
+
+Trước V2: 3–4/7 với ~330k token. Case không chạy được giữ `Not Executed` kèm lý do,
+không bao giờ tính là Pass. Chi tiết, giới hạn và lỗi đã sửa:
+[docs/findings/agent-redesign.md](docs/findings/agent-redesign.md).
+
+```bash
+qctool run salonhub --auth     # timeout/thinking của LLM đặt trong .env
+```
+
+**Xem bằng chứng:** `<feature>/artifacts/3-generate/generation.json` (agent gọi tool nào),
+`5-execute/results.json` + `6-report/report.md` (từng bước Playwright), `5-execute/evidence/*.trace.zip`
+(`uv run playwright show-trace <file>`). Case đăng nhập không có trace — cố ý, vì trace
+sẽ chứa mật khẩu thật.
+
+**Giới hạn hiện tại:** chưa test bước ghi dữ liệu (đặt hàng, xác nhận lịch) — cần mutation
+policy; DeepSeek đôi khi timeout; kết quả từng case dao động giữa các lượt.
+
 
 ## Cài đặt
 
-Cần **Python ≥ 3.12** và [uv](https://docs.astral.sh/uv/). Playwright + Chromium chỉ cần
-khi chạy test UI/UX.
+Cần **Python ≥ 3.12** và [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync
-uv run playwright install chromium    # chỉ cần cho test UI/UX
-cp .env.example .env                  # rồi điền tài khoản, token (không commit .env)
+uv run playwright install chromium    # cho test UI/UX
+cp .env.example .env                  # rồi điền tài khoản + LLM key (không commit .env)
+source .venv/bin/activate             # để gõ `qctool …` thay vì `uv run qctool …`
 ```
 
 ## Dùng
 
-### 1. Cả pipeline bằng một lệnh
-
 ```bash
-uv run qctool all --config qctool.yaml
+qctool demo                            # thử ngay trên API giả — không cần hệ thống thật
+qctool init salonhub/loyalty           # tạo feature mới
+qctool check salonhub                  # kiểm tra mọi feature, không gọi model/browser/API
+qctool run salonhub                    # chạy MỌI feature của project
+qctool run salonhub --auth             # chỉ chạy feature auth
+qctool trace salonhub TC_AUTH_001      # xem lại từng bước của một case
+qctool ui                              # giao diện web (http://127.0.0.1:8080)
+qctool step …                          # từng chặng: ingest | generate | exec | crawl
 ```
 
-`qctool.example.yaml` là mẫu đầy đủ, chú thích từng khoá. Không cần file cấu hình thì
-truyền thẳng tham số:
+**Project = một sản phẩm, feature = một phần của nó.** Tài liệu, cấu hình và kết quả của
+feature nằm chung một thư mục:
 
-```bash
-uv run qctool all --openapi ./openapi.yaml --feature login-sso --module AUTH \
-                  --base-url https://dev.example.com --token "$TOKEN"
+```
+projects/salonhub/
+  project.yaml              # chung: web, api, llm, account.role, timeout, ui
+  auth/
+    urd.md srs.md openapi.yaml
+    qctool.yaml             # riêng feature: account.login_for, ghi đè
+    artifacts/              # 1-ingest 2-crawl 3-generate 4-render 5-execute 6-report + run.json
 ```
 
-Bốn thứ cần đưa, đưa được cái nào hay cái đó:
+Mọi khoá khác có mặc định (tài liệu/OpenAPI cạnh `qctool.yaml`, feature/module = tên thư
+mục, budget agent 14 lượt/90k token/480s mỗi AC). Bảng mặc định, cờ `run` (`--only`,
+`--no-llm`, `--skip-run`, `--show-browser`, `--trace-sensitive`) và xử lý sự cố:
+[HUONG-DAN.md](HUONG-DAN.md).
 
-| Đầu vào | Flag | Có thì được gì |
-|---|---|---|
-| Tài liệu (`urd.md`, `srs.md`) | `--docs-dir` | Case từ acceptance criteria + NFR |
-| OpenAPI spec | `--openapi` | Case kỹ thuật: biên, mã lỗi, ma trận xác thực |
-| Link webapp | `--web-url` | Mở Chromium thật: dò element, chạy case UI, chụp bằng chứng |
-| Tài khoản / token | `--username` `--password` `--token` | Case cần xác thực chạy được |
+Lệnh `run` dùng chung `run_pipeline()` với web UI: ingest, crawl (đăng nhập +
+`app-model.yaml`), generation bằng agent, Chromium/API execution và report. Terminal hiển
+thị tiến trình `[ingest]`, `[crawl]`, `[generate]`, `[agent]`, `[run]`, `[report]`; tiến
+trình được redact và ghi vào `pipeline.log`. `summary.json` chứa số liệu, `generation.json`
+giữ lịch sử agent. Case manual/unresolved vẫn nằm trong testcase YAML/XLSX và report,
+không bao giờ thành Pass.
 
-### 2. Giao diện web
+**Profile duy nhất: `agent`.** Mỗi acceptance criterion là một intent; agent viết một
+testcase cho nó trong một hội thoại có feedback. Giới hạn chi phí: `--only`,
+`generation.max_intents`, `generation.budget`.
 
-```bash
-uv run qctool serve            # http://127.0.0.1:8080
-```
+**LLM chỉ bật tường minh** (`llm: true` hoặc `--llm`). Có API key không tự bật model.
+Key/model/base URL chỉ ở `.env` (`QCTOOL_LLM_*`).
 
-Bí mật nhập trên giao diện **không được lưu lại**. CLI, web UI và CI dùng chung một hàm
-`qctool/pipeline.py::run_pipeline()` — không có logic nào chỉ tồn tại trong giao diện.
+**`auth.mode: manual`** là mặc định khi không có `account`; credential trong env không
+tự đăng nhập.
 
-### 3. Từng chặng, khi cần kiểm soát chi tiết
+**Provisioning mặc định OFF.** `provisioning.enabled: true` chỉ bật gate; engine vẫn đòi
+exact operation, reviewed rule, allowed test environment/origin và verification phù hợp.
+Credentials/facts khai báo không tự chứng minh trạng thái backend.
 
-```bash
-uv run qctool ingest   <thư-mục-tài-liệu> --feature login-sso
-uv run qctool generate --requirements artifacts/login-sso/requirements.yaml \
-                       --openapi ./openapi.yaml \
-                       --xlsx artifacts/login-sso/testcases.xlsx
-uv run qctool run      artifacts/login-sso/testcases.yaml \
-                       --base-url https://dev.example.com --token "$TOKEN" \
-                       --xlsx artifacts/login-sso/testcases.xlsx
-uv run qctool crawl    https://dev.example.com --out artifacts/login-sso/ui-map.yaml
-```
+Preparation AVAILABLE được dùng lại trong cùng run chỉ khi toàn bộ data/trust identity
+khớp (fixture, aliases, facts, assurance, credentials/config, rules, policy, contract,
+backend, environment). Cache runtime tối đa 128 entries, độ tươi 300 giây, không chia sẻ
+giữa runs.
 
-### 4. Thử toàn bộ, không cần hệ thống thật
+`check` chỉ kiểm tra config, docs ingest được, OpenAPI đọc được và provider configuration
+nếu bật LLM. Không gọi model/browser/API, không ghi artifacts.
 
-API giả trong `tests/mock_server.py` có **4 bug API + 4 bug giao diện cài sẵn**, nên một
-lượt chạy thấy đủ cả Đạt lẫn Lỗi:
+#### Exit codes của `run`
 
-```bash
-uv run python -m tests.mock_server --port 8099 &
-uv run qctool all --openapi samples/openapi/task-manager-sample.yaml \
-                  --feature sample --module SAMPLE \
-                  --base-url http://127.0.0.1:8099/api/v1 --token fake
-```
+| Code | Ý nghĩa |
+| --- | --- |
+| 0 | Generation thành công và toàn bộ testcase đã chạy Pass |
+| 1 | Có execution Fail; generation status vẫn hiển thị riêng |
+| 2 | Config/preflight/pipeline/artifact error |
+| 3 | Generation/coverage incomplete hoặc unassessable, không có execution Fail |
+| 4 | Generation hoàn tất nhưng execution bị Blocked/chưa chạy/skip |
 
-Kết quả mong đợi: `54 test · 29 đạt · 15 lỗi · 10 bị chặn`. Hoặc gọn hơn bằng script:
+`generation_success` và `pipeline_ok` là hai trường riêng. Coverage không thay cho runtime
+Pass; testcase chưa chạy không có Pass. Flaky Pass vẫn có cờ/count riêng.
 
-```bash
-./qc.sh --config qc-demo.yaml
-```
-
-`./qc.sh` là lớp bọc quanh CLI cho người dùng cuối (`--docs --oas --link --acc`), có sẵn
-ba cách đưa mật khẩu (gõ thẳng / lấy từ `.env` / hỏi tại chỗ). Chi tiết: `HUONG-DAN.md`.
+`qctool demo` chạy trên `tests/mock_server.py` (4 bug API + 4 bug giao diện cài sẵn).
+Kết quả mong đợi: `54 test · 29 đạt · 15 lỗi · 10 bị chặn`.
 
 ## Kết quả
 
-Mỗi lượt chạy tạo `artifacts/<feature>/`:
+Mỗi lượt chạy ghi vào `<feature>/artifacts/`, mỗi bước một thư mục:
 
-| File | Đọc để biết |
+| Đường dẫn | Đọc để biết |
 |---|---|
-| `runs/<giờ>/report.md` | **Đọc cái này** — tóm tắt, theo module, danh sách lỗi, chưa chạy được, bằng chứng |
-| `testcases.xlsx` | Testcase 14 cột, **đã điền kết quả vào sẵn** |
-| `runs/<giờ>/junit.xml` | Đưa vào CI |
-| `runs/<giờ>/results.csv` | Mở Excel, tự làm pivot |
-| `evidence/` | Ảnh chụp + trace của test UI, đặt tên theo mã test |
-| `ui-map.yaml` | Webapp có những nút/element gì |
+| `run.json` | Bước nào xong / đang chạy / bỏ qua / **lỗi**; file sinh ra; lỗi trỏ tới `error.log` |
+| `events.jsonl` | Dòng thời gian `{t, stage, level, message}` — UI đọc trực tiếp |
+| `1-ingest/requirements.yaml` | Requirement đọc được từ tài liệu |
+| `2-crawl/app-model.yaml` | Trang agent đã thấy + macro đăng nhập (không chứa mật khẩu) |
+| `3-generate/generation.json`, `testcases.yaml` | Agent gọi tool nào, lỗi gate/dry-run, token · bước của từng case |
+| `4-render/testcases.xlsx` | Testcase 14 cột, **đã điền kết quả vào sẵn** |
+| `5-execute/` | `results.json/csv`, `junit.xml`, `evidence/` (ảnh + trace theo mã test) |
+| `6-report/report.md` | **Báo cáo cho người đọc** |
+| `<bước>/stage.log`, `<bước>/error.log` | Log riêng của bước · traceback khi bước đó hỏng |
 
-`artifacts/` là output sinh lại được — không sửa tay, không commit.
+`artifacts/` là output sinh lại được — không sửa tay, không commit (gitignored).
+
+Mỗi lượt `qctool run <project>` còn ghi `projects/<project>/summary/<YYYY-MM-DD_HH-MM-SS>/summary.md`:
+số liệu tổng, theo feature, danh sách Fail/Bị chặn và **toàn bộ testcase**, kèm bản sao report/evidence của
+lượt đó (artifacts thì bị ghi đè). `summary/README.md` liệt kê mọi lượt chạy.
 
 ## Bốn trạng thái, đừng lẫn
 
@@ -191,7 +243,7 @@ ui:
 Xem lại một case hỏng:
 
 ```bash
-uv run playwright show-trace artifacts/<feature>/evidence/TC_AUTH_001.trace.zip
+qctool trace salonhub TC_AUTH_001
 ```
 
 `auth.mode: manual` nghĩa là **không tự đăng nhập**, kể cả khi `.env` có tài khoản. Chỉ
@@ -201,22 +253,26 @@ uv run playwright show-trace artifacts/<feature>/evidence/TC_AUTH_001.trace.zip
 
 | Đường dẫn | Là gì |
 |---|---|
-| `qctool/` | Mã nguồn — `ingest/` `generate/` `execute/` `ui/` `report/` `render/` `web/` `pipeline.py` |
-| `templates/testcase/` | Template 14 cột — tool ghi ra, sinh từ script |
-| `templates/api/` | Template OpenAPI — người điền, tool đọc vào để ground |
-| `templates/report/` | Template báo cáo |
-| `samples/` | Dữ liệu **hư cấu** để dev/test — không phải hệ thống thật |
-| `tests/mock_server.py` | API + trang HTML giả, có bug cài sẵn |
+| `qctool/cli.py`, `cli_run.py` | Lệnh `qctool …` |
+| `qctool/config.py` | `.env` + mở rộng `qctool.yaml` dạng gọn (mặc định, `account`) |
+| `qctool/pipeline.py` | `run_pipeline()` — đường đi chung của CLI, web UI, CI |
+| `qctool/core/` | Testcase IR (`testcase.py`, ACTION_SPECS), model, validate, coverage, executability |
+| `qctool/ingest/` `generate/` `execute/` `render/` `report/` | Bốn chặng |
+| `qctool/agent/` | Authoring agent: loop, tools, gate, safety, LLM provider |
+| `qctool/data/` | Test data: fixtures, acquisition, verification, provisioning, capture |
+| `qctool/ui/` `web/` | Crawl webapp · giao diện web |
+| `projects/<project>/<feature>/` | Tài liệu đầu vào + `qctool.yaml` + `artifacts/` của từng feature |
+| `templates/` | Template testcase 14 cột (sinh từ script) · OpenAPI · báo cáo |
+| `tests/` | Test; `mock_server.py` = API + trang HTML giả có bug cài sẵn |
 | `docs/` | Brainstorm, findings, tracking |
-| `scripts/` | Sinh template, validate OpenAPI |
-| `artifacts/` | Output mỗi lần chạy — gitignored |
-| `docs/tracking/milestones.md` | Trạng thái M01–M07 |
-| `HUONG-DAN.md` | Hướng dẫn cho người dùng cuối |
+| `scripts/` | Sinh template testcase, validate OpenAPI |
+| `qctool/artifacts.py` | Bố cục artifacts theo bước + `run.json`/`events.jsonl` |
+| `qctool/summary.py` | Báo cáo tổng hợp mỗi lượt chạy project → `projects/<p>/summary/<ngày_giờ>/` |
 
 Nguyên tắc: **OpenAPI là nguồn ground cho API.** Endpoint/field không có trong OpenAPI hoặc
 tài liệu thì tool không được bịa — thà bỏ sót còn hơn sinh case gọi endpoint không tồn tại.
-Requirement không nêu endpoint thì case sinh ra ở dạng `perform.unmapped` và bị đánh dấu
-*chưa map*, không được đoán ra selector hay URL.
+Case prose mà agent không viết được qua gate + dry-run thì giữ dạng `perform.unmapped`,
+đánh dấu *chưa map* / thủ công — không được đoán ra selector hay URL.
 
 ## Phát triển
 
@@ -239,6 +295,7 @@ luật sinh ra để chặn chúng tái diễn.
 | UI map nhiều trang | Dò được nhiều trang, chưa bấm sâu vào menu |
 | Chạy song song | Chạy lần lượt, bộ test lớn sẽ chậm |
 | Upload file / iframe / dialog hệ thống | Chưa có verb cho nhóm này |
-| Track LLM | Mọi case hiện đều `generated_by: engine` |
+| Bước ghi dữ liệu (đặt hàng, xác nhận lịch…) | Agent không dry-run được thao tác ghi → case giữ thủ công; cần mutation policy đã review |
+| LLM ổn định | DeepSeek có lúc timeout/hết budget → vài case `Not Executed`; kết quả từng case dao động giữa các lượt |
 
 Xem `docs/tracking/todo.md` và `docs/tracking/milestones.md` để biết đang làm gì tiếp.

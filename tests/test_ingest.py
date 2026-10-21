@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from qctool.ingest import ids  # noqa: E402
 from qctool.ingest.markdown import _cells, _tables, parse_srs_nfr, parse_urd  # noqa: E402
-from qctool.model import Requirement  # noqa: E402
+from qctool.core.model import Requirement  # noqa: E402
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -130,7 +130,7 @@ def test_hash_ignores_source_line_number():
     """Chèn một dòng ở đầu file không được làm mọi requirement đổi hash —
     nếu không, sửa một chỗ sẽ vô hiệu hoá toàn bộ testcase đã review.
     """
-    from qctool.model import SourceRef
+    from qctool.core.model import SourceRef
 
     a = _req(statement="abc", source=SourceRef(file="srs.md", line=10, quote="q"))
     b = _req(statement="abc", source=SourceRef(file="srs.md", line=999, quote="q"))
@@ -139,7 +139,7 @@ def test_hash_ignores_source_line_number():
 
 def test_hash_covers_api_spec():
     """Đổi đặc tả API là đổi ngữ nghĩa — hash phải đổi, để testcase sinh lại."""
-    from qctool.model import ApiSpec
+    from qctool.core.model import ApiSpec
 
     plain = _req()
     with_api = _req(api=ApiSpec(endpoint="GET /x", method="GET"))

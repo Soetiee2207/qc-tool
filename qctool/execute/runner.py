@@ -22,8 +22,9 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from ..testcase import TestCase
-from .browser import NeedsEnvironment, NeedsLogin
+from qctool.core.testcase import TestCase
+from qctool.data.fixtures import FixtureStore, FixtureUnavailable, REGISTRY, is_alias
+from qctool.execute.browser import NeedsEnvironment, NeedsLogin
 
 # User-Agent tự khai tên tool. KHÔNG để mặc định của thư viện chuẩn.
 #
@@ -71,10 +72,14 @@ class StepResult:
     ok: bool
     detail: str
     duration_ms: float = 0.0
+    issue_code: str | None = None
 
     def to_dict(self) -> dict:
-        return {"seq": self.seq, "action": self.action, "ok": self.ok,
-                "detail": self.detail, "duration_ms": round(self.duration_ms, 1)}
+        result = {"seq": self.seq, "action": self.action, "ok": self.ok,
+                  "detail": self.detail, "duration_ms": round(self.duration_ms, 1)}
+        if self.issue_code:
+            result["issue_code"] = self.issue_code
+        return result
 
 
 @dataclass
@@ -99,6 +104,8 @@ class CaseResult:
     # (của sản phẩm hoặc của test), không phải bằng chứng chất lượng.
     flaky: bool = False
     evidence: dict = field(default_factory=dict)
+    generation_status: str | None = None
+    review_reasons: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -114,6 +121,9 @@ class CaseResult:
             "duration_ms": round(self.duration_ms, 1),
             "steps": [s.to_dict() for s in self.steps],
         }
+        if self.generation_status:
+            out["generation_status"] = self.generation_status
+            out["review_reasons"] = self.review_reasons
         if self.step_count:
             out["step_count"] = self.step_count
         if self.manual:
@@ -372,7 +382,7 @@ def _percentile(values: list[float], p: float) -> float:
 # ── Chạy một testcase ────────────────────────────────────────────────────────
 def run_case(case: TestCase, session: HttpSession,
              browser: object | None = None, *, retry: int = 0,
-             soft_assert: bool = False) -> CaseResult:
+             soft_assert: bool = False, fixture_store: FixtureStore | None = None) -> CaseResult:
     """Chạy một case, có thử lại để **tách flake khỏi fail thật**.
 
     Vì sao retry quan trọng ở đây chứ không phải ở tầng Playwright: một case đạt
@@ -381,7 +391,7 @@ def run_case(case: TestCase, session: HttpSession,
     Nên lần thử lại không được phép xoá dấu vết: kết quả vẫn `Pass` nhưng mang cờ
     `flaky` và giữ lại lý do của lần hỏng đầu tiên.
     """
-    result = _run_once(case, session, browser, soft_assert=soft_assert)
+    result = _run_once(case, session, browser, soft_assert=soft_assert, fixture_store=fixture_store)
     if retry <= 0 or result.status not in (STATUS_FAIL,):
         return result
 
@@ -389,7 +399,7 @@ def run_case(case: TestCase, session: HttpSession,
     original_duration = result.duration_ms
 
     for attempt in range(1, retry + 1):
-        again = _run_once(case, session, browser, soft_assert=soft_assert)
+        again = _run_once(case, session, browser, soft_assert=soft_assert, fixture_store=fixture_store)
         if again.status == STATUS_PASS:
             # Lần đầu hỏng, lần này đạt → chập chờn. Giữ kết quả đạt nhưng ghi rõ.
             again.attempts = result.attempts + [
@@ -435,10 +445,11 @@ def run_case(case: TestCase, session: HttpSession,
 
 def _run_once(case: TestCase, session: HttpSession,
               browser: object | None = None, *,
-              soft_assert: bool = False) -> CaseResult:
+              soft_assert: bool = False, fixture_store: FixtureStore | None = None) -> CaseResult:
     result = CaseResult(case_id=case.id, title=case.title, module=case.module,
                         status=STATUS_NOT_EXECUTED, step_count=len(case.steps),
-                        manual=case.execution == "manual")
+                        manual=case.execution == "manual", generation_status=case.generation_status,
+                        review_reasons=list(case.review_reasons))
 
     # Case thủ công: các bước viết cho NGƯỜI làm, máy không chạy được.
     #
@@ -472,6 +483,33 @@ def _run_once(case: TestCase, session: HttpSession,
         result.actual = ["Chưa chạy: case chưa được map sang hành động cụ thể."]
         return result
 
+    fixture_steps = [step for step in case.steps if step.action == "ui.fill"
+                     and is_alias(step.args.get("value")) and REGISTRY in case.test_data]
+    if fixture_steps:
+        try:
+            if fixture_store is None:
+                raise FixtureUnavailable()
+            for step in fixture_steps:
+                alias = step.args["value"]
+                if not case.test_data[REGISTRY].get(alias, {}).get("available"):
+                    raise FixtureUnavailable()
+                fixture_store.resolve(alias)
+        except FixtureUnavailable:
+            result.status = STATUS_BLOCKED
+            result.blocked_reason = "Trusted fixture data is unavailable"
+            result.actual = [result.blocked_reason]
+            return result
+    capture_settings = {}
+    # Mặc định: case có mật khẩu/bắt request không có TRACE (trace ghi nguyên văn giá trị điền và
+    # body request/response → mật khẩu/token thật). Ảnh chụp vẫn giữ vì `browser.screenshot` che
+    # ô mật khẩu và ô điền fixture. `trace_sensitive` là opt-in tường minh (ui.trace_sensitive).
+    if ((fixture_steps or any(s.args.get("capture_response") or s.args.get("capture_requests") for s in case.steps))
+            and browser is not None and not getattr(browser, "trace_sensitive", False)):
+        for name, replacement in (("trace_enabled", False),):
+            if hasattr(browser, name):
+                capture_settings[name] = getattr(browser, name)
+                setattr(browser, name, replacement)
+
     started = time.perf_counter()
     saved: dict[str, dict] = {}
 
@@ -479,28 +517,62 @@ def _run_once(case: TestCase, session: HttpSession,
     # liệu phá case sau. Đây là điều kiện để "chạy riêng pass" và "chạy cả suite
     # pass" là cùng một chuyện.
     has_ui = any(s.action in UI_VERBS for s in case.steps)
-    if browser is not None and has_ui:
-        browser.start_case(case.id)
-        if soft_assert:
-            browser.set_assert_mode(True)
-
     try:
+        if browser is not None and has_ui:
+            browser.start_case(case.id)
+            browser.strict_locators = case.generation_status in {"ready", "needs_review"}
+            if soft_assert:
+                browser.set_assert_mode(True)
         for step in case.steps:
             step_started = time.perf_counter()
             try:
                 if step.action in UI_VERBS:
-                    ok, detail = _run_ui_step(step, browser)
+                    if step.action == "ui.click" and "capture_response" in step.args:
+                        from qctool.execute.browser import ResponseCaptureError
+                        if browser is None:
+                            raise ResponseCaptureError("UI_RESPONSE_CAPTURE_FAILED")
+                        capture = step.args["capture_response"]
+                        saved.pop(capture.get("save_as", "res"), None)
+                        response = browser.click_and_capture(step.args, step.seq)
+                        saved[capture.get("save_as", "res")] = response
+                        ok, detail = True, f"Captured {capture['method']} {capture['path']} → HTTP {response['status']} (trigger step {step.seq})"
+                    elif step.action == "ui.click" and "capture_requests" in step.args:
+                        if browser is None:
+                            from qctool.execute.browser import ResponseCaptureError
+                            raise ResponseCaptureError("UI_REQUEST_OBSERVATION_FAILED")
+                        capture = step.args["capture_requests"]
+                        key = capture.get("save_as", "res")
+                        saved.pop(key, None)
+                        observation = browser.click_and_observe_requests(step.args, step.seq)
+                        saved[key] = observation
+                        ok, detail = observation["body"]["request_count"] == 0, (f"Observed {capture['method']} {capture['path']}: "
+                            f"{observation['body']['request_count']} requests in {capture.get('timeout_ms',10000)}ms "
+                            f"(trigger step {step.seq})")
+                    elif step in fixture_steps:
+                        from dataclasses import replace
+                        runtime_step = replace(step, args={**step.args,
+                            "value": fixture_store.resolve(step.args["value"]),
+                            "_fixture_alias": step.args["value"]})
+                        ok, detail = _run_ui_step(runtime_step, browser)
+                    else:
+                        ok, detail = _run_ui_step(step, browser)
                 else:
                     ok, detail = _run_step(step, session, saved)
             except NeedsEnvironment as exc:
                 # Không đủ điều kiện chạy — KHÔNG phải sản phẩm có lỗi.
+                if getattr(exc, "code", None):
+                    result.steps.append(StepResult(step.seq, step.action, False, str(exc),
+                        (time.perf_counter() - step_started) * 1000, exc.code))
                 result.status = STATUS_BLOCKED
-                result.blocked_reason = str(exc)
-                result.actual.append(f"Chưa chạy: {exc}")
+                message = fixture_store.redact(str(exc)) if fixture_store else str(exc)
+                result.blocked_reason = message
+                result.actual.append(f"Chưa chạy: {message}")
                 result.duration_ms = (time.perf_counter() - started) * 1000
                 return result
             except Exception as exc:                   # lỗi bất ngờ → Fail, không sập runner
                 ok, detail = False, f"Lỗi khi chạy bước: {type(exc).__name__}: {exc}"
+            if fixture_store:
+                detail = fixture_store.redact(detail)
             elapsed = (time.perf_counter() - step_started) * 1000
             result.steps.append(StepResult(step.seq, step.action, ok, detail, elapsed))
             result.actual.append(("[OK] " if ok else "[X] ") + detail)
@@ -509,7 +581,8 @@ def _run_once(case: TestCase, session: HttpSession,
                 result.status = STATUS_FAIL
                 result.duration_ms = (time.perf_counter() - started) * 1000
                 return result
-            if not ok and step.action == "http.request":
+            if not ok and (step.action == "http.request" or
+                           step.action == "ui.click" and "capture_requests" in step.args):
                 result.status = STATUS_FAIL
                 result.blocked_reason = detail
                 result.duration_ms = (time.perf_counter() - started) * 1000
@@ -538,12 +611,23 @@ def _run_once(case: TestCase, session: HttpSession,
         # Bằng chứng được chụp trước khi đóng context — đóng rồi thì trang không
         # còn để chụp. Còn trace thì chỉ **ghi xong** khi `end_case` chạy, nên phải
         # đọc evidence SAU đó; đọc trước là mất luôn đường dẫn trace.
-        if browser is not None and has_ui:
-            if result.status == STATUS_FAIL:
-                with contextlib.suppress(Exception):
-                    browser.capture_failure()
-            browser.end_case(result.status)
-            result.evidence = browser.evidence.to_dict()
+        try:
+            if browser is not None and has_ui:
+                if result.status == STATUS_FAIL:
+                    with contextlib.suppress(Exception):
+                        browser.capture_failure()
+                elif getattr(browser, "evidence_always", False):
+                    with contextlib.suppress(Exception):
+                        browser.capture_final()
+                browser.end_case(result.status)
+                result.evidence = browser.evidence.to_dict()
+        finally:
+            if browser is not None:
+                for name, value in capture_settings.items():
+                    setattr(browser, name, value)
+            if fixture_store:
+                result.actual = fixture_store.redact(result.actual)
+                result.evidence = fixture_store.redact(result.evidence)
 
 
 def _run_step(step, session: HttpSession, saved: dict) -> tuple[bool, str]:
@@ -609,6 +693,8 @@ def _run_step(step, session: HttpSession, saved: dict) -> tuple[bool, str]:
                         ("" if ok else f", mong đợi {operator} {expected!r}"))
 
         case "assert.response_time":
+            if saved.get(args.get("source", "res"), {}).get("_ui_trigger"):
+                return False, "Latency resampling is not supported for UI-captured responses"
             # Ngưỡng tài liệu ghi là **phân vị** (`p95 < 100ms`), không phải "mọi
             # lần gọi đều dưới 100ms". Một lần gọi không đo được phân vị — lấy mẫu
             # ngẫu nhiên một request rồi so với ngưỡng p95 là *kiểm chặt hơn yêu
@@ -665,7 +751,7 @@ def _run_step(step, session: HttpSession, saved: dict) -> tuple[bool, str]:
 def _run_ui_step(step, browser) -> tuple[bool, str]:
     """Chạy một bước trên trình duyệt. Không có browser ⇒ Blocked, không phải Fail."""
     if browser is None:
-        return False, "Chưa mở trình duyệt — cần URL web để chạy bước UI"
+        raise NeedsEnvironment("Chưa mở trình duyệt — cần URL web để chạy bước UI")
 
     args = step.args
     match step.action:
@@ -754,7 +840,8 @@ def _compare(actual, expected, operator: str) -> bool:
 
 def run_cases(cases: list[TestCase], session: HttpSession,
               environment: str = "", browser: object | None = None, *,
-              retry: int = 0, soft_assert: bool = False) -> RunResult:
+              retry: int = 0, soft_assert: bool = False,
+              fixture_store: FixtureStore | None = None) -> RunResult:
     started = datetime.now()
     results = RunResult(
         started_at=started.strftime("%Y-%m-%d %H:%M:%S"),
@@ -764,7 +851,7 @@ def run_cases(cases: list[TestCase], session: HttpSession,
     )
     for case in cases:
         results.cases.append(
-            run_case(case, session, browser, retry=retry, soft_assert=soft_assert)
+            run_case(case, session, browser, retry=retry, soft_assert=soft_assert, fixture_store=fixture_store)
         )
     results.finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return results

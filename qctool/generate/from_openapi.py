@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from ..testcase import (
+from qctool.core.testcase import (
     PERF_DEFAULT_PERCENTILE,
     PERF_SAMPLES,
     CaseType,
@@ -75,6 +75,11 @@ class Endpoint:
     # spec mô tả nhiều service — không tôn trọng nó thì mọi request của service
     # phụ đều đi sai host và nhận 404.
     servers: list[str] = field(default_factory=list)
+    # Effective declared servers for evidence; does not change http.request base overrides.
+    contract_servers: list[str] = field(default_factory=list)
+    # `x-qc-observe-only: true`: có trong contract để agent quan sát/ground (vd assert
+    # "không gửi POST /x"), nhưng generator tất định KHÔNG sinh case gọi nó.
+    observe_only: bool = False
 
     @property
     def module(self) -> str:

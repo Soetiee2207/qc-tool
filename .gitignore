@@ -4,6 +4,8 @@ __pycache__/
 
 # Output của mỗi lần chạy — sinh lại được, không commit
 artifacts/
+projects/**/artifacts/
+projects/*/summary/
 reports/
 
 # Bí mật: không bao giờ commit
@@ -14,3 +16,4 @@ secrets/
 
 .DS_Store
 .pytest_cache/
+projects/

@@ -11,8 +11,8 @@ from pathlib import Path
 
 import yaml
 
-from ..testcase import Priority
-from .from_openapi import Endpoint
+from qctool.core.testcase import Priority
+from qctool.generate.from_openapi import Endpoint
 
 METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
 _SKIP_KEYS = {"parameters", "summary", "description", "$ref"}
@@ -154,6 +154,9 @@ def _build_endpoint(spec: dict, path: str, method: str, op: dict,
         request_required=list((body_schema or {}).get("required", [])),
         responses=responses,
         servers=servers,
+        contract_servers=servers or [s["url"] for s in spec.get("servers", [])
+                                    if isinstance(s, dict) and isinstance(s.get("url"), str)],
+        observe_only=op.get("x-qc-observe-only") is True,
     )
 
 

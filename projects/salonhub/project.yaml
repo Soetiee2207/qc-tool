@@ -1,0 +1,25 @@
+# SalonHub — cấu hình chung cho mọi feature; feature ghi đè trong <feature>/qctool.yaml.
+# Tài khoản customer ở .env (QCTOOL_USERNAME/QCTOOL_PASSWORD), không ghi vào đây.
+# Nguồn tài liệu: /home/soetie/Projects/SalonHub @ 160a94a (2026-10-10).
+web: https://salonhub-soe.vercel.app
+api: https://salonhub-3cg8.onrender.com
+llm: true
+account:
+  role: customer
+run:
+  timeout_seconds: 45   # Render free tier: cold start 30–60s
+ui:
+  evidence: always
+  trace: true           # case có điền mật khẩu vẫn cố ý không có trace
+
+# Chế độ chạy: safe (mặc định, chỉ đọc) | write (tạo/sửa/xoá dữ liệu THẬT, hỏi xác nhận).
+# Thường để safe và bật cho một lượt: qctool run salonhub --<feature> --write
+mode: safe
+write:
+  deny:
+    - PUT /api/auth/change-password   # đổi mật khẩu = hỏng tài khoản test dùng chung
+exploration:
+  # Control nhãn "rủi ro" (Đăng ký/Đăng xuất) nhưng chỉ điều hướng/validate — đã review.
+  # Request ghi mà chúng có thể gây ra vẫn bị chặn ở chế độ safe.
+  safe_controls: [login-register-link, register-login-link, nav-register-btn, register-submit-btn, user-menu-logout]
+  safe_paths: [/register]   # trang form đăng ký — chỉ đọc khi mở

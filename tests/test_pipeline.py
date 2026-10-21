@@ -24,7 +24,7 @@ from qctool.web.app import PAGE, Handler  # noqa: E402
 from tests.mock_server import create_server  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
-SAMPLE_SPEC = REPO / "samples" / "openapi" / "task-manager-sample.yaml"
+SAMPLE_SPEC = REPO / "projects" / "demo" / "task-manager" / "openapi.yaml"
 FIXTURE_DOCS = Path(__file__).parent / "fixtures" / "urd_srs"
 
 
@@ -263,17 +263,17 @@ def test_manual_auth_mode_never_logs_in(tmp_path, monkeypatch):
     )
     run_pipeline(cfg)
     assert calls == [], f"auth.mode=manual mà vẫn đăng nhập: {calls}"
-    # Và phải chắc chắn lượt chạy này thật sự đi qua nhánh crawl — nếu không,
-    # test xanh chỉ vì lối vào đó không được chạm tới.
-    assert (cfg.out_dir / "ui-map.yaml").is_file(), \
-        "lượt chạy không crawl ⇒ test này không chứng minh được gì"
+    # Agent without opt-in LLM performs no browser work at all.
+    assert (cfg.out_dir / '3-generate/testcases.yaml').is_file()
+    assert not (cfg.out_dir / '2-crawl/ui-map.yaml').exists()
 
 
 # ── Web UI ───────────────────────────────────────────────────────────────────
 def test_ui_serves_page(ui):
     code, body = _get(ui + "/")
+    assert code == 200 and "qc-tool" in body       # trang chat
+    code, body = _get(ui + "/console")
     assert code == 200
-    assert "qc-tool" in body
     assert "Chạy QC" in body
 
 
@@ -343,7 +343,9 @@ def test_ui_blocks_download_outside_project(ui):
 
 
 def test_ui_downloads_generated_file(ui, tmp_path):
-    target = REPO / "artifacts" / "_test_download.txt"
+    import shutil
+    folder = REPO / "projects" / "_test_download"
+    target = folder / "artifacts" / "file.txt"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("nội dung thử", encoding="utf-8")
     try:
@@ -351,10 +353,62 @@ def test_ui_downloads_generated_file(ui, tmp_path):
         assert code == 200
         assert body == "nội dung thử"
     finally:
-        target.unlink(missing_ok=True)
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def test_ui_config_endpoint(ui):
     code, body = _get(ui + "/api/config")
     assert code == 200
     assert "base_url" in json.loads(body)
+
+
+def _feature(tmp_path, monkeypatch, body: str) -> str:
+    import shutil
+    feature = tmp_path / "projects" / "p" / "f"
+    shutil.copytree(FIXTURE_DOCS, feature)
+    (feature / "qctool.yaml").write_text(body, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    return "projects/p/f/qctool.yaml"
+
+
+def test_ui_project_run_uses_feature_config(tmp_path, monkeypatch):
+    """Web phải chạy feature đúng như CLI: `llm: true`, account, out dir từ qctool.yaml.
+
+    Trước đây web tự dựng PipelineConfig và bỏ mất llm → agent không bao giờ chạy, mọi
+    case thành thủ công (Not Executed) dù checkbox "Sinh bằng AI" đang tick.
+    """
+    from qctool.web.app import _project_config
+    monkeypatch.setenv("QCTOOL_LLM_MODEL", "m")
+    monkeypatch.setenv("QCTOOL_LLM_API_KEY", "k")
+    path = _feature(tmp_path, monkeypatch, "web: https://app.test\nllm: true\n")
+    cfg, adapter = _project_config({"config": path})
+    assert cfg.llm_enabled and adapter is not None
+    assert cfg.out_dir.resolve() == (tmp_path / "projects/p/f/artifacts").resolve()
+    cfg, adapter = _project_config({"config": path, "llm": False, "only": "001-1"})
+    assert not cfg.llm_enabled and adapter is None
+    assert cfg.intent_ids == ("AC-f-001-1",)
+
+
+def test_ui_refuses_write_mode_without_confirmation(tmp_path, monkeypatch):
+    from qctool.web.app import _project_config
+    path = _feature(tmp_path, monkeypatch, "web: https://app.test\nmode: write\n")
+    with pytest.raises(ValueError, match="mode: write"):
+        _project_config({"config": path})
+
+
+def test_ui_run_detail_reads_disk(ui, tmp_path):
+    """Log/tiến trình đọc từ run.json + events.jsonl — lượt chạy CLI cũng xem được."""
+    import shutil
+    folder = REPO / "projects" / "_test_detail" / "f" / "artifacts"
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        (folder / "run.json").write_text(json.dumps({"status": "done", "stages": {}}), encoding="utf-8")
+        (folder / "events.jsonl").write_text("\n".join(json.dumps({"t": "", "stage": "ingest", "level": "info",
+                                                                   "message": f"m{i}"}) for i in range(5)) + "\n")
+        code, body = _get(ui + "/api/run?since=3&dir=" + str(folder.relative_to(REPO)))
+        data = json.loads(body)
+        assert code == 200 and data["events_total"] == 5
+        assert [e["message"] for e in data["events"]] == ["m3", "m4"]
+        assert _get(ui + "/api/run?dir=/etc")[0] == 403
+    finally:
+        shutil.rmtree(REPO / "projects" / "_test_detail", ignore_errors=True)

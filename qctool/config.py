@@ -11,6 +11,7 @@ sẽ phải viết lại — và tệ hơn, credential sẽ nằm vĩnh viễn t
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -125,3 +126,126 @@ def load_config() -> Config:
         timeout_seconds=int(os.environ.get("QCTOOL_TIMEOUT_SECONDS", "30")),
         verify_ssl=_flag("QCTOOL_VERIFY_SSL", True),
     )
+
+
+# ── File project (`projects/<tên>/qctool.yaml`) ─────────────────────────────
+# Dạng gọn được mở rộng thành đúng dạng đầy đủ mà PipelineConfig.from_file đọc,
+# nên logic chạy không đổi. Dạng đầy đủ vẫn dùng được và luôn thắng dạng gọn.
+
+AGENT_BUDGET = {"max_turns": 14, "max_tokens": 90000, "max_seconds": 480, "completion_tokens": 2200}
+
+
+def feature_name(path: Path) -> str:
+    """`projects/customer/qctool.yaml` → `customer`; `x/foo.yaml` → `foo`."""
+    return path.parent.name if path.name == "qctool.yaml" else path.stem
+
+
+def _merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for key, value in over.items():
+        out[key] = _merge(out[key], value) if isinstance(value, dict) and isinstance(out.get(key), dict) else value
+    return out
+
+
+def project_file(feature_config: Path) -> Path | None:
+    """`projects/<p>/<f>/qctool.yaml` → `projects/<p>/project.yaml` nếu có."""
+    candidate = feature_config.parent.parent / "project.yaml"
+    return candidate if feature_config.name == "qctool.yaml" and candidate.is_file() else None
+
+
+def expand_project(data: dict, path: Path, repo: Path | None = None) -> dict:
+    """Dạng gọn → dạng đầy đủ. Feature thắng project; khoá tường minh thắng mặc định.
+
+    Mặc định theo thư mục feature: tài liệu là chính thư mục (nếu có urd.md/srs.md),
+    `openapi.yaml` nếu có, output vào `<feature>/artifacts/`.
+    """
+    import yaml
+    if shared := project_file(path):
+        base = yaml.safe_load(shared.read_text(encoding="utf-8")) or {}
+        if not isinstance(base, dict):
+            raise ConfigError(f"{shared} phải là YAML mapping.")
+        data = _merge(base, data)
+    data = dict(data)
+    here = path.parent
+    if path.name == "qctool.yaml":
+        if "docs" not in data and "docs_dir" not in data and any((here / n).is_file() for n in ("urd.md", "srs.md")):
+            data["docs_dir"] = "."
+        if "openapi" not in data and (here / "openapi.yaml").is_file():
+            data["openapi"] = "openapi.yaml"
+        if "dir" not in (data.get("out") or {}):
+            data["out"] = {**(data.get("out") or {}), "dir": "artifacts"}
+    for short, long in (("docs", "docs_dir"), ("web", "web_url")):
+        if short in data:
+            data.setdefault(long, data.pop(short))
+    if "api" in data:
+        data["run"] = {"base_url": data.pop("api"), **(data.get("run") or {})}
+    if isinstance(data.get("llm"), bool):
+        data["llm"] = {"enabled": data["llm"]}
+    data.setdefault("feature", feature_name(path))
+    data.setdefault("module", data["feature"].upper().replace("-", "_"))
+    gen = dict(data.get("generation") or {})
+    gen.setdefault("budget", dict(AGENT_BUDGET))
+    data["generation"] = gen
+    if "account" in data:
+        data = _expand_account(data, path, repo or Path.cwd())
+    return data
+
+
+def _expand_account(data: dict, path: Path, repo: Path) -> dict:
+    """`account:` → test_fixtures (bindings + acquisition) cho đúng các AC liệt kê.
+
+    Chỉ AC nằm trong `login_for` nhận tài khoản — AC kiểu "sai mật khẩu" không được
+    bind ngầm. Credential luôn lấy từ env, không bao giờ từ YAML.
+    """
+    account = data.pop("account")
+    if not isinstance(account, dict) or not isinstance(account.get("login_for", []), list):
+        raise ConfigError("account cần `login_for: [<AC>, …]`, ví dụ `login_for: [001-1, 001-3]`.")
+    test_values = account.get("test_values") or {}
+    if not isinstance(test_values, dict):
+        raise ConfigError("account.test_values cần dạng {<AC>: {<field>: \"giá trị giả\"}}.")
+    if not account.get("login_for") and not test_values:
+        # project.yaml khai role dùng chung; feature không liệt kê AC nào thì chạy
+        # anonymous: không fixture, không tự đăng nhập (auth.mode giữ mặc định manual).
+        return data
+    name = account.get("name", "active_user")
+    facts = {"role": account.get("role", "user"), "account_state": account.get("state", "active")}
+    aliases = [f"{name}.email", f"{name}.password"]
+    proven = {"account_exists": True, "password_valid": True, "account_state": facts["account_state"]}
+    docs = Path(data.get("docs_dir") or ".")
+    docs = (docs if docs.is_absolute() else path.parent / docs).resolve()
+    try:
+        urd = docs.relative_to(repo.resolve()) / "urd.md"
+    except ValueError:
+        urd = docs / "urd.md"
+    feature = data["feature"]
+    bindings, requirements = {}, {}
+    def ac_id(raw):
+        short = str(raw).removeprefix("AC-").removeprefix(f"{feature}-")
+        return short, f"AC-{feature}-{short}"
+    for raw in account.get("login_for") or []:
+        short = str(raw).removeprefix("AC-").removeprefix(f"{feature}-")
+        ac = f"AC-{feature}-{short}"
+        bindings[ac] = {"email": aliases[0], "password": aliases[1], "correct_password": aliases[1]}
+        requirements[ac] = [{"fixture": name, "aliases": list(aliases), "facts": dict(proven),
+                             "require_verified": False, "source_ref": f"{urd.as_posix()}:AC-{short}"}]
+    # Giá trị GIẢ cho ô mật khẩu ở case âm tính (sai mật khẩu, mật khẩu ngắn…): ô password chỉ
+    # nhận alias, nên mỗi AC có fixture riêng `ac_<id>` mang giá trị cấu hình (không phải bí mật).
+    fake = {}
+    for raw, values in test_values.items():
+        short, ac = ac_id(raw)
+        if not isinstance(values, dict) or not values or not all(isinstance(v, str) for v in values.values()):
+            raise ConfigError(f"account.test_values.{raw} cần {{field: \"chuỗi\"}}.")
+        fx = "ac_" + re.sub(r"[^a-z0-9]+", "_", short.lower()).strip("_")
+        fake[fx] = {field: {"value": value} for field, value in values.items()}
+        bindings.setdefault(ac, {}).update({field: f"{fx}.{field}" for field in values})
+    if account.get("login_for"):
+        data.setdefault("auth", {}).setdefault("mode", "browser")
+    fixtures = {**({name: {"email": {"env": "QCTOOL_USERNAME"}, "password": {"env": "QCTOOL_PASSWORD"},
+                           "facts": facts}} if account.get("login_for") else {}), **fake}
+    evidence = [{"fixture": name, "facts": {**proven, "role": facts["role"]}, "assurance": "DECLARED",
+                 "source_ref": f"operator:confirmed-existing-{facts['role']}-account"}] if account.get("login_for") else []
+    data["test_fixtures"] = _merge({
+        "fixtures": fixtures, "bindings": bindings,
+        "acquisition": {"requirements": requirements, "evidence": evidence},
+    }, data.get("test_fixtures") or {})
+    return data

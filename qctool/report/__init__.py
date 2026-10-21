@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from ..execute.runner import (
+from qctool.execute.runner import (
     STATUS_BLOCKED,
     STATUS_FAIL,
     STATUS_NOT_EXECUTED,
@@ -99,6 +99,7 @@ def render_markdown(result: RunResult, path: Path) -> None:
 
 
 def build_markdown(result: RunResult) -> str:
+    review = [c for c in result.cases if c.generation_status == 'needs_review']
     counts = result.counts
     executed = counts[STATUS_PASS] + counts[STATUS_FAIL]
     failures = [c for c in result.cases if c.status == STATUS_FAIL]
@@ -127,6 +128,11 @@ def build_markdown(result: RunResult) -> str:
         f"| Chưa chạy | {counts[STATUS_NOT_EXECUTED]} |",
         "",
     ]
+    if review:
+        lines.extend(['', '### Testcase cần review oracle', '',
+            'Kết quả runtime không thay thế việc review ý nghĩa assertion.', '',
+            *[f"- {c.case_id}: {'; '.join(c.review_reasons)}" for c in review], ''])
+
     if flaky:
         # Nói riêng, và nói ngay dưới bảng số: một test lúc đạt lúc không KHÔNG
         # phải bằng chứng chất lượng, mà là vấn đề cần người xem (race condition
